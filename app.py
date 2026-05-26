@@ -275,7 +275,6 @@ LONG_PRESS_JS = """
         const setter = Object.getOwnPropertyDescriptor(
             par.HTMLInputElement.prototype, 'value'
         ).set;
-        // タイムスタンプを付けることで同じ ID の連続長押しも検知できる
         setter.call(inp, msgId + '|' + Date.now());
         inp.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -284,26 +283,23 @@ LONG_PRESS_JS = """
         if (el._lpOk) return;
         el._lpOk = true;
         let t, moved;
-        el.addEventListener('touchstart',
-            () => { moved = false; t = setTimeout(() => { if (!moved) fireSignal(msgId); }, LP_MS); },
-            { passive: true });
+        // passive:false にして iOS の長押しポップアップを抑制
+        el.addEventListener('touchstart', (e) => {
+            moved = false;
+            t = setTimeout(() => { if (!moved) fireSignal(msgId); }, LP_MS);
+        }, { passive: false });
         el.addEventListener('touchmove',   () => { moved = true; clearTimeout(t); }, { passive: true });
         el.addEventListener('touchend',    () => clearTimeout(t));
         el.addEventListener('touchcancel', () => clearTimeout(t));
-        // デスクトップ: 右クリックでもリアクションピッカーを開く
+        // デスクトップ: 右クリックでも開く
         el.addEventListener('contextmenu', (e) => { e.preventDefault(); fireSignal(msgId); });
     }
 
+    // [data-lp-msg] 要素に直接アタッチ（stChatMessage 親を探す必要がなくなった）
     function scan() {
-        doc.querySelectorAll('[data-lp-msg]:not([data-lp-ok])').forEach(m => {
-            m.setAttribute('data-lp-ok', '1');
-            const id = m.getAttribute('data-lp-msg');
-            for (let el = m; el; el = el.parentElement) {
-                if (el.dataset && el.dataset.testid === 'stChatMessage') {
-                    attach(el, id);
-                    break;
-                }
-            }
+        doc.querySelectorAll('[data-lp-msg]:not([data-lp-ok])').forEach(el => {
+            el.setAttribute('data-lp-ok', '1');
+            attach(el, el.getAttribute('data-lp-msg'));
         });
     }
 
@@ -352,99 +348,127 @@ def render_messages() -> None:
         height:0!important;min-height:0!important;
         overflow:hidden!important;margin:0!important;padding:0!important;
     }
+    /* バブルの長押し時に iOS テキスト選択メニューを抑制 */
+    [data-lp-msg] { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
     </style>""", unsafe_allow_html=True)
     st.text_input("lp", placeholder="__lp__", key="_lp_input", label_visibility="collapsed")
     st.components.v1.html(LONG_PRESS_JS, height=0)
 
-    # 長押しされたメッセージ ID（タイムスタンプ付き "ID|TS" → ID を取り出す）
+    # 長押しされたメッセージ ID（"ID|TS" → ID を取り出す）
     _lp_raw      = st.session_state.get("_lp_input", "") or ""
     reaction_for = _lp_raw.split("|")[0] if "|" in _lp_raw else None
 
     for msg in messages:
         msg_id  = msg.get("id",          "")
         sender  = msg.get("user_name",   "不明")
-        body    = msg.get("content",     "")
+        body    = msg.get("content",     "") or ""
         ts      = msg.get("created_at",  "")
         avatar  = msg.get("user_avatar", "🙂")
         img_url = msg.get("image_url")
         is_mine = sender == uname
 
-        with st.chat_message(name="user" if is_mine else sender, avatar=avatar):
-            # 長押し検出用マーカー（JS がこれを見つけて stChatMessage 親要素にリスナーを付与）
-            st.markdown(f'<div data-lp-msg="{msg_id}" style="display:none"></div>',
-                        unsafe_allow_html=True)
+        msg_reactions = all_reactions.get(msg_id, {})
 
-            # 他人のメッセージ → 名前を小さく（LINE風）
-            if not is_mine:
-                st.markdown(
-                    f'<p style="font-size:.75rem;color:#9a9a9a;font-weight:600;margin:0 0 4px 0">{sender}</p>',
-                    unsafe_allow_html=True,
+        # ── アバター HTML ──
+        av_html = (
+            f'<img src="{avatar}" style="width:40px;height:40px;border-radius:8px;'
+            f'object-fit:cover;flex-shrink:0;display:block">'
+            if avatar.startswith("http")
+            else f'<span style="font-size:1.8rem;line-height:40px;display:block;'
+                 f'width:40px;text-align:center;flex-shrink:0">{avatar}</span>'
+        )
+
+        # ── 本文・画像 HTML ──
+        body_esc  = (body.replace("&", "&amp;").replace("<", "&lt;")
+                        .replace(">", "&gt;").replace("\n", "<br>"))
+        img_piece = (
+            f'<img src="{img_url}" style="max-width:200px;border-radius:10px;'
+            f'display:block;{"margin-bottom:6px" if body else ""}">'
+        ) if img_url else ""
+        content = img_piece + body_esc
+
+        # ── リアクション pills ──
+        pills = ""
+        for emoji in REACTION_EMOJIS:
+            users = msg_reactions.get(emoji, [])
+            if users:
+                my  = uname in users
+                bg  = "rgba(0,185,0,0.3)"  if my else "rgba(255,255,255,0.08)"
+                bdr = "rgba(0,185,0,0.85)" if my else "rgba(255,255,255,0.2)"
+                pills += (
+                    f'<span style="display:inline-flex;align-items:center;gap:2px;'
+                    f'background:{bg};border:1px solid {bdr};border-radius:20px;'
+                    f'padding:1px 7px;font-size:0.8rem;margin-right:3px">'
+                    f'{emoji}&nbsp;{len(users)}</span>'
                 )
+        pills_row = (
+            f'<div style="margin-top:4px;text-align:{"right" if is_mine else "left"};'
+            f'line-height:2">{pills}</div>'
+        ) if pills else ""
 
-            # 本文・画像
-            if is_mine:
-                col_body, col_del = st.columns([10, 1])
-                with col_body:
-                    if img_url:
-                        st.image(img_url, use_container_width=True)
-                    if body:
-                        st.markdown(body)
-                    if ts:
-                        st.caption(fmt_ts(ts))
-                with col_del:
-                    if st.button("🗑️", key=f"del_{msg_id}", help="削除"):
-                        if delete_message(msg_id, uname):
-                            st.rerun()
-            else:
-                if img_url:
-                    st.image(img_url, use_container_width=True)
-                if body:
-                    st.markdown(body)
-                if ts:
-                    st.caption(fmt_ts(ts))
+        # ── LINE 風バブル HTML（自分＝右、他人＝左） ──
+        if is_mine:
+            bubble = (
+                f'<div data-lp-msg="{msg_id}" style="'
+                f'display:flex;justify-content:flex-end;align-items:flex-end;'
+                f'gap:8px;margin:4px 0 2px 48px">'
+                f'<div style="text-align:right">'
+                f'<div style="font-size:0.7rem;color:#888;margin-bottom:3px">{fmt_ts(ts)}</div>'
+                f'<div style="background:#00b900;color:#fff;'
+                f'border-radius:18px 18px 4px 18px;padding:10px 14px;'
+                f'display:inline-block;max-width:100%;text-align:left;'
+                f'word-break:break-word;font-size:0.93rem">{content}</div>'
+                f'{pills_row}'
+                f'</div>'
+                f'{av_html}'
+                f'</div>'
+            )
+        else:
+            bubble = (
+                f'<div data-lp-msg="{msg_id}" style="'
+                f'display:flex;align-items:flex-end;gap:8px;margin:4px 0 2px 0">'
+                f'{av_html}'
+                f'<div>'
+                f'<div style="font-size:0.75rem;color:#9a9a9a;font-weight:600;'
+                f'margin-bottom:3px">{sender}</div>'
+                f'<div style="background:#2c2c2e;color:#fff;'
+                f'border-radius:18px 18px 18px 4px;padding:10px 14px;'
+                f'display:inline-block;max-width:100%;text-align:left;'
+                f'word-break:break-word;font-size:0.93rem">{content}</div>'
+                f'<div style="font-size:0.7rem;color:#888;margin-top:3px">{fmt_ts(ts)}</div>'
+                f'{pills_row}'
+                f'</div>'
+                f'</div>'
+            )
 
-            # ── リアクション ──
-            msg_reactions = all_reactions.get(msg_id, {})
+        st.markdown(bubble, unsafe_allow_html=True)
 
-            # 既存リアクション → コンパクトな HTML pills
-            pills_html = ""
-            for emoji in REACTION_EMOJIS:
-                users = msg_reactions.get(emoji, [])
-                if users:
-                    my  = uname in users
-                    bg  = "rgba(29,78,216,0.4)" if my else "rgba(255,255,255,0.08)"
-                    bdr = "rgba(29,78,216,0.8)" if my else "rgba(255,255,255,0.2)"
-                    pills_html += (
-                        f'<span style="display:inline-flex;align-items:center;gap:3px;'
-                        f'background:{bg};border:1px solid {bdr};border-radius:20px;'
-                        f'padding:2px 8px;font-size:0.85rem;margin-right:4px">'
-                        f'{emoji}&nbsp;{len(users)}</span>'
-                    )
-            if pills_html:
-                st.markdown(
-                    f'<div style="margin:4px 0 2px;line-height:2">{pills_html}</div>',
-                    unsafe_allow_html=True,
-                )
-
-            # 長押しで選択されたメッセージ → インライン リアクションピッカー
-            if reaction_for == msg_id:
-                st.caption("リアクション：")
-                rcols = st.columns(len(REACTION_EMOJIS) + 1)
-                for i, emoji in enumerate(REACTION_EMOJIS):
-                    with rcols[i]:
-                        already = uname in msg_reactions.get(emoji, [])
-                        if st.button(
-                            emoji + (" ✓" if already else ""),
-                            key=f"r_{msg_id}_{emoji}",
-                            use_container_width=True,
-                        ):
-                            toggle_reaction(msg_id, uname, emoji)
-                            st.session_state["_lp_input"] = ""
-                            st.rerun()
-                with rcols[len(REACTION_EMOJIS)]:
-                    if st.button("✕", key=f"close_r_{msg_id}", use_container_width=True):
+        # ── 長押し → インライン リアクション＋削除ピッカー ──
+        if reaction_for == msg_id:
+            n_extra = 2 if is_mine else 1   # 🗑️（自分のみ） + ✕
+            rcols   = st.columns(len(REACTION_EMOJIS) + n_extra)
+            for i, emoji in enumerate(REACTION_EMOJIS):
+                with rcols[i]:
+                    already = uname in msg_reactions.get(emoji, [])
+                    if st.button(
+                        emoji + (" ✓" if already else ""),
+                        key=f"r_{msg_id}_{emoji}",
+                        use_container_width=True,
+                    ):
+                        toggle_reaction(msg_id, uname, emoji)
                         st.session_state["_lp_input"] = ""
                         st.rerun()
+            if is_mine:
+                with rcols[len(REACTION_EMOJIS)]:
+                    if st.button("🗑️", key=f"del_{msg_id}",
+                                 use_container_width=True, help="削除"):
+                        delete_message(msg_id, uname)
+                        st.session_state["_lp_input"] = ""
+                        st.rerun()
+            with rcols[-1]:
+                if st.button("✕", key=f"close_r_{msg_id}", use_container_width=True):
+                    st.session_state["_lp_input"] = ""
+                    st.rerun()
 
 # ─────────────────────────────────────
 # 画面① ユーザー選択

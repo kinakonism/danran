@@ -261,17 +261,13 @@ LONG_PRESS_JS = """
 <script>
 (function() {
     const LP_MS = 500;
-    const par   = window.parent;
-
-    // iframe が再作成されるたびに呼ばれるが、初期化は 1 回のみ
-    if (par._danranLpReady) { return; }
-    par._danranLpReady = true;
-
+    const par = window.parent;
     const doc = par.document;
 
     function fireSignal(msgId) {
         const inp = doc.querySelector('input[placeholder="__lp__"]');
         if (!inp) return;
+        // React 制御入力を更新するために nativeInputValueSetter を使う
         const setter = Object.getOwnPropertyDescriptor(
             par.HTMLInputElement.prototype, 'value'
         ).set;
@@ -280,31 +276,33 @@ LONG_PRESS_JS = """
     }
 
     function attach(el, msgId) {
-        if (el._lpOk) return;
         el._lpOk = true;
         let t, moved;
-        // passive:false にして iOS の長押しポップアップを抑制
-        el.addEventListener('touchstart', (e) => {
+        el.addEventListener('touchstart', () => {
             moved = false;
             t = setTimeout(() => { if (!moved) fireSignal(msgId); }, LP_MS);
-        }, { passive: false });
+        }, { passive: true });
         el.addEventListener('touchmove',   () => { moved = true; clearTimeout(t); }, { passive: true });
         el.addEventListener('touchend',    () => clearTimeout(t));
         el.addEventListener('touchcancel', () => clearTimeout(t));
-        // デスクトップ: 右クリックでも開く
         el.addEventListener('contextmenu', (e) => { e.preventDefault(); fireSignal(msgId); });
     }
 
-    // [data-lp-msg] 要素に直接アタッチ（stChatMessage 親を探す必要がなくなった）
     function scan() {
-        doc.querySelectorAll('[data-lp-msg]:not([data-lp-ok])').forEach(el => {
-            el.setAttribute('data-lp-ok', '1');
-            attach(el, el.getAttribute('data-lp-msg'));
+        doc.querySelectorAll('[data-lp-msg]').forEach(el => {
+            if (!el._lpOk) attach(el, el.getAttribute('data-lp-msg'));
         });
     }
 
-    new MutationObserver(scan).observe(doc.body, { childList: true, subtree: true });
+    // 古い observer を切断してから新しいものを設定（iframe 再作成のたびに呼ばれる）
+    if (par._danranObs) par._danranObs.disconnect();
+    par._danranObs = new MutationObserver(scan);
+    par._danranObs.observe(doc.body, { childList: true, subtree: true });
+
+    // 即時スキャン＋遅延スキャン（DOM 描画タイミングのずれに対応）
     scan();
+    setTimeout(scan, 300);
+    setTimeout(scan, 800);
 })();
 </script>
 """
@@ -342,19 +340,7 @@ def render_messages() -> None:
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
 
-    # ── 長押しシグナル入力（JS から React イベント経由で更新される） ──
-    st.markdown("""<style>
-    .stTextInput:has(input[placeholder="__lp__"]) {
-        height:0!important;min-height:0!important;
-        overflow:hidden!important;margin:0!important;padding:0!important;
-    }
-    /* バブルの長押し時に iOS テキスト選択メニューを抑制 */
-    [data-lp-msg] { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
-    </style>""", unsafe_allow_html=True)
-    st.text_input("lp", placeholder="__lp__", key="_lp_input", label_visibility="collapsed")
-    st.components.v1.html(LONG_PRESS_JS, height=0)
-
-    # 長押しされたメッセージ ID（"ID|TS" → ID を取り出す）
+    # 長押しされたメッセージ ID（show_chat() で設定された session_state から読む）
     _lp_raw      = st.session_state.get("_lp_input", "") or ""
     reaction_for = _lp_raw.split("|")[0] if "|" in _lp_raw else None
 
@@ -624,6 +610,17 @@ def show_chat(current_user: dict) -> None:
                         url = upload_photo(CHAT_IMG_BUCKET, str(uuid.uuid4()), img_file)
                         send_message(selected_room, current_user["name"], current_user["avatar"], "", image_url=url)
                     st.rerun()
+
+    # ── 長押し用 CSS + hidden input + JS（fragment 外 = 5秒で再作成されない）──
+    st.markdown("""<style>
+    .stTextInput:has(input[placeholder="__lp__"]) {
+        height:0!important;min-height:0!important;
+        overflow:hidden!important;margin:0!important;padding:0!important;
+    }
+    [data-lp-msg] { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+    </style>""", unsafe_allow_html=True)
+    st.text_input("lp", placeholder="__lp__", key="_lp_input", label_visibility="collapsed")
+    st.components.v1.html(LONG_PRESS_JS, height=0)
 
     # ★ リアルタイム更新フラグメント（5秒ごと）
     render_messages()

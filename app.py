@@ -1,20 +1,21 @@
 """
-danran - 家族専用チャットアプリ
-Streamlit × Supabase
-セッション管理: Supabase sessions テーブル + URL クエリパラム (?s=SESSION_ID)
+danran - 家族専用チャットアプリ  Streamlit × Supabase
+セッション: Supabase sessions + URL ?s=SESSION_ID
+リアルタイム: @st.fragment(run_every="5s")
+通知: in-app toast + ntfy.sh push (secrets.ntfy.topic が必要)
 """
 
 import uuid
 from datetime import datetime, timezone, timedelta
 
 import bcrypt
+import httpx
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 from supabase import create_client, Client
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 # ページ設定
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 st.set_page_config(
     page_title="danran 🏠",
     page_icon="🏠",
@@ -22,22 +23,19 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 # 定数
-# ──────────────────────────────────────────────
-ROOMS: list[str] = [
-    "家族みんな",
-    "連絡事項",
-    "おでかけ計画",
-    "料理・レシピ",
-]
+# ─────────────────────────────────────
+ROOMS: list[str]  = ["家族みんな", "連絡事項", "おでかけ計画", "料理・レシピ"]
+REACTION_EMOJIS   = ["👍", "❤️", "😂", "😲", "🙏"]
+AVATAR_BUCKET     = "avatars"
+CHAT_IMG_BUCKET   = "chat-images"
+SESSION_PARAM     = "s"
+JST               = timezone(timedelta(hours=9))
 
-AVATAR_BUCKET = "avatars"
-SESSION_PARAM = "s"   # URL クエリパラムのキー
-
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 # Supabase クライアント
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 @st.cache_resource
 def get_supabase() -> Client:
     return create_client(
@@ -47,58 +45,63 @@ def get_supabase() -> Client:
 
 supabase = get_supabase()
 
-# ──────────────────────────────────────────────
-# パスワードヘルパー
-# ──────────────────────────────────────────────
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-def verify_password(password: str, hashed: str) -> bool:
+# ─────────────────────────────────────
+# プッシュ通知（ntfy.sh）
+# ─────────────────────────────────────
+def send_push(room: str, sender: str, content: str, has_image: bool = False) -> None:
+    """secrets に [ntfy] topic が設定されていれば ntfy.sh へ通知。"""
     try:
-        return bcrypt.checkpw(password.encode(), hashed.encode())
+        topic = st.secrets.get("ntfy", {}).get("topic", "")
+        if not topic:
+            return
+        body = f"{sender}: {'📷 写真' if has_image and not content else content[:80]}"
+        httpx.post(
+            f"https://ntfy.sh/{topic}",
+            content=body.encode(),
+            headers={
+                "Title":    f"danran 💬 {room}",
+                "Tags":     "speech_balloon",
+                "Priority": "default",
+            },
+            timeout=3.0,
+        )
+    except Exception:
+        pass
+
+# ─────────────────────────────────────
+# パスワード
+# ─────────────────────────────────────
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+
+def verify_password(pw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode(), hashed.encode())
     except Exception:
         return False
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 # セッション管理
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 def create_session(user_id: str) -> str:
-    """Supabase に session を INSERT してセッション ID を返す。"""
-    res = supabase.table("sessions").insert({"user_id": user_id}).execute()
-    return res.data[0]["id"]
+    return supabase.table("sessions").insert({"user_id": user_id}).execute().data[0]["id"]
 
 def get_session_user(session_id: str) -> dict | None:
-    """セッション ID → ユーザー情報（無効なら None）。"""
     try:
-        sess = (
-            supabase.table("sessions")
-            .select("user_id")
-            .eq("id", session_id)
-            .single()
-            .execute()
-            .data
-        )
+        sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute().data
         if not sess:
             return None
-        return (
-            supabase.table("users")
-            .select("id, name, avatar")
-            .eq("id", sess["user_id"])
-            .single()
-            .execute()
-            .data
-        )
+        return supabase.table("users").select("id, name, avatar").eq("id", sess["user_id"]).single().execute().data
     except Exception:
         return None
 
-def delete_session(session_id: str) -> None:
+def delete_session(sid: str) -> None:
     try:
-        supabase.table("sessions").delete().eq("id", session_id).execute()
+        supabase.table("sessions").delete().eq("id", sid).execute()
     except Exception:
         pass
 
 def do_login(user: dict) -> None:
-    """ログイン: session 作成 → URL パラム書き込み → session_state 更新。"""
     sid = create_session(user["id"])
     st.query_params[SESSION_PARAM]   = sid
     st.session_state["session_id"]   = sid
@@ -106,117 +109,131 @@ def do_login(user: dict) -> None:
     st.session_state["view"]         = "chat"
 
 def do_logout() -> None:
-    """ログアウト: session 削除 → URL パラム・session_state をクリア。"""
     delete_session(st.session_state.pop("session_id", "") or "")
     st.session_state.pop("current_user", None)
     st.session_state["view"] = "select_user"
     st.query_params.clear()
 
-# ──────────────────────────────────────────────
-# ストレージ（写真アバター）
-# ──────────────────────────────────────────────
-def upload_avatar_photo(user_id: str, uploaded_file) -> str:
-    ext      = uploaded_file.name.rsplit(".", 1)[-1].lower()
-    filename = f"{user_id}.{ext}"
-    supabase.storage.from_(AVATAR_BUCKET).upload(
-        path=filename,
-        file=uploaded_file.read(),
-        file_options={"content-type": uploaded_file.type, "upsert": "true"},
-    )
-    return supabase.storage.from_(AVATAR_BUCKET).get_public_url(filename)
+# ─────────────────────────────────────
+# ストレージ
+# ─────────────────────────────────────
+def upload_photo(bucket: str, file_id: str, f) -> str:
+    ext = f.name.rsplit(".", 1)[-1].lower()
+    fn  = f"{file_id}.{ext}"
+    supabase.storage.from_(bucket).upload(fn, f.read(), {"content-type": f.type, "upsert": "true"})
+    return supabase.storage.from_(bucket).get_public_url(fn)
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 # ユーザー DB
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 def fetch_all_users() -> list[dict]:
     try:
-        return (
-            supabase.table("users")
-            .select("id, name, avatar")
-            .order("created_at")
-            .execute()
-            .data or []
-        )
+        return supabase.table("users").select("id, name, avatar").order("created_at").execute().data or []
     except Exception:
         return []
 
 def get_user_with_hash(user_id: str) -> dict | None:
     try:
-        return (
-            supabase.table("users")
-            .select("id, name, avatar, password_hash")
-            .eq("id", user_id)
-            .single()
-            .execute()
-            .data
-        )
+        return supabase.table("users").select("id, name, avatar, password_hash").eq("id", user_id).single().execute().data
     except Exception:
         return None
 
-def register_user(
-    name: str, avatar: str, password: str, user_id: str | None = None
-) -> dict:
-    uid = user_id or str(uuid.uuid4())
-    return (
-        supabase.table("users")
-        .insert({
-            "id":            uid,
-            "name":          name,
-            "avatar":        avatar,
-            "password_hash": hash_password(password),
-        })
-        .execute()
-        .data[0]
-    )
+def register_user(name: str, avatar: str, pw: str, uid: str | None = None) -> dict:
+    uid = uid or str(uuid.uuid4())
+    return supabase.table("users").insert({
+        "id": uid, "name": name, "avatar": avatar, "password_hash": hash_password(pw),
+    }).execute().data[0]
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 # メッセージ DB
-# ──────────────────────────────────────────────
-def fetch_messages(room_name: str, limit: int = 100) -> list[dict]:
+# ─────────────────────────────────────
+def fetch_messages(room: str, limit: int = 100) -> list[dict]:
     try:
-        return (
-            supabase.table("messages")
-            .select("id, user_name, user_avatar, content, created_at")
-            .eq("room_name", room_name)
-            .order("created_at", desc=False)
-            .limit(limit)
-            .execute()
-            .data or []
-        )
+        return supabase.table("messages")\
+            .select("id, user_name, user_avatar, content, image_url, created_at")\
+            .eq("room_name", room).order("created_at").limit(limit).execute().data or []
     except Exception as e:
-        st.error(f"❌ {e}")
-        return []
+        st.error(f"❌ {e}"); return []
 
-def send_message(
-    room_name: str, user_name: str, user_avatar: str, content: str
-) -> bool:
+def send_message(room: str, uname: str, uavatar: str, content: str, image_url: str | None = None) -> bool:
     try:
         supabase.table("messages").insert({
-            "room_name":   room_name,
-            "user_name":   user_name,
-            "user_avatar": user_avatar,
-            "content":     content,
+            "room_name": room, "user_name": uname, "user_avatar": uavatar,
+            "content": content, "image_url": image_url,
         }).execute()
+        send_push(room, uname, content, has_image=bool(image_url))
         return True
     except Exception as e:
-        st.error(f"❌ {e}")
-        return False
+        st.error(f"❌ {e}"); return False
 
-JST = timezone(timedelta(hours=9))
-
-def delete_message(message_id: str, user_name: str) -> bool:
-    """自分のメッセージだけ削除できる（user_name で二重チェック）。"""
+def delete_message(msg_id: str, uname: str) -> bool:
     try:
-        supabase.table("messages").delete()\
-            .eq("id", message_id)\
-            .eq("user_name", user_name)\
-            .execute()
+        supabase.table("messages").delete().eq("id", msg_id).eq("user_name", uname).execute()
         return True
     except Exception as e:
-        st.error(f"❌ 削除失敗: {e}")
-        return False
+        st.error(f"❌ {e}"); return False
 
-def format_timestamp(ts_str: str) -> str:
+# ─────────────────────────────────────
+# リアクション DB
+# ─────────────────────────────────────
+def fetch_reactions_bulk(msg_ids: list[str]) -> dict[str, dict[str, list[str]]]:
+    """{msg_id: {emoji: [user_name, ...]}} を一括取得。"""
+    if not msg_ids:
+        return {}
+    try:
+        rows = supabase.table("reactions")\
+            .select("message_id, emoji, user_name").in_("message_id", msg_ids).execute().data or []
+        result: dict = {}
+        for r in rows:
+            result.setdefault(r["message_id"], {}).setdefault(r["emoji"], []).append(r["user_name"])
+        return result
+    except Exception:
+        return {}
+
+def toggle_reaction(msg_id: str, uname: str, emoji: str) -> None:
+    try:
+        existing = supabase.table("reactions").select("id")\
+            .eq("message_id", msg_id).eq("user_name", uname).eq("emoji", emoji).execute().data
+        if existing:
+            supabase.table("reactions").delete().eq("id", existing[0]["id"]).execute()
+        else:
+            supabase.table("reactions").insert({"message_id": msg_id, "user_name": uname, "emoji": emoji}).execute()
+    except Exception:
+        pass
+
+# ─────────────────────────────────────
+# 既読管理
+# ─────────────────────────────────────
+def get_unread_counts(user_id: str) -> dict[str, int]:
+    try:
+        last_reads = {
+            r["room_name"]: r["read_at"]
+            for r in supabase.table("last_read").select("room_name, read_at").eq("user_id", user_id).execute().data or []
+        }
+        counts = {}
+        for room in ROOMS:
+            lr = last_reads.get(room)
+            q  = supabase.table("messages").select("id", count="exact").eq("room_name", room)
+            if lr:
+                q = q.gt("created_at", lr)
+            counts[room] = q.execute().count or 0
+        return counts
+    except Exception:
+        return {r: 0 for r in ROOMS}
+
+def mark_as_read(user_id: str, room: str) -> None:
+    try:
+        supabase.table("last_read").upsert({
+            "user_id": user_id, "room_name": room,
+            "read_at": datetime.now(JST).isoformat(),
+        }).execute()
+    except Exception:
+        pass
+
+# ─────────────────────────────────────
+# タイムスタンプ
+# ─────────────────────────────────────
+def fmt_ts(ts_str: str) -> str:
     try:
         dt  = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(JST)
         now = datetime.now(JST)
@@ -224,14 +241,104 @@ def format_timestamp(ts_str: str) -> str:
             return f"今日 {dt.strftime('%H:%M')}"
         elif dt.date() == (now - timedelta(days=1)).date():
             return f"昨日 {dt.strftime('%H:%M')}"
-        else:
-            return dt.strftime("%-m/%-d %H:%M")
+        return dt.strftime("%-m/%-d %H:%M")
     except Exception:
         return ts_str
 
-# ──────────────────────────────────────────────
-# 画面① ユーザー選択（ロック画面）
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
+# ★ リアルタイムタイムライン（フラグメント）
+#   5秒ごとに自動更新。ページ全体は再描画しない。
+# ─────────────────────────────────────
+@st.fragment(run_every="5s")
+def render_messages() -> None:
+    current_user  = st.session_state.get("current_user", {})
+    selected_room = st.session_state.get("active_room", ROOMS[0])
+    uname         = current_user.get("name", "")
+
+    messages  = fetch_messages(selected_room)
+
+    # 新着トースト（他人のメッセージのみ）
+    count_key  = f"cnt_{selected_room}"
+    prev       = st.session_state.get(count_key, -1)
+    if prev >= 0 and len(messages) > prev:
+        for m in messages[prev:]:
+            if m["user_name"] != uname:
+                preview = m["content"][:30] if m["content"] else "📷 写真"
+                st.toast(f"💬 {m['user_name']}: {preview}", icon="🔔")
+    st.session_state[count_key] = len(messages)
+
+    # 既読マーク
+    if uid := current_user.get("id"):
+        mark_as_read(uid, selected_room)
+
+    if not messages:
+        st.info("📭 まだメッセージはありません。最初のメッセージを送ってみましょう！")
+        return
+
+    # リアクション一括取得
+    all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
+
+    for msg in messages:
+        msg_id  = msg.get("id",          "")
+        sender  = msg.get("user_name",   "不明")
+        body    = msg.get("content",     "")
+        ts      = msg.get("created_at",  "")
+        avatar  = msg.get("user_avatar", "🙂")
+        img_url = msg.get("image_url")
+        is_mine = sender == uname
+
+        with st.chat_message(name="user" if is_mine else sender, avatar=avatar):
+
+            # 他人のメッセージ → 名前を小さく（LINE風）
+            if not is_mine:
+                st.markdown(
+                    f'<p style="font-size:.75rem;color:#9a9a9a;font-weight:600;margin:0 0 4px 0">{sender}</p>',
+                    unsafe_allow_html=True,
+                )
+
+            # 本文・画像
+            if is_mine:
+                col_body, col_del = st.columns([10, 1])
+                with col_body:
+                    if img_url:
+                        st.image(img_url, use_container_width=True)
+                    if body:
+                        st.markdown(body)
+                    if ts:
+                        st.caption(fmt_ts(ts))
+                with col_del:
+                    if st.button("🗑️", key=f"del_{msg_id}", help="削除"):
+                        if delete_message(msg_id, uname):
+                            st.rerun()
+            else:
+                if img_url:
+                    st.image(img_url, use_container_width=True)
+                if body:
+                    st.markdown(body)
+                if ts:
+                    st.caption(fmt_ts(ts))
+
+            # ── リアクションボタン ──
+            msg_reactions = all_reactions.get(msg_id, {})
+            rcols = st.columns(len(REACTION_EMOJIS))
+            for i, emoji in enumerate(REACTION_EMOJIS):
+                with rcols[i]:
+                    reacted_users = msg_reactions.get(emoji, [])
+                    count         = len(reacted_users)
+                    reacted       = uname in reacted_users
+                    label         = f"{emoji} {count}" if count else emoji
+                    if st.button(
+                        label,
+                        key=f"r_{msg_id}_{emoji}",
+                        type="primary" if reacted else "secondary",
+                        use_container_width=True,
+                    ):
+                        toggle_reaction(msg_id, uname, emoji)
+                        st.rerun()
+
+# ─────────────────────────────────────
+# 画面① ユーザー選択
+# ─────────────────────────────────────
 def show_user_select() -> None:
     _, col, _ = st.columns([1, 2, 1])
     with col:
@@ -239,7 +346,6 @@ def show_user_select() -> None:
         st.markdown("## 🏠 danran")
         st.markdown("あなたを選んでください")
         st.divider()
-
         users = fetch_all_users()
         if users:
             cols = st.columns(min(len(users), 4))
@@ -250,130 +356,89 @@ def show_user_select() -> None:
                         st.image(user["avatar"], width=64)
                     label = user["name"] if is_photo else f"{user['avatar']}  {user['name']}"
                     if st.button(label, key=f"sel_{user['id']}", use_container_width=True):
-                        st.session_state["view"]          = "enter_password"
-                        st.session_state["selected_user"] = user
+                        st.session_state.update(view="enter_password", selected_user=user)
                         st.rerun()
         else:
             st.info("まだメンバーが登録されていません。")
-
         st.divider()
         if st.button("＋ 新しいメンバーとして登録", use_container_width=True):
-            st.session_state["view"] = "register"
-            st.rerun()
+            st.session_state["view"] = "register"; st.rerun()
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 # 画面② パスワード入力
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 def show_enter_password() -> None:
     user = st.session_state.get("selected_user", {})
     _, col, _ = st.columns([1, 2, 1])
     with col:
         st.markdown("<br>" * 2, unsafe_allow_html=True)
-        avatar = user.get("avatar", "🙂")
-        if avatar.startswith("http"):
-            st.image(avatar, width=80)
-            st.markdown(f"### {user.get('name', '')}")
+        av = user.get("avatar", "🙂")
+        if av.startswith("http"):
+            st.image(av, width=80); st.markdown(f"### {user.get('name','')}")
         else:
-            st.markdown(f"## {avatar} {user.get('name', '')}")
+            st.markdown(f"## {av} {user.get('name','')}")
         st.markdown("パスワードを入力してください")
         st.divider()
-
-        password = st.text_input("パスワード", type="password", key="pw_input")
-
-        col1, col2 = st.columns(2)
-        with col1:
+        pw = st.text_input("パスワード", type="password", key="pw_input")
+        c1, c2 = st.columns(2)
+        with c1:
             if st.button("← 戻る", use_container_width=True):
-                st.session_state["view"] = "select_user"
-                st.session_state.pop("selected_user", None)
-                st.rerun()
-        with col2:
+                st.session_state.update(view="select_user"); st.session_state.pop("selected_user", None); st.rerun()
+        with c2:
             if st.button("🔓 ログイン", use_container_width=True, type="primary"):
-                if not password:
-                    st.error("パスワードを入力してください")
-                    return
+                if not pw:
+                    st.error("パスワードを入力してください"); return
                 u = get_user_with_hash(user["id"])
-                if u and verify_password(password, u.get("password_hash") or ""):
-                    st.session_state.pop("selected_user", None)
-                    do_login(u)
-                    st.rerun()
+                if u and verify_password(pw, u.get("password_hash") or ""):
+                    st.session_state.pop("selected_user", None); do_login(u); st.rerun()
                 else:
                     st.error("パスワードが違います 🔒")
 
-# ──────────────────────────────────────────────
-# 画面③ 新規メンバー登録
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
+# 画面③ 新規登録
+# ─────────────────────────────────────
 def show_register() -> None:
     _, col, _ = st.columns([1, 2, 1])
     with col:
         st.markdown("<br>" * 2, unsafe_allow_html=True)
         st.markdown("## 👋 新しいメンバー登録")
         st.divider()
-
         name = st.text_input("お名前", placeholder="例：パパ、ママ、はなこ…", max_chars=20)
-
         st.markdown("**アバター**")
-        avatar_type = st.radio(
-            "アバタータイプ", ["絵文字", "写真"],
-            horizontal=True, label_visibility="collapsed",
-        )
-        avatar_emoji = "🙂"
-        avatar_photo = None
-
-        if avatar_type == "絵文字":
-            st.caption("スマホのキーボードから好きな絵文字を選んでね 😊")
-            avatar_emoji = st.text_input(
-                "絵文字", value="🙂", max_chars=8, label_visibility="collapsed"
-            ) or "🙂"
+        atype = st.radio("", ["絵文字", "写真"], horizontal=True, label_visibility="collapsed")
+        avatar_emoji = "🙂"; avatar_photo = None
+        if atype == "絵文字":
+            st.caption("スマホのキーボードから絵文字を選んでね 😊")
+            avatar_emoji = st.text_input("", value="🙂", max_chars=8, label_visibility="collapsed") or "🙂"
         else:
-            avatar_photo = st.file_uploader(
-                "写真を選ぶ", type=["jpg", "jpeg", "png", "webp"],
-                label_visibility="collapsed",
-            )
-            if avatar_photo:
-                st.image(avatar_photo, width=80)
-
+            avatar_photo = st.file_uploader("", type=["jpg","jpeg","png","webp"], label_visibility="collapsed")
+            if avatar_photo: st.image(avatar_photo, width=80)
         st.markdown("**パスワード**")
-        password = st.text_input(
-            "パスワード", type="password",
-            placeholder="4文字以上", label_visibility="collapsed",
-        )
-        password_confirm = st.text_input(
-            "パスワード（確認用）", type="password", placeholder="もう一度入力"
-        )
-
+        pw  = st.text_input("", type="password", placeholder="4文字以上", label_visibility="collapsed")
+        pw2 = st.text_input("パスワード（確認）", type="password", placeholder="もう一度入力")
         st.divider()
-        col1, col2 = st.columns(2)
-        with col1:
+        c1, c2 = st.columns(2)
+        with c1:
             if st.button("← 戻る", use_container_width=True):
-                st.session_state["view"] = "select_user"
-                st.rerun()
-        with col2:
+                st.session_state["view"] = "select_user"; st.rerun()
+        with c2:
             if st.button("✅ 登録する", use_container_width=True, type="primary"):
-                if not name.strip():
-                    st.error("お名前を入力してください"); return
-                if avatar_type == "写真" and not avatar_photo:
-                    st.error("写真を選択してください"); return
-                if len(password) < 4:
-                    st.error("パスワードは4文字以上にしてください"); return
-                if password != password_confirm:
-                    st.error("パスワードが一致しません"); return
-
+                if not name.strip(): st.error("お名前を入力してください"); return
+                if atype == "写真" and not avatar_photo: st.error("写真を選択してください"); return
+                if len(pw) < 4: st.error("パスワードは4文字以上"); return
+                if pw != pw2: st.error("パスワードが一致しません"); return
                 new_uid = str(uuid.uuid4())
-                if avatar_type == "写真":
-                    with st.spinner("写真をアップロード中…"):
-                        final_avatar = upload_avatar_photo(new_uid, avatar_photo)
-                else:
-                    final_avatar = avatar_emoji
-
+                final_av = (
+                    upload_photo(AVATAR_BUCKET, new_uid, avatar_photo) if atype == "写真"
+                    else avatar_emoji
+                )
                 with st.spinner("登録中…"):
-                    user = register_user(name.strip(), final_avatar, password, user_id=new_uid)
+                    user = register_user(name.strip(), final_av, pw, uid=new_uid)
+                do_login(user); st.rerun()
 
-                do_login(user)
-                st.rerun()
-
-# ──────────────────────────────────────────────
-# 画面④ メインチャット（LINE風）
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
+# 画面④ メインチャット
+# ─────────────────────────────────────
 def show_chat(current_user: dict) -> None:
 
     # ── サイドバー ──
@@ -381,97 +446,65 @@ def show_chat(current_user: dict) -> None:
         st.markdown("## 🏠 danran")
         av = current_user["avatar"]
         if av.startswith("http"):
-            st.image(av, width=48)
-            st.markdown(f"**{current_user['name']}** としてログイン中")
+            st.image(av, width=48); st.markdown(f"**{current_user['name']}** としてログイン中")
         else:
             st.markdown(f"**{av} {current_user['name']}** としてログイン中")
-
         st.divider()
+
         st.markdown("### 💬 チャットルーム")
-        selected_room: str = st.radio("ルーム", ROOMS, label_visibility="collapsed")
+        unread = get_unread_counts(current_user["id"])
+        room_labels = [
+            f"🔴 {r}  +{unread[r]}" if unread.get(r, 0) > 0 else r
+            for r in ROOMS
+        ]
+        selected_idx: int = st.radio(
+            "ルーム", range(len(ROOMS)),
+            format_func=lambda i: room_labels[i],
+            label_visibility="collapsed",
+        )
+        selected_room = ROOMS[selected_idx]
+        st.session_state["active_room"] = selected_room
 
         st.divider()
         if st.button("🔒 ログアウト", use_container_width=True):
-            do_logout()
-            st.rerun()
-
+            do_logout(); st.rerun()
         st.markdown("---")
         st.caption("© danran family")
 
-    # ── ヘッダー＆自動更新 ──
-    col_title, col_interval = st.columns([4, 2])
-    with col_title:
-        st.markdown(f"## 💬 {selected_room}")
-    with col_interval:
-        interval_sec = st.select_slider(
-            "自動更新",
-            options=[5, 10, 30, 60],
-            value=10,
-            format_func=lambda v: f"🔄 {v}秒",
-            label_visibility="collapsed",
+    # ── メインエリア ──
+    st.markdown(f"## 💬 {selected_room}")
+
+    # ★ リアルタイム更新フラグメント（5秒ごと）
+    render_messages()
+
+    # ── 写真送信 ──
+    with st.expander("📷 写真を送る"):
+        img_file = st.file_uploader(
+            "画像を選ぶ", type=["jpg","jpeg","png","gif","webp"],
+            label_visibility="collapsed", key="chat_img",
         )
+        if img_file:
+            st.image(img_file, width=200)
+            if st.button("📤 この写真を送信", type="primary", use_container_width=True):
+                with st.spinner("送信中…"):
+                    url = upload_photo(CHAT_IMG_BUCKET, str(uuid.uuid4()), img_file)
+                    send_message(selected_room, current_user["name"], current_user["avatar"], "", image_url=url)
+                st.rerun()
 
-    # 選択した間隔で自動リフレッシュ（0 = 無効）
-    st_autorefresh(interval=interval_sec * 1000, key="chat_autorefresh")
-
-    # ── タイムライン（LINE風） ──
-    messages = fetch_messages(selected_room)
-
-    if not messages:
-        st.info("📭 まだメッセージはありません。最初のメッセージを送ってみましょう！")
-    else:
-        for msg in messages:
-            msg_id: str = msg.get("id",          "")
-            sender: str = msg.get("user_name",   "不明")
-            body:   str = msg.get("content",     "")
-            ts:     str = msg.get("created_at",  "")
-            avatar: str = msg.get("user_avatar", "🙂")
-            is_mine     = sender == current_user["name"]
-
-            with st.chat_message(
-                name="user" if is_mine else sender,
-                avatar=avatar,
-            ):
-                # 他人のメッセージにのみ名前をアイコン直下に表示（LINE風）
-                if not is_mine:
-                    st.markdown(
-                        f'<p style="font-size:0.75rem;color:#9a9a9a;'
-                        f'font-weight:600;margin:0 0 4px 0">{sender}</p>',
-                        unsafe_allow_html=True,
-                    )
-
-                # 自分のメッセージは削除ボタン付き
-                if is_mine:
-                    col_body, col_del = st.columns([9, 1])
-                    with col_body:
-                        st.markdown(body)
-                        if ts:
-                            st.caption(format_timestamp(ts))
-                    with col_del:
-                        if st.button("🗑️", key=f"del_{msg_id}", help="削除"):
-                            if delete_message(msg_id, current_user["name"]):
-                                st.rerun()
-                else:
-                    st.markdown(body)
-                    if ts:
-                        st.caption(format_timestamp(ts))
-
-    # ── 送信フォーム ──
-    av = current_user["avatar"]
+    # ── テキスト入力 ──
+    av_str = current_user["avatar"]
     ph = (
-        f"{av} {current_user['name']} としてメッセージを送る…"
-        if not av.startswith("http")
+        f"{av_str} {current_user['name']} としてメッセージを送る…"
+        if not av_str.startswith("http")
         else f"{current_user['name']} としてメッセージを送る…"
     )
     if prompt := st.chat_input(ph):
-        if send_message(selected_room, current_user["name"], current_user["avatar"], prompt):
-            st.rerun()
+        send_message(selected_room, current_user["name"], current_user["avatar"], prompt)
+        st.rerun()
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────
 # エントリーポイント
-# ──────────────────────────────────────────────
-# URL クエリパラム ?s=SESSION_ID からセッション復元
-# → ページリロード・スワイプリロードでも URL に ?s= が残るので消えない
+# ─────────────────────────────────────
 if "current_user" not in st.session_state:
     sid = st.query_params.get(SESSION_PARAM)
     if sid:

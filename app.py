@@ -5,6 +5,7 @@ danran - 家族専用チャットアプリ  Streamlit × Supabase
 通知: in-app toast + ntfy.sh push (secrets.ntfy.topic が必要)
 """
 
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -20,15 +21,17 @@ st.set_page_config(
     page_title="danran 🏠",
     page_icon="🏠",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# Streamlit のツールバー（Share / ☆ / GitHub 等）を非表示
+# Streamlit のツールバー・サイドバーを非表示
 st.markdown("""
 <style>
 [data-testid="stToolbar"]          { display: none !important; }
 [data-testid="stDecoration"]       { display: none !important; }
-[data-testid="stMainBlockContainer"] > div:first-child { padding-top: 1rem; }
+[data-testid="stSidebar"]          { display: none !important; }
+[data-testid="collapsedControl"]   { display: none !important; }
+[data-testid="stMainBlockContainer"] > div:first-child { padding-top: 0.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -255,57 +258,17 @@ def fmt_ts(ts_str: str) -> str:
         return ts_str
 
 # ─────────────────────────────────────
-# 長押し検出 JS（親フレーム DOM に 1 回だけ observer を設定）
+# 長押し検出カスタムコンポーネント
+#   components/longpress/index.html が Streamlit の正式プロトコルで
+#   メッセージ ID を Python に返す（srcdoc ではなく同一オリジンで配信）
 # ─────────────────────────────────────
-LONG_PRESS_JS = """
-<script>
-(function() {
-    const LP_MS = 500;
-    const par = window.parent;
-    const doc = par.document;
-
-    function fireSignal(msgId) {
-        const inp = doc.querySelector('input[placeholder="__lp__"]');
-        if (!inp) return;
-        // React 制御入力を更新するために nativeInputValueSetter を使う
-        const setter = Object.getOwnPropertyDescriptor(
-            par.HTMLInputElement.prototype, 'value'
-        ).set;
-        setter.call(inp, msgId + '|' + Date.now());
-        inp.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-
-    function attach(el, msgId) {
-        el._lpOk = true;
-        let t, moved;
-        el.addEventListener('touchstart', () => {
-            moved = false;
-            t = setTimeout(() => { if (!moved) fireSignal(msgId); }, LP_MS);
-        }, { passive: true });
-        el.addEventListener('touchmove',   () => { moved = true; clearTimeout(t); }, { passive: true });
-        el.addEventListener('touchend',    () => clearTimeout(t));
-        el.addEventListener('touchcancel', () => clearTimeout(t));
-        el.addEventListener('contextmenu', (e) => { e.preventDefault(); fireSignal(msgId); });
-    }
-
-    function scan() {
-        doc.querySelectorAll('[data-lp-msg]').forEach(el => {
-            if (!el._lpOk) attach(el, el.getAttribute('data-lp-msg'));
-        });
-    }
-
-    // 古い observer を切断してから新しいものを設定（iframe 再作成のたびに呼ばれる）
-    if (par._danranObs) par._danranObs.disconnect();
-    par._danranObs = new MutationObserver(scan);
-    par._danranObs.observe(doc.body, { childList: true, subtree: true });
-
-    // 即時スキャン＋遅延スキャン（DOM 描画タイミングのずれに対応）
-    scan();
-    setTimeout(scan, 300);
-    setTimeout(scan, 800);
-})();
-</script>
-"""
+_LP_COMPONENT_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
+)
+_lp_detector = st.components.v1.declare_component(
+    "danran_longpress",
+    path=_LP_COMPONENT_DIR,
+)
 
 # ─────────────────────────────────────
 # ★ リアルタイムタイムライン（フラグメント）
@@ -340,9 +303,8 @@ def render_messages() -> None:
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
 
-    # 長押しされたメッセージ ID（show_chat() で設定された session_state から読む）
-    _lp_raw      = st.session_state.get("_lp_input", "") or ""
-    reaction_for = _lp_raw.split("|")[0] if "|" in _lp_raw else None
+    # 長押しされたメッセージ ID（show_chat() が session_state に書き込む）
+    reaction_for: str | None = st.session_state.get("reaction_for")
 
     for msg in messages:
         msg_id  = msg.get("id",          "")
@@ -442,18 +404,18 @@ def render_messages() -> None:
                         use_container_width=True,
                     ):
                         toggle_reaction(msg_id, uname, emoji)
-                        st.session_state["_lp_input"] = ""
+                        st.session_state["reaction_for"] = None
                         st.rerun()
             if is_mine:
                 with rcols[len(REACTION_EMOJIS)]:
                     if st.button("🗑️", key=f"del_{msg_id}",
                                  use_container_width=True, help="削除"):
                         delete_message(msg_id, uname)
-                        st.session_state["_lp_input"] = ""
+                        st.session_state["reaction_for"] = None
                         st.rerun()
             with rcols[-1]:
                 if st.button("✕", key=f"close_r_{msg_id}", use_container_width=True):
-                    st.session_state["_lp_input"] = ""
+                    st.session_state["reaction_for"] = None
                     st.rerun()
 
 # ─────────────────────────────────────
@@ -500,19 +462,16 @@ def show_enter_password() -> None:
         st.markdown("パスワードを入力してください")
         st.divider()
         pw = st.text_input("パスワード", type="password", key="pw_input")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("← 戻る", use_container_width=True):
-                st.session_state.update(view="select_user"); st.session_state.pop("selected_user", None); st.rerun()
-        with c2:
-            if st.button("🔓 ログイン", use_container_width=True, type="primary"):
-                if not pw:
-                    st.error("パスワードを入力してください"); return
-                u = get_user_with_hash(user["id"])
-                if u and verify_password(pw, u.get("password_hash") or ""):
-                    st.session_state.pop("selected_user", None); do_login(u); st.rerun()
-                else:
-                    st.error("パスワードが違います 🔒")
+        if st.button("🔓 ログイン", use_container_width=True, type="primary"):
+            if not pw:
+                st.error("パスワードを入力してください"); return
+            u = get_user_with_hash(user["id"])
+            if u and verify_password(pw, u.get("password_hash") or ""):
+                st.session_state.pop("selected_user", None); do_login(u); st.rerun()
+            else:
+                st.error("パスワードが違います 🔒")
+        if st.button("← 戻る", use_container_width=True):
+            st.session_state.update(view="select_user"); st.session_state.pop("selected_user", None); st.rerun()
 
 # ─────────────────────────────────────
 # 画面③ 新規登録
@@ -537,24 +496,22 @@ def show_register() -> None:
         pw  = st.text_input("", type="password", placeholder="4文字以上", label_visibility="collapsed")
         pw2 = st.text_input("パスワード（確認）", type="password", placeholder="もう一度入力")
         st.divider()
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("← 戻る", use_container_width=True):
-                st.session_state["view"] = "select_user"; st.rerun()
-        with c2:
-            if st.button("✅ 登録する", use_container_width=True, type="primary"):
-                if not name.strip(): st.error("お名前を入力してください"); return
-                if atype == "写真" and not avatar_photo: st.error("写真を選択してください"); return
-                if len(pw) < 4: st.error("パスワードは4文字以上"); return
-                if pw != pw2: st.error("パスワードが一致しません"); return
-                new_uid = str(uuid.uuid4())
-                final_av = (
-                    upload_photo(AVATAR_BUCKET, new_uid, avatar_photo) if atype == "写真"
-                    else avatar_emoji
-                )
-                with st.spinner("登録中…"):
-                    user = register_user(name.strip(), final_av, pw, uid=new_uid)
-                do_login(user); st.rerun()
+        # ── ボタン（主アクション→戻る の順） ──
+        if st.button("✅ 登録する", use_container_width=True, type="primary"):
+            if not name.strip(): st.error("お名前を入力してください"); return
+            if atype == "写真" and not avatar_photo: st.error("写真を選択してください"); return
+            if len(pw) < 4: st.error("パスワードは4文字以上"); return
+            if pw != pw2: st.error("パスワードが一致しません"); return
+            new_uid  = str(uuid.uuid4())
+            final_av = (
+                upload_photo(AVATAR_BUCKET, new_uid, avatar_photo) if atype == "写真"
+                else avatar_emoji
+            )
+            with st.spinner("登録中…"):
+                user = register_user(name.strip(), final_av, pw, uid=new_uid)
+            do_login(user); st.rerun()
+        if st.button("← 戻る", use_container_width=True):
+            st.session_state["view"] = "select_user"; st.rerun()
 
 # ─────────────────────────────────────
 # 画面④ メインチャット
@@ -562,41 +519,26 @@ def show_register() -> None:
 def show_chat(current_user: dict) -> None:
 
     # ── サイドバー ──
-    with st.sidebar:
-        st.markdown("## 🏠 danran")
+    # ── ルーム状態 ──
+    selected_room = st.session_state.setdefault("active_room", ROOMS[0])
+    show_rooms    = st.session_state.get("show_rooms", False)
+
+    # ── LINE 風ヘッダー：[ ＜ | ルーム名 | 📷 ] ──
+    c_back, c_title, c_photo = st.columns([1, 7, 1])
+    with c_back:
+        label = "✕" if show_rooms else "＜"
+        if st.button(label, use_container_width=True):
+            st.session_state["show_rooms"] = not show_rooms
+            st.rerun()
+    with c_title:
         av = current_user["avatar"]
-        if av.startswith("http"):
-            st.image(av, width=48); st.markdown(f"**{current_user['name']}** としてログイン中")
-        else:
-            st.markdown(f"**{av} {current_user['name']}** としてログイン中")
-        st.divider()
-
-        st.markdown("### 💬 チャットルーム")
-        unread = get_unread_counts(current_user["id"])
-        room_labels = [
-            f"🔴 {r}  +{unread[r]}" if unread.get(r, 0) > 0 else r
-            for r in ROOMS
-        ]
-        selected_idx: int = st.radio(
-            "ルーム", range(len(ROOMS)),
-            format_func=lambda i: room_labels[i],
-            label_visibility="collapsed",
+        av_str = (f'<img src="{av}" style="width:22px;height:22px;border-radius:4px;vertical-align:middle;margin-right:6px">'
+                  if av.startswith("http") else f'{av} ')
+        st.markdown(
+            f'<h3 style="margin:0;line-height:1.4">{av_str}{selected_room}</h3>',
+            unsafe_allow_html=True,
         )
-        selected_room = ROOMS[selected_idx]
-        st.session_state["active_room"] = selected_room
-
-        st.divider()
-        if st.button("🔒 ログアウト", use_container_width=True):
-            do_logout(); st.rerun()
-        st.markdown("---")
-        st.caption("© danran family")
-
-    # ── メインエリア ──
-    head_col, img_col = st.columns([6, 1])
-    with head_col:
-        st.markdown(f"## 💬 {selected_room}")
-    with img_col:
-        # 写真送信 popover（ヘッダー右端）
+    with c_photo:
         with st.popover("📷", use_container_width=True):
             st.markdown("**写真を送る**")
             img_file = st.file_uploader(
@@ -611,25 +553,49 @@ def show_chat(current_user: dict) -> None:
                         send_message(selected_room, current_user["name"], current_user["avatar"], "", image_url=url)
                     st.rerun()
 
-    # ── 長押し用 CSS + hidden input + JS（fragment 外 = 5秒で再作成されない）──
+    # ── ＜ を押したときのルーム選択パネル ──
+    if show_rooms:
+        st.divider()
+        unread = get_unread_counts(current_user["id"])
+        for room in ROOMS:
+            badge = f"  🔴 +{unread[room]}" if unread.get(room, 0) > 0 else ""
+            btn_label = f"{'▶ ' if room == selected_room else '　'}{room}{badge}"
+            if st.button(btn_label, key=f"rs_{room}", use_container_width=True):
+                st.session_state["active_room"] = room
+                st.session_state["show_rooms"]  = False
+                st.rerun()
+        st.divider()
+        # ユーザー情報 + ログアウト
+        av = current_user["avatar"]
+        if av.startswith("http"):
+            c1, c2 = st.columns([1, 5])
+            with c1: st.image(av, width=36)
+            with c2: st.markdown(f"**{current_user['name']}**")
+        else:
+            st.markdown(f"{av} **{current_user['name']}**")
+        if st.button("🔒 ログアウト", use_container_width=True):
+            do_logout(); st.rerun()
+        st.divider()
+        return   # ルーム選択中はメッセージ非表示
+
+    # ── 長押し検出コンポーネント（ゼロ高さ、fragment 外） ──
     st.markdown("""<style>
-    .stTextInput:has(input[placeholder="__lp__"]) {
-        height:0!important;min-height:0!important;
-        overflow:hidden!important;margin:0!important;padding:0!important;
-    }
     [data-lp-msg] { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
     </style>""", unsafe_allow_html=True)
-    st.text_input("lp", placeholder="__lp__", key="_lp_input", label_visibility="collapsed")
-    st.components.v1.html(LONG_PRESS_JS, height=0)
+    lp_raw = _lp_detector(default="") or ""
+    _last  = st.session_state.get("_lp_last", "")
+    if lp_raw and lp_raw != _last:
+        st.session_state["reaction_for"] = lp_raw.split("|")[0]
+        st.session_state["_lp_last"]     = lp_raw
 
     # ★ リアルタイム更新フラグメント（5秒ごと）
     render_messages()
 
     # ── テキスト入力 ──
-    av_str = current_user["avatar"]
+    av_str2 = current_user["avatar"]
     ph = (
-        f"{av_str} {current_user['name']} としてメッセージを送る…"
-        if not av_str.startswith("http")
+        f"{av_str2} {current_user['name']} としてメッセージを送る…"
+        if not av_str2.startswith("http")
         else f"{current_user['name']} としてメッセージを送る…"
     )
     if prompt := st.chat_input(ph):

@@ -23,6 +23,15 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Streamlit のツールバー（Share / ☆ / GitHub 等）を非表示
+st.markdown("""
+<style>
+[data-testid="stToolbar"]          { display: none !important; }
+[data-testid="stDecoration"]       { display: none !important; }
+[data-testid="stMainBlockContainer"] > div:first-child { padding-top: 1rem; }
+</style>
+""", unsafe_allow_html=True)
+
 # ─────────────────────────────────────
 # 定数
 # ─────────────────────────────────────
@@ -246,6 +255,65 @@ def fmt_ts(ts_str: str) -> str:
         return ts_str
 
 # ─────────────────────────────────────
+# 長押し検出 JS（親フレーム DOM に 1 回だけ observer を設定）
+# ─────────────────────────────────────
+LONG_PRESS_JS = """
+<script>
+(function() {
+    const LP_MS = 500;
+    const par   = window.parent;
+
+    // iframe が再作成されるたびに呼ばれるが、初期化は 1 回のみ
+    if (par._danranLpReady) { return; }
+    par._danranLpReady = true;
+
+    const doc = par.document;
+
+    function fireSignal(msgId) {
+        const inp = doc.querySelector('input[placeholder="__lp__"]');
+        if (!inp) return;
+        const setter = Object.getOwnPropertyDescriptor(
+            par.HTMLInputElement.prototype, 'value'
+        ).set;
+        // タイムスタンプを付けることで同じ ID の連続長押しも検知できる
+        setter.call(inp, msgId + '|' + Date.now());
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function attach(el, msgId) {
+        if (el._lpOk) return;
+        el._lpOk = true;
+        let t, moved;
+        el.addEventListener('touchstart',
+            () => { moved = false; t = setTimeout(() => { if (!moved) fireSignal(msgId); }, LP_MS); },
+            { passive: true });
+        el.addEventListener('touchmove',   () => { moved = true; clearTimeout(t); }, { passive: true });
+        el.addEventListener('touchend',    () => clearTimeout(t));
+        el.addEventListener('touchcancel', () => clearTimeout(t));
+        // デスクトップ: 右クリックでもリアクションピッカーを開く
+        el.addEventListener('contextmenu', (e) => { e.preventDefault(); fireSignal(msgId); });
+    }
+
+    function scan() {
+        doc.querySelectorAll('[data-lp-msg]:not([data-lp-ok])').forEach(m => {
+            m.setAttribute('data-lp-ok', '1');
+            const id = m.getAttribute('data-lp-msg');
+            for (let el = m; el; el = el.parentElement) {
+                if (el.dataset && el.dataset.testid === 'stChatMessage') {
+                    attach(el, id);
+                    break;
+                }
+            }
+        });
+    }
+
+    new MutationObserver(scan).observe(doc.body, { childList: true, subtree: true });
+    scan();
+})();
+</script>
+"""
+
+# ─────────────────────────────────────
 # ★ リアルタイムタイムライン（フラグメント）
 #   5秒ごとに自動更新。ページ全体は再描画しない。
 # ─────────────────────────────────────
@@ -278,6 +346,20 @@ def render_messages() -> None:
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
 
+    # ── 長押しシグナル入力（JS から React イベント経由で更新される） ──
+    st.markdown("""<style>
+    .stTextInput:has(input[placeholder="__lp__"]) {
+        height:0!important;min-height:0!important;
+        overflow:hidden!important;margin:0!important;padding:0!important;
+    }
+    </style>""", unsafe_allow_html=True)
+    st.text_input("lp", placeholder="__lp__", key="_lp_input", label_visibility="collapsed")
+    st.components.v1.html(LONG_PRESS_JS, height=0)
+
+    # 長押しされたメッセージ ID（タイムスタンプ付き "ID|TS" → ID を取り出す）
+    _lp_raw      = st.session_state.get("_lp_input", "") or ""
+    reaction_for = _lp_raw.split("|")[0] if "|" in _lp_raw else None
+
     for msg in messages:
         msg_id  = msg.get("id",          "")
         sender  = msg.get("user_name",   "不明")
@@ -288,6 +370,9 @@ def render_messages() -> None:
         is_mine = sender == uname
 
         with st.chat_message(name="user" if is_mine else sender, avatar=avatar):
+            # 長押し検出用マーカー（JS がこれを見つけて stChatMessage 親要素にリスナーを付与）
+            st.markdown(f'<div data-lp-msg="{msg_id}" style="display:none"></div>',
+                        unsafe_allow_html=True)
 
             # 他人のメッセージ → 名前を小さく（LINE風）
             if not is_mine:
@@ -318,8 +403,10 @@ def render_messages() -> None:
                 if ts:
                     st.caption(fmt_ts(ts))
 
-            # ── リアクション（HTML pills + ＋ popover）──
+            # ── リアクション ──
             msg_reactions = all_reactions.get(msg_id, {})
+
+            # 既存リアクション → コンパクトな HTML pills
             pills_html = ""
             for emoji in REACTION_EMOJIS:
                 users = msg_reactions.get(emoji, [])
@@ -333,27 +420,31 @@ def render_messages() -> None:
                         f'padding:2px 8px;font-size:0.85rem;margin-right:4px">'
                         f'{emoji}&nbsp;{len(users)}</span>'
                     )
-            r_col_pills, r_col_btn = st.columns([8, 1])
-            with r_col_pills:
-                if pills_html:
-                    st.markdown(
-                        f'<div style="margin:4px 0 2px;line-height:2">{pills_html}</div>',
-                        unsafe_allow_html=True,
-                    )
-            with r_col_btn:
-                with st.popover("＋", use_container_width=False):
-                    st.caption("リアクションを選んでね")
-                    rcols2 = st.columns(len(REACTION_EMOJIS))
-                    for i, emoji in enumerate(REACTION_EMOJIS):
-                        with rcols2[i]:
-                            already = uname in msg_reactions.get(emoji, [])
-                            if st.button(
-                                emoji + (" ✓" if already else ""),
-                                key=f"r_{msg_id}_{emoji}",
-                                use_container_width=True,
-                            ):
-                                toggle_reaction(msg_id, uname, emoji)
-                                st.rerun()
+            if pills_html:
+                st.markdown(
+                    f'<div style="margin:4px 0 2px;line-height:2">{pills_html}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # 長押しで選択されたメッセージ → インライン リアクションピッカー
+            if reaction_for == msg_id:
+                st.caption("リアクション：")
+                rcols = st.columns(len(REACTION_EMOJIS) + 1)
+                for i, emoji in enumerate(REACTION_EMOJIS):
+                    with rcols[i]:
+                        already = uname in msg_reactions.get(emoji, [])
+                        if st.button(
+                            emoji + (" ✓" if already else ""),
+                            key=f"r_{msg_id}_{emoji}",
+                            use_container_width=True,
+                        ):
+                            toggle_reaction(msg_id, uname, emoji)
+                            st.session_state["_lp_input"] = ""
+                            st.rerun()
+                with rcols[len(REACTION_EMOJIS)]:
+                    if st.button("✕", key=f"close_r_{msg_id}", use_container_width=True):
+                        st.session_state["_lp_input"] = ""
+                        st.rerun()
 
 # ─────────────────────────────────────
 # 画面① ユーザー選択

@@ -123,7 +123,8 @@ def do_login(user: dict) -> None:
 def do_logout() -> None:
     delete_session(st.session_state.pop("session_id", "") or "")
     st.session_state.pop("current_user", None)
-    st.session_state["view"] = "select_user"
+    st.session_state["view"]            = "select_user"
+    st.session_state["_clear_session"]  = True   # localStorage もクリア
     st.query_params.clear()
 
 # ─────────────────────────────────────
@@ -578,16 +579,6 @@ def show_chat(current_user: dict) -> None:
         st.divider()
         return   # ルーム選択中はメッセージ非表示
 
-    # ── 長押し検出コンポーネント（ゼロ高さ、fragment 外） ──
-    st.markdown("""<style>
-    [data-lp-msg] { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
-    </style>""", unsafe_allow_html=True)
-    lp_raw = _lp_detector(default="") or ""
-    _last  = st.session_state.get("_lp_last", "")
-    if lp_raw and lp_raw != _last:
-        st.session_state["reaction_for"] = lp_raw.split("|")[0]
-        st.session_state["_lp_last"]     = lp_raw
-
     # ★ リアルタイム更新フラグメント（5秒ごと）
     render_messages()
 
@@ -605,6 +596,37 @@ def show_chat(current_user: dict) -> None:
 # ─────────────────────────────────────
 # エントリーポイント
 # ─────────────────────────────────────
+
+# ── グローバルコンポーネント（常時実行・ゼロ高さ）──
+# セッション自動復元（localStorage）＋ 長押し検出の両方を担う
+_comp_val = _lp_detector(
+    save_session  = st.session_state.get("session_id", ""),
+    clear_session = st.session_state.pop("_clear_session", False),
+    default       = None,
+)
+
+# セッション復元（未ログイン時 & まだ試していない場合のみ）
+if isinstance(_comp_val, dict) and _comp_val.get("type") == "session":
+    _sid = _comp_val.get("sid", "")
+    if _sid and _sid != st.session_state.get("_sess_checked", ""):
+        st.session_state["_sess_checked"] = _sid
+        if "current_user" not in st.session_state:
+            _restored = get_session_user(_sid)
+            if _restored:
+                st.session_state["current_user"] = _restored
+                st.session_state["session_id"]   = _sid
+                st.query_params[SESSION_PARAM]   = _sid
+                st.session_state["view"]         = "chat"
+                st.rerun()
+
+# 長押しシグナル → reaction_for を更新
+if isinstance(_comp_val, dict) and _comp_val.get("type") == "lp":
+    _lp_key = f"{_comp_val.get('msgId', '')}|{_comp_val.get('ts', 0)}"
+    if _lp_key != st.session_state.get("_lp_last", ""):
+        st.session_state["_lp_last"]     = _lp_key
+        st.session_state["reaction_for"] = _comp_val.get("msgId", "")
+
+# URL パラメータからのセッション復元（既存ルート）
 if "current_user" not in st.session_state:
     sid = st.query_params.get(SESSION_PARAM)
     if sid:

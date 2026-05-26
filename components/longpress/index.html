@@ -7,34 +7,47 @@
 (function () {
   'use strict';
 
-  var LP_MS = 500;
+  var LP_MS = 600;
+  var STORAGE_KEY = 'danran_session';
+  var sessionSent = false;
 
   /* ── Streamlit コンポーネントプロトコル ── */
   function post(type, data) {
-    var msg = Object.assign({ type: type }, data || {});
-    window.parent.postMessage(msg, '*');
+    window.parent.postMessage(Object.assign({ type: type }, data || {}), '*');
   }
-  function ready()           { post('streamlit:componentReady', { apiVersion: 1 }); }
-  function setHeight(h)      { post('streamlit:setFrameHeight', { height: h }); }
-  function setValue(v)       { post('streamlit:setComponentValue', { value: v, dataType: 'json' }); }
+  function ready()     { post('streamlit:componentReady', { apiVersion: 1 }); }
+  function setHeight() { post('streamlit:setFrameHeight', { height: 0 }); }
+  function setValue(v) { post('streamlit:setComponentValue', { value: v, dataType: 'json' }); }
+
+  /* ── セッション管理 ── */
+  function trySendSession() {
+    if (sessionSent) return;
+    try {
+      var sid = localStorage.getItem(STORAGE_KEY);
+      if (sid) {
+        sessionSent = true;
+        setValue({ type: 'session', sid: sid });
+      }
+    } catch (e) {}
+  }
 
   /* ── 長押し検出 ── */
-  function fireSignal(msgId) {
-    setValue(msgId + '|' + Date.now());
+  function fireLp(msgId) {
+    setValue({ type: 'lp', msgId: msgId, ts: Date.now() });
   }
 
   function attach(el, msgId) {
-    if (el._lpDone) return;
-    el._lpDone = true;
+    if (el._lp) return;
+    el._lp = true;
     var t, moved;
     el.addEventListener('touchstart', function () {
       moved = false;
-      t = setTimeout(function () { if (!moved) fireSignal(msgId); }, LP_MS);
+      t = setTimeout(function () { if (!moved) fireLp(msgId); }, LP_MS);
     }, { passive: true });
     el.addEventListener('touchmove',   function () { moved = true; clearTimeout(t); }, { passive: true });
     el.addEventListener('touchend',    function () { clearTimeout(t); });
     el.addEventListener('touchcancel', function () { clearTimeout(t); });
-    el.addEventListener('contextmenu', function (e) { e.preventDefault(); fireSignal(msgId); });
+    el.addEventListener('contextmenu', function (e) { e.preventDefault(); fireLp(msgId); });
   }
 
   function scan() {
@@ -42,13 +55,12 @@
       var doc = window.parent.document;
       var els = doc.querySelectorAll('[data-lp-msg]');
       for (var i = 0; i < els.length; i++) {
-        var el = els[i];
-        if (!el._lpDone) attach(el, el.getAttribute('data-lp-msg'));
+        if (!els[i]._lp) attach(els[i], els[i].getAttribute('data-lp-msg'));
       }
-    } catch (e) { /* クロスオリジン時は無視 */ }
+    } catch (e) { /* クロスオリジン等は無視 */ }
   }
 
-  function setupObserver() {
+  function setupObs() {
     try {
       var doc = window.parent.document;
       if (window._lpObs) window._lpObs.disconnect();
@@ -56,21 +68,28 @@
       window._lpObs.observe(doc.body, { childList: true, subtree: true });
     } catch (e) {}
     scan();
-    setTimeout(scan, 400);
-    setTimeout(scan, 1200);
+    setTimeout(scan, 500);
+    setTimeout(scan, 1500);
   }
 
-  /* Streamlit から render イベントを受け取ったら再初期化 */
+  /* ── Streamlit からの render イベント ── */
   window.addEventListener('message', function (e) {
-    if (e.data && e.data.type === 'streamlit:render') {
-      setupObserver();
-    }
+    if (!e.data || e.data.type !== 'streamlit:render') return;
+    var args = e.data.args || {};
+    try {
+      if (args.save_session)  localStorage.setItem(STORAGE_KEY, args.save_session);
+      if (args.clear_session) localStorage.removeItem(STORAGE_KEY);
+    } catch (ex) {}
+    sessionSent = false; // 引数更新後に再確認
+    setupObs();
+    trySendSession();
   });
 
   /* 起動時 */
   ready();
-  setHeight(0);
-  setupObserver();
+  setHeight();
+  trySendSession();
+  setupObs();
 })();
 </script>
 </head>

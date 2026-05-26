@@ -5,10 +5,11 @@ Streamlit × Supabase
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import bcrypt
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 from supabase import create_client, Client
 
 # ──────────────────────────────────────────────
@@ -201,11 +202,30 @@ def send_message(
         st.error(f"❌ {e}")
         return False
 
+JST = timezone(timedelta(hours=9))
+
+def delete_message(message_id: str, user_name: str) -> bool:
+    """自分のメッセージだけ削除できる（user_name で二重チェック）。"""
+    try:
+        supabase.table("messages").delete()\
+            .eq("id", message_id)\
+            .eq("user_name", user_name)\
+            .execute()
+        return True
+    except Exception as e:
+        st.error(f"❌ 削除失敗: {e}")
+        return False
+
 def format_timestamp(ts_str: str) -> str:
     try:
-        return datetime.fromisoformat(
-            ts_str.replace("Z", "+00:00")
-        ).strftime("%-m/%-d %H:%M")
+        dt  = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(JST)
+        now = datetime.now(JST)
+        if dt.date() == now.date():
+            return f"今日 {dt.strftime('%H:%M')}"
+        elif dt.date() == (now - timedelta(days=1)).date():
+            return f"昨日 {dt.strftime('%H:%M')}"
+        else:
+            return dt.strftime("%-m/%-d %H:%M")
     except Exception:
         return ts_str
 
@@ -378,13 +398,21 @@ def show_chat(current_user: dict) -> None:
         st.markdown("---")
         st.caption("© danran family")
 
-    # ── ヘッダー ──
-    col_title, col_reload = st.columns([5, 1])
+    # ── ヘッダー＆自動更新 ──
+    col_title, col_interval = st.columns([4, 2])
     with col_title:
         st.markdown(f"## 💬 {selected_room}")
-    with col_reload:
-        if st.button("🔄", help="最新のメッセージを取得"):
-            st.rerun()
+    with col_interval:
+        interval_sec = st.select_slider(
+            "自動更新",
+            options=[5, 10, 30, 60],
+            value=10,
+            format_func=lambda v: f"🔄 {v}秒",
+            label_visibility="collapsed",
+        )
+
+    # 選択した間隔で自動リフレッシュ（0 = 無効）
+    st_autorefresh(interval=interval_sec * 1000, key="chat_autorefresh")
 
     # ── タイムライン（LINE風） ──
     messages = fetch_messages(selected_room)
@@ -393,10 +421,11 @@ def show_chat(current_user: dict) -> None:
         st.info("📭 まだメッセージはありません。最初のメッセージを送ってみましょう！")
     else:
         for msg in messages:
-            sender: str = msg.get("user_name",  "不明")
-            body:   str = msg.get("content",    "")
-            ts:     str = msg.get("created_at", "")
-            avatar: str = msg.get("user_avatar","🙂")
+            msg_id: str = msg.get("id",          "")
+            sender: str = msg.get("user_name",   "不明")
+            body:   str = msg.get("content",     "")
+            ts:     str = msg.get("created_at",  "")
+            avatar: str = msg.get("user_avatar", "🙂")
             is_mine     = sender == current_user["name"]
 
             with st.chat_message(
@@ -410,9 +439,22 @@ def show_chat(current_user: dict) -> None:
                         f'font-weight:600;margin:0 0 4px 0">{sender}</p>',
                         unsafe_allow_html=True,
                     )
-                st.markdown(body)
-                if ts:
-                    st.caption(format_timestamp(ts))
+
+                # 自分のメッセージは削除ボタン付き
+                if is_mine:
+                    col_body, col_del = st.columns([9, 1])
+                    with col_body:
+                        st.markdown(body)
+                        if ts:
+                            st.caption(format_timestamp(ts))
+                    with col_del:
+                        if st.button("🗑️", key=f"del_{msg_id}", help="削除"):
+                            if delete_message(msg_id, current_user["name"]):
+                                st.rerun()
+                else:
+                    st.markdown(body)
+                    if ts:
+                        st.caption(format_timestamp(ts))
 
     # ── 送信フォーム ──
     av = current_user["avatar"]

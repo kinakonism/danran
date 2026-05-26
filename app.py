@@ -318,23 +318,42 @@ def render_messages() -> None:
                 if ts:
                     st.caption(fmt_ts(ts))
 
-            # ── リアクションボタン ──
+            # ── リアクション（HTML pills + ＋ popover）──
             msg_reactions = all_reactions.get(msg_id, {})
-            rcols = st.columns(len(REACTION_EMOJIS))
-            for i, emoji in enumerate(REACTION_EMOJIS):
-                with rcols[i]:
-                    reacted_users = msg_reactions.get(emoji, [])
-                    count         = len(reacted_users)
-                    reacted       = uname in reacted_users
-                    label         = f"{emoji} {count}" if count else emoji
-                    if st.button(
-                        label,
-                        key=f"r_{msg_id}_{emoji}",
-                        type="primary" if reacted else "secondary",
-                        use_container_width=True,
-                    ):
-                        toggle_reaction(msg_id, uname, emoji)
-                        st.rerun()
+            pills_html = ""
+            for emoji in REACTION_EMOJIS:
+                users = msg_reactions.get(emoji, [])
+                if users:
+                    my  = uname in users
+                    bg  = "rgba(29,78,216,0.4)" if my else "rgba(255,255,255,0.08)"
+                    bdr = "rgba(29,78,216,0.8)" if my else "rgba(255,255,255,0.2)"
+                    pills_html += (
+                        f'<span style="display:inline-flex;align-items:center;gap:3px;'
+                        f'background:{bg};border:1px solid {bdr};border-radius:20px;'
+                        f'padding:2px 8px;font-size:0.85rem;margin-right:4px">'
+                        f'{emoji}&nbsp;{len(users)}</span>'
+                    )
+            r_col_pills, r_col_btn = st.columns([8, 1])
+            with r_col_pills:
+                if pills_html:
+                    st.markdown(
+                        f'<div style="margin:4px 0 2px;line-height:2">{pills_html}</div>',
+                        unsafe_allow_html=True,
+                    )
+            with r_col_btn:
+                with st.popover("＋", use_container_width=False):
+                    st.caption("リアクションを選んでね")
+                    rcols2 = st.columns(len(REACTION_EMOJIS))
+                    for i, emoji in enumerate(REACTION_EMOJIS):
+                        with rcols2[i]:
+                            already = uname in msg_reactions.get(emoji, [])
+                            if st.button(
+                                emoji + (" ✓" if already else ""),
+                                key=f"r_{msg_id}_{emoji}",
+                                use_container_width=True,
+                            ):
+                                toggle_reaction(msg_id, uname, emoji)
+                                st.rerun()
 
 # ─────────────────────────────────────
 # 画面① ユーザー選択
@@ -472,24 +491,27 @@ def show_chat(current_user: dict) -> None:
         st.caption("© danran family")
 
     # ── メインエリア ──
-    st.markdown(f"## 💬 {selected_room}")
+    head_col, img_col = st.columns([6, 1])
+    with head_col:
+        st.markdown(f"## 💬 {selected_room}")
+    with img_col:
+        # 写真送信 popover（ヘッダー右端）
+        with st.popover("📷", use_container_width=True):
+            st.markdown("**写真を送る**")
+            img_file = st.file_uploader(
+                "画像を選ぶ", type=["jpg","jpeg","png","gif","webp"],
+                label_visibility="collapsed", key="chat_img",
+            )
+            if img_file:
+                st.image(img_file, width=200)
+                if st.button("📤 送信", type="primary", use_container_width=True):
+                    with st.spinner("送信中…"):
+                        url = upload_photo(CHAT_IMG_BUCKET, str(uuid.uuid4()), img_file)
+                        send_message(selected_room, current_user["name"], current_user["avatar"], "", image_url=url)
+                    st.rerun()
 
     # ★ リアルタイム更新フラグメント（5秒ごと）
     render_messages()
-
-    # ── 写真送信 ──
-    with st.expander("📷 写真を送る"):
-        img_file = st.file_uploader(
-            "画像を選ぶ", type=["jpg","jpeg","png","gif","webp"],
-            label_visibility="collapsed", key="chat_img",
-        )
-        if img_file:
-            st.image(img_file, width=200)
-            if st.button("📤 この写真を送信", type="primary", use_container_width=True):
-                with st.spinner("送信中…"):
-                    url = upload_photo(CHAT_IMG_BUCKET, str(uuid.uuid4()), img_file)
-                    send_message(selected_room, current_user["name"], current_user["avatar"], "", image_url=url)
-                st.rerun()
 
     # ── テキスト入力 ──
     av_str = current_user["avatar"]

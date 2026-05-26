@@ -5,6 +5,7 @@ danran - 家族専用チャットアプリ  Streamlit × Supabase
 通知: in-app toast + ntfy.sh push (secrets.ntfy.topic が必要)
 """
 
+import html as _html
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -281,11 +282,11 @@ def render_messages() -> None:
     selected_room = st.session_state.get("active_room", ROOMS[0])
     uname         = current_user.get("name", "")
 
-    messages  = fetch_messages(selected_room)
+    messages = fetch_messages(selected_room)
 
     # 新着トースト（他人のメッセージのみ）
-    count_key  = f"cnt_{selected_room}"
-    prev       = st.session_state.get(count_key, -1)
+    count_key = f"cnt_{selected_room}"
+    prev      = st.session_state.get(count_key, -1)
     if prev >= 0 and len(messages) > prev:
         for m in messages[prev:]:
             if m["user_name"] != uname:
@@ -303,9 +304,6 @@ def render_messages() -> None:
 
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
-
-    # 長押しされたメッセージ ID（show_chat() が session_state に書き込む）
-    reaction_for: str | None = st.session_state.get("reaction_for")
 
     for msg in messages:
         msg_id  = msg.get("id",          "")
@@ -356,9 +354,10 @@ def render_messages() -> None:
         ) if pills else ""
 
         # ── LINE 風バブル HTML（自分＝右、他人＝左） ──
+        # data-lp-mine="1" → JS が「自分のメッセージ」と判別して削除ボタン表示
         if is_mine:
             bubble = (
-                f'<div data-lp-msg="{msg_id}" style="'
+                f'<div data-lp-msg="{msg_id}" data-lp-mine="1" style="'
                 f'display:flex;justify-content:flex-end;align-items:flex-end;'
                 f'gap:8px;margin:4px 0 2px 48px">'
                 f'<div style="text-align:right">'
@@ -391,33 +390,6 @@ def render_messages() -> None:
             )
 
         st.markdown(bubble, unsafe_allow_html=True)
-
-        # ── 長押し → インライン リアクション＋削除ピッカー ──
-        if reaction_for == msg_id:
-            n_extra = 2 if is_mine else 1   # 🗑️（自分のみ） + ✕
-            rcols   = st.columns(len(REACTION_EMOJIS) + n_extra)
-            for i, emoji in enumerate(REACTION_EMOJIS):
-                with rcols[i]:
-                    already = uname in msg_reactions.get(emoji, [])
-                    if st.button(
-                        emoji + (" ✓" if already else ""),
-                        key=f"r_{msg_id}_{emoji}",
-                        use_container_width=True,
-                    ):
-                        toggle_reaction(msg_id, uname, emoji)
-                        st.session_state["reaction_for"] = None
-                        st.rerun()
-            if is_mine:
-                with rcols[len(REACTION_EMOJIS)]:
-                    if st.button("🗑️", key=f"del_{msg_id}",
-                                 use_container_width=True, help="削除"):
-                        delete_message(msg_id, uname)
-                        st.session_state["reaction_for"] = None
-                        st.rerun()
-            with rcols[-1]:
-                if st.button("✕", key=f"close_r_{msg_id}", use_container_width=True):
-                    st.session_state["reaction_for"] = None
-                    st.rerun()
 
 # ─────────────────────────────────────
 # 画面① ユーザー選択
@@ -524,8 +496,9 @@ def show_chat(current_user: dict) -> None:
     selected_room = st.session_state.setdefault("active_room", ROOMS[0])
     show_rooms    = st.session_state.get("show_rooms", False)
 
-    # ── LINE 風ヘッダー：[ ＜ | ルーム名 | 📷 ] ──
-    c_back, c_title, c_photo = st.columns([1, 7, 1])
+    # ── LINE 風ヘッダー：[ ＜ | ルーム名 ] ──
+    # 📷 ボタンは JS コンポーネントがチャット入力欄の左側に固定表示するため不要
+    c_back, c_title = st.columns([1, 8])
     with c_back:
         label = "✕" if show_rooms else "＜"
         if st.button(label, use_container_width=True):
@@ -539,20 +512,6 @@ def show_chat(current_user: dict) -> None:
             f'<h3 style="margin:0;line-height:1.4">{av_str}{selected_room}</h3>',
             unsafe_allow_html=True,
         )
-    with c_photo:
-        with st.popover("📷", use_container_width=True):
-            st.markdown("**写真を送る**")
-            img_file = st.file_uploader(
-                "画像を選ぶ", type=["jpg","jpeg","png","gif","webp"],
-                label_visibility="collapsed", key="chat_img",
-            )
-            if img_file:
-                st.image(img_file, width=200)
-                if st.button("📤 送信", type="primary", use_container_width=True):
-                    with st.spinner("送信中…"):
-                        url = upload_photo(CHAT_IMG_BUCKET, str(uuid.uuid4()), img_file)
-                        send_message(selected_room, current_user["name"], current_user["avatar"], "", image_url=url)
-                    st.rerun()
 
     # ── ＜ を押したときのルーム選択パネル ──
     if show_rooms:
@@ -597,44 +556,45 @@ def show_chat(current_user: dict) -> None:
 # エントリーポイント
 # ─────────────────────────────────────
 
-# ── グローバルコンポーネント（常時実行・ゼロ高さ）──
-# セッション自動復元（localStorage）＋ 長押し検出の両方を担う
-_comp_val = _lp_detector(
-    save_session  = st.session_state.get("session_id", ""),
-    clear_session = st.session_state.pop("_clear_session", False),
-    default       = None,
+# ① URL パラメータからのセッション復元
+#   JS コンポーネントが localStorage→?s= にリダイレクトした場合も同じ経路で処理される
+if "current_user" not in st.session_state:
+    _url_sid = st.query_params.get(SESSION_PARAM)
+    if _url_sid:
+        _url_user = get_session_user(_url_sid)
+        if _url_user:
+            st.session_state["current_user"] = _url_user
+            st.session_state["session_id"]   = _url_sid
+            st.session_state.setdefault("view", "chat")
+
+# ── DOM config 要素（JS コンポーネントが直接読む設定ストア）──
+# render イベントのタイミング問題を回避するため、
+# Python が HTML data 属性として埋め込み JS が window.parent.document から参照。
+_cu          = st.session_state.get("current_user", {})
+_clear_flag  = st.session_state.pop("_clear_session", False)
+_active_room = (st.session_state.get("active_room", ROOMS[0])
+                if "current_user" in st.session_state else "")
+st.html(
+    f'<div id="_danran_cfg" style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none" '
+    f'data-sb-url="{_html.escape(st.secrets["supabase"]["url"])}" '
+    f'data-sb-key="{_html.escape(st.secrets["supabase"]["anon_key"])}" '
+    f'data-user="{_html.escape(_cu.get("name",""))}" '
+    f'data-avatar="{_html.escape(_cu.get("avatar",""))}" '
+    f'data-room="{_html.escape(_active_room)}" '
+    f'data-sess="{_html.escape(st.session_state.get("session_id",""))}" '
+    f'data-clear="{str(_clear_flag).lower()}">'
+    f'</div>'
 )
 
-# セッション復元（未ログイン時 & まだ試していない場合のみ）
-if isinstance(_comp_val, dict) and _comp_val.get("type") == "session":
-    _sid = _comp_val.get("sid", "")
-    if _sid and _sid != st.session_state.get("_sess_checked", ""):
-        st.session_state["_sess_checked"] = _sid
-        if "current_user" not in st.session_state:
-            _restored = get_session_user(_sid)
-            if _restored:
-                st.session_state["current_user"] = _restored
-                st.session_state["session_id"]   = _sid
-                st.query_params[SESSION_PARAM]   = _sid
-                st.session_state["view"]         = "chat"
-                st.rerun()
-
-# 長押しシグナル → reaction_for を更新
-if isinstance(_comp_val, dict) and _comp_val.get("type") == "lp":
-    _lp_key = f"{_comp_val.get('msgId', '')}|{_comp_val.get('ts', 0)}"
-    if _lp_key != st.session_state.get("_lp_last", ""):
-        st.session_state["_lp_last"]     = _lp_key
-        st.session_state["reaction_for"] = _comp_val.get("msgId", "")
-
-# URL パラメータからのセッション復元（既存ルート）
-if "current_user" not in st.session_state:
-    sid = st.query_params.get(SESSION_PARAM)
-    if sid:
-        user = get_session_user(sid)
-        if user:
-            st.session_state["current_user"] = user
-            st.session_state["session_id"]   = sid
-            st.session_state.setdefault("view", "chat")
+# ── グローバルコンポーネント（常時実行・ゼロ高さ）──
+# ★ setValue を一切送らないので Python rerun は発生しない
+#   セッション / Supabase 認証情報 / カメラ設定は上の DOM 要素から JS が読む。
+#   render イベントは使わず、MutationObserver + scan() で常に最新値を取得。
+_lp_detector(
+    save_session  = st.session_state.get("session_id", ""),
+    clear_session = _clear_flag,
+    default       = None,
+)
 
 st.session_state.setdefault(
     "view",

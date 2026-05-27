@@ -315,52 +315,65 @@
   }
 
   /* ════════════════════════════════════════
-   *  "Manage app" ボタンを複数手段で非表示
-   *  Cloud が動的ハッシュ class を使うため JS テキスト検索 + setInterval
+   *  "Manage app" バーを確実に非表示
+   *  ① data-testid 直撃  ② textContent 全検索 + fixed 祖先を探す
    * ════════════════════════════════════════ */
   function hideManageApp() {
     try {
       var pDoc = window.parent.document;
 
-      // ① 全要素の子テキストノードを検索
+      // ① data-testid 直撃（stBottom が本命）
+      var byTestId = pDoc.querySelectorAll(
+        '[data-testid="stBottom"],[data-testid="stBottomBlockContainer"],' +
+        '[data-testid="stDeployButton"],[data-testid="manage-app-button"],' +
+        '[data-testid="stActionButton"],[data-testid="stMainMenu"],' +
+        '[class*="viewerBadge"],[class*="ViewerBadge"]'
+      );
+      for (var t = 0; t < byTestId.length; t++) {
+        byTestId[t].style.setProperty('display', 'none', 'important');
+      }
+
+      // ② textContent に "Manage app" を含む全要素を検索し
+      //    fixed/sticky ポジションの祖先を探して隠す
       var all = pDoc.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
-        var directTxt = '';
-        for (var ci = 0; ci < el.childNodes.length; ci++) {
-          if (el.childNodes[ci].nodeType === 3) directTxt += el.childNodes[ci].textContent;
-        }
-        directTxt = directTxt.trim();
-        if (/manage\s*app/i.test(directTxt) && directTxt.length < 30) {
+        var txt = (el.textContent || '').trim();
+        if (/manage\s*app/i.test(txt) && txt.length < 60) {
+          // fixed/sticky な祖先を探す
           var anc = el;
-          for (var j = 0; j < 8; j++) {
-            if (!anc.parentElement || anc.parentElement === pDoc.body) break;
+          for (var j = 0; j < 12; j++) {
+            var cs = window.getComputedStyle(anc);
+            if (cs.position === 'fixed' || cs.position === 'sticky') {
+              anc.style.setProperty('display', 'none', 'important');
+              break;
+            }
+            if (!anc.parentElement || anc.parentElement === pDoc.body) {
+              // fixed 祖先が見つからなければ現在位置で隠す
+              anc.style.setProperty('display', 'none', 'important');
+              break;
+            }
             anc = anc.parentElement;
           }
-          anc.style.setProperty('display',    'none',   'important');
-          anc.style.setProperty('visibility', 'hidden', 'important');
         }
       }
 
-      // ② href に manage を含むリンクごと隠す
+      // ③ href に manage を含むリンクの fixed 祖先を隠す
       var links = pDoc.querySelectorAll('a[href*="manage"]');
       for (var li = 0; li < links.length; li++) {
         var la = links[li];
-        for (var lj = 0; lj < 6; lj++) {
-          if (!la.parentElement || la.parentElement === pDoc.body) break;
+        for (var lj = 0; lj < 10; lj++) {
+          var lcs = window.getComputedStyle(la);
+          if (lcs.position === 'fixed' || lcs.position === 'sticky') {
+            la.style.setProperty('display', 'none', 'important');
+            break;
+          }
+          if (!la.parentElement || la.parentElement === pDoc.body) {
+            la.style.setProperty('display', 'none', 'important');
+            break;
+          }
           la = la.parentElement;
         }
-        la.style.setProperty('display', 'none', 'important');
-      }
-
-      // ③ クラス名 / testid ベース（既知パターン）
-      var bs = pDoc.querySelectorAll(
-        '[class*="viewerBadge"],[class*="ViewerBadge"],[class*="manageApp"],' +
-        '[data-testid="stDeployButton"],[data-testid="manage-app-button"],' +
-        '[data-testid="stMainMenu"],[data-testid="stActionButton"]'
-      );
-      for (var k = 0; k < bs.length; k++) {
-        bs[k].style.setProperty('display', 'none', 'important');
       }
     } catch (e) {}
   }

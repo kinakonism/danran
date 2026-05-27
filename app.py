@@ -37,12 +37,14 @@ header                             { display: none !important; }
 [data-testid="collapsedControl"]   { display: none !important; }
 #MainMenu                          { display: none !important; }
 footer                             { display: none !important; }
-/* Streamlit Cloud "Manage app" バッジ（クラス名が変わっても対応） */
-[class*="viewerBadge"]             { display: none !important; }
-[class*="manage"]                  { display: none !important; }
+/* Streamlit Cloud "Manage app" バー (stBottom) */
+[data-testid="stBottom"]           { display: none !important; }
+[data-testid="stBottomBlockContainer"] { display: none !important; }
 [data-testid="stDeployButton"]     { display: none !important; }
 [data-testid="manage-app-button"]  { display: none !important; }
-/* コンテンツの余白調整（header 非表示の補正） */
+[data-testid="stActionButton"]     { display: none !important; }
+[class*="viewerBadge"]             { display: none !important; }
+/* コンテンツの余白調整 */
 [data-testid="stMainBlockContainer"] { padding-top: 0.5rem !important; }
 </style>
 """, unsafe_allow_html=True)

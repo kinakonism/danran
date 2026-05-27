@@ -4,3 +4,7 @@ toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+# ./static/ フォルダを /app/static/ として同一オリジンで配信（PWA 用）
+enableStaticServing = true

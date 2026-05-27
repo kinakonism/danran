@@ -1206,18 +1206,81 @@
   });
 
   /* ════════════════════════════════════════
+   *  ?install=1 → mobileconfig を自動ダウンロード
+   *  コンポーネントは window.parent をナビゲートできるため
+   *  Blob URL を生成して iOS に「プロファイルをインストール」を促す
+   * ════════════════════════════════════════ */
+  function injectAutoInstall() {
+    try {
+      var pWin = window.parent;
+      var pUrl = new URL(pWin.location.href);
+      if (pUrl.searchParams.get('install') !== '1') return;
+      if (pWin._danranAutoInstallDone) return;
+      pWin._danranAutoInstallDone = true;
+
+      function genUUID() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+          var r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16).toUpperCase();
+        });
+      }
+      var appUrl = pUrl.origin + '/';
+      var pU = genUUID(), wU = genUUID();
+      var xml =
+        '<?xml version="1.0" encoding="UTF-8"?>\n' +
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
+        '<plist version="1.0"><dict>\n' +
+        '<key>PayloadContent</key><array><dict>\n' +
+        '<key>FullScreen</key><true/>\n' +
+        '<key>IsRemovable</key><true/>\n' +
+        '<key>Label</key><string>danran</string>\n' +
+        '<key>PayloadDescription</key><string>danran ホーム画面に追加</string>\n' +
+        '<key>PayloadDisplayName</key><string>danran</string>\n' +
+        '<key>PayloadIdentifier</key><string>com.danran.webclip</string>\n' +
+        '<key>PayloadType</key><string>com.apple.webClip.managed</string>\n' +
+        '<key>PayloadUUID</key><string>' + wU + '</string>\n' +
+        '<key>PayloadVersion</key><integer>1</integer>\n' +
+        '<key>URL</key><string>' + appUrl + '</string>\n' +
+        '</dict></array>\n' +
+        '<key>PayloadDescription</key><string>danran をホーム画面に追加します</string>\n' +
+        '<key>PayloadDisplayName</key><string>danran 🏠</string>\n' +
+        '<key>PayloadIdentifier</key><string>com.danran.profile.' + pU.toLowerCase() + '</string>\n' +
+        '<key>PayloadRemovalDisallowed</key><false/>\n' +
+        '<key>PayloadType</key><string>Configuration</string>\n' +
+        '<key>PayloadUUID</key><string>' + pU + '</string>\n' +
+        '<key>PayloadVersion</key><integer>1</integer>\n' +
+        '</dict></plist>';
+
+      // Blob URL でナビゲート → iOS が「プロファイルをインストール」を表示
+      var blob = new pWin.Blob([xml], { type: 'application/x-apple-aspen-config' });
+      pWin.location.href = pWin.URL.createObjectURL(blob);
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
    *  起動
    * ════════════════════════════════════════ */
   stReady();
   stSetHeight();
   setupObs();   // scan() → readConfig() → injectCameraUI() を試みる
 
-  // Manage app ボタンを起動後 30 秒間毎秒チェック（Cloud の遅延注入対応）
+  // ?install=1: 800ms 後に自動インストール（画面が一瞬表示されてからナビゲート）
+  setTimeout(injectAutoInstall, 800);
+
+  // 起動後 30 秒間毎秒チェック（Manage app 除去 + ヘッダー消失回復）
   (function () {
     var _cnt = 0;
     var _iv = setInterval(function () {
       hideManageApp();
-      fixStBottom();   // hideManageApp が stBottom を隠した場合に即修正
+      fixStBottom();
+      // ── ヘッダー消失 watchdog ──
+      // MutationObserver のタイミング外でヘッダーが消えた場合に強制再注入
+      try {
+        var isEdit = (VIEW === 'profile' || VIEW === 'room_edit' || VIEW === 'notifications');
+        if (!isEdit && ME && ACTIVE_ROOM && !window.parent.document.getElementById(HDR_ID)) {
+          injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
+        }
+      } catch (e) {}
       if (++_cnt >= 30) clearInterval(_iv);
     }, 1000);
   })();

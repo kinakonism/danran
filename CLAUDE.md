@@ -5,6 +5,21 @@
 
 ---
 
+## デプロイ・インフラ情報
+
+| 項目 | 値 |
+|------|-----|
+| **本番 URL** | `https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/` |
+| **ホスティング** | Streamlit Community Cloud（無料枠） |
+| **GitHub リポジトリ** | `https://github.com/kinakonism/danran` |
+| **デプロイ方法** | `main` ブランチへ push → Streamlit Cloud が自動デプロイ（1〜2分） |
+| **Supabase プロジェクト** | `https://fyadpbzlvyzihynpcckw.supabase.co` |
+| **PWA インストール URL** | `https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/install.mobileconfig` |
+
+> `install.mobileconfig` は iOS 向け Web Clip プロファイル。Safari でタップ→設定でインストール→ホーム画面に自動追加。
+
+---
+
 ## プロジェクト概要
 
 - **名前**: danran（団欒）― 家族専用チャットアプリ

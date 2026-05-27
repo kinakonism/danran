@@ -434,7 +434,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v25",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v26",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -497,6 +497,7 @@ def render_messages() -> None:
         # ── 本文・画像 HTML ──
         body_esc  = (body.replace("&", "&amp;").replace("<", "&lt;")
                         .replace(">", "&gt;").replace("\n", "<br>"))
+        is_img_only = bool(img_url) and not body.strip()  # 画像のみ（テキスト無し）
         img_piece = (
             f'<img src="{img_url}" style="max-width:200px;border-radius:10px;'
             f'display:block;{"margin-bottom:6px" if body else ""}">'
@@ -536,14 +537,19 @@ def render_messages() -> None:
                      f'style="font-size:1.8rem;line-height:40px;display:block;'
                      f'width:40px;text-align:center;flex-shrink:0;cursor:pointer">{avatar}</span>'
             )
+            # 画像のみなら透明バブル（緑背景・パディング不要）
+            _mine_bstyle = (
+                'background:transparent;padding:0;border-radius:0'
+                if is_img_only else
+                'background:#00b900;color:#fff;border-radius:18px 18px 4px 18px;padding:10px 14px'
+            )
             bubble = (
                 f'<div data-lp-msg="{msg_id}" data-lp-mine="1" style="'
                 f'display:flex;justify-content:flex-end;align-items:flex-end;'
                 f'gap:8px;margin:4px 0 2px 48px">'
                 f'<div style="text-align:right">'
                 f'<div style="font-size:0.7rem;color:#888;margin-bottom:3px">{fmt_ts(ts)}</div>'
-                f'<div style="background:#00b900;color:#fff;'
-                f'border-radius:18px 18px 4px 18px;padding:10px 14px;'
+                f'<div style="{_mine_bstyle};'
                 f'display:inline-block;max-width:100%;text-align:left;'
                 f'word-break:break-word;font-size:0.93rem">{content}</div>'
                 f'{pills_row}'
@@ -552,6 +558,12 @@ def render_messages() -> None:
                 f'</div>'
             )
         else:
+            # 画像のみなら透明バブル（グレー背景・パディング不要）
+            _other_bstyle = (
+                'background:transparent;padding:0;border-radius:0'
+                if is_img_only else
+                'background:#2c2c2e;color:#fff;border-radius:18px 18px 18px 4px;padding:10px 14px'
+            )
             bubble = (
                 f'<div data-lp-msg="{msg_id}" style="'
                 f'display:flex;align-items:flex-end;gap:8px;margin:4px 0 2px 0">'
@@ -559,8 +571,7 @@ def render_messages() -> None:
                 f'<div>'
                 f'<div style="font-size:0.75rem;color:#9a9a9a;font-weight:600;'
                 f'margin-bottom:3px">{sender}</div>'
-                f'<div style="background:#2c2c2e;color:#fff;'
-                f'border-radius:18px 18px 18px 4px;padding:10px 14px;'
+                f'<div style="{_other_bstyle};'
                 f'display:inline-block;max-width:100%;text-align:left;'
                 f'word-break:break-word;font-size:0.93rem">{content}</div>'
                 f'<div style="font-size:0.7rem;color:#888;margin-top:3px">{fmt_ts(ts)}</div>'
@@ -1089,6 +1100,202 @@ def show_room_create() -> None:
                 st.rerun()
 
 # ─────────────────────────────────────
+# ★ ルーム選択パネル（フラグメント・5秒ごと自動更新）
+#   未読バッジをリアルタイムで反映する。
+# ─────────────────────────────────────
+@st.fragment(run_every="5s")
+def render_room_list() -> None:
+    current_user = st.session_state.get("current_user")
+    if not current_user:
+        return
+    _all_rooms      = fetch_rooms()
+    _all_room_names = [r["name"] for r in _all_rooms]
+    selected_room   = st.session_state.get("active_room") or (_all_room_names[0] if _all_room_names else "")
+    unread = get_unread_counts(current_user["id"], _all_room_names)
+
+    # ─ セクションラベルのスタイル（iOS Settings 風小文字グレー） ─
+    _sec_label = (
+        'display:block;font-size:0.68rem;font-weight:600;'
+        'color:rgba(255,255,255,0.38);letter-spacing:0.07em;'
+        'text-transform:uppercase;padding:18px 4px 6px'
+    )
+    _first_sec_label = (
+        'display:block;font-size:0.68rem;font-weight:600;'
+        'color:rgba(255,255,255,0.38);letter-spacing:0.07em;'
+        'text-transform:uppercase;padding:6px 4px 6px'
+    )
+
+    # ═══ 通知バナー（DB にサブスクリプションがなければ表示）═══
+    _show_push_banner = (
+        bool(_vapid_cfg().get("vapid_public_key"))
+        and not has_push_subscription(current_user["id"])
+    )
+
+    # ═══ Section 1: チャットルーム ═══
+    rows: list[str] = [
+        '<div id="_danran_room_list" style="padding-bottom:20px">',
+    ]
+
+    if _show_push_banner:
+        rows.append(
+            '<div id="_danran_push_banner" style="'
+            'display:flex;align-items:center;gap:10px;'
+            'background:rgba(52,199,89,0.1);'
+            'border:1px solid rgba(52,199,89,0.28);'
+            'border-radius:12px;padding:12px 14px;margin-bottom:12px;'
+            'cursor:pointer;-webkit-tap-highlight-color:transparent;">'
+            '<span style="font-size:1.4rem;flex-shrink:0">🔔</span>'
+            '<div style="flex:1">'
+            '<div style="font-size:0.88rem;font-weight:600;color:#fff">通知を有効にする</div>'
+            '<div style="font-size:0.75rem;color:rgba(255,255,255,0.5);margin-top:2px">'
+            '新着メッセージを iPhone に通知'
+            '</div></div>'
+            '<span style="color:rgba(255,255,255,0.25);font-size:1.1rem">›</span>'
+            '</div>'
+        )
+
+    rows.extend([
+        # ラベル + 新規ルーム作成ボタンを横並び
+        '<div style="display:flex;align-items:center;justify-content:space-between;'
+        'padding:6px 4px 6px">',
+        f'<span style="{_first_sec_label};padding:0">チャットルーム</span>',
+        '<button data-room-create="true" '
+        'style="width:30px;height:30px;border-radius:50%;'
+        'background:rgba(255,255,255,0.14);border:none;'
+        'color:#fff;font-size:1.2rem;line-height:1;cursor:pointer;'
+        'display:flex;align-items:center;justify-content:center;'
+        'flex-shrink:0;-webkit-tap-highlight-color:transparent">＋</button>',
+        '</div>',
+        # グループカード（iOS の grouped list 風）
+        '<div style="background:rgba(255,255,255,0.06);'
+        'border:1px solid rgba(255,255,255,0.1);'
+        'border-radius:14px;overflow:hidden">',
+    ])
+
+    for i, room in enumerate(_all_rooms):
+        rname   = room["name"]
+        ricon   = room.get("icon", "💬")
+        room_id = room["id"]
+        count   = unread.get(rname, 0)
+        is_last = (i == len(_all_rooms) - 1)
+        is_active = (rname == selected_room)
+
+        badge = (
+            f'<span style="background:#e03438;color:#fff;border-radius:20px;'
+            f'padding:1px 8px;font-size:0.68rem;font-weight:700;flex-shrink:0">'
+            f'+{count}</span>'
+        ) if count > 0 else ""
+
+        # アクティブインジケーター（緑の点）
+        active_dot = (
+            '<span style="width:7px;height:7px;border-radius:50%;'
+            'background:#34c759;flex-shrink:0"></span>'
+        ) if is_active else ""
+
+        if ricon.startswith("http"):
+            icon_html = (
+                f'<img src="{_html.escape(ricon)}" '
+                f'style="width:28px;height:28px;border-radius:7px;'
+                f'object-fit:cover;flex-shrink:0">'
+            )
+        else:
+            icon_html = (
+                f'<span style="font-size:1.3rem;width:28px;text-align:center;'
+                f'flex-shrink:0;line-height:1">{ricon}</span>'
+            )
+
+        # 行の下ボーダー（最終行以外）
+        row_border = '' if is_last else 'border-bottom:1px solid rgba(255,255,255,0.07);'
+
+        rows.append(
+            f'<div style="display:flex;align-items:center;{row_border}">'
+            # ── ルームナビボタン（左・flex:1） ──
+            f'<button data-room-nav="{_html.escape(room_id)}" '
+            f'data-room-name="{_html.escape(rname)}" '
+            f'style="flex:1;display:flex;align-items:center;gap:10px;'
+            f'padding:12px 14px;min-height:52px;'
+            f'background:none;border:none;color:#fff;'
+            f'font-size:0.95rem;text-align:left;cursor:pointer;'
+            f'-webkit-tap-highlight-color:transparent;font-family:inherit">'
+            f'{icon_html}'
+            f'<span style="flex:1;white-space:nowrap;overflow:hidden;'
+            f'text-overflow:ellipsis">{_html.escape(rname)}</span>'
+            f'{badge}{active_dot}'
+            f'</button>'
+            # ── 歯車ボタン（右・固定幅） ──
+            f'<button data-room-gear="{_html.escape(room_id)}" '
+            f'style="width:48px;min-height:52px;flex-shrink:0;'
+            f'background:none;border:none;'
+            f'border-left:1px solid rgba(255,255,255,0.07);'
+            f'font-size:1.05rem;cursor:pointer;'
+            f'color:rgba(255,255,255,0.45);'
+            f'-webkit-tap-highlight-color:transparent">'
+            f'⚙️</button>'
+            f'</div>'
+        )
+
+    rows.append('</div>')  # グループカード閉じ
+
+    # ═══ Section 2: アカウント ═══
+    av    = current_user["avatar"]
+    uname = current_user["name"]
+
+    if av.startswith("http"):
+        avatar_html = (
+            f'<img src="{_html.escape(av)}" '
+            f'style="width:48px;height:48px;border-radius:50%;'
+            f'object-fit:cover;flex-shrink:0">'
+        )
+    else:
+        avatar_html = (
+            f'<div style="width:48px;height:48px;border-radius:50%;'
+            f'background:rgba(255,255,255,0.12);'
+            f'display:flex;align-items:center;justify-content:center;'
+            f'font-size:1.8rem;flex-shrink:0">{av}</div>'
+        )
+
+    rows.extend([
+        f'<span style="{_sec_label}">アカウント</span>',
+        # プロフィールカード（タップでプロフィール編集へ）
+        '<div style="background:rgba(255,255,255,0.06);'
+        'border:1px solid rgba(255,255,255,0.1);'
+        'border-radius:14px;overflow:hidden;margin-bottom:10px">',
+        # タップ可能な行
+        '<button data-profile-nav="true" '
+        'style="width:100%;display:flex;align-items:center;gap:13px;'
+        'padding:14px 16px;background:none;border:none;cursor:pointer;'
+        '-webkit-tap-highlight-color:transparent;text-align:left">',
+        avatar_html,
+        '<div style="flex:1;min-width:0">',
+        f'<div style="font-size:1rem;font-weight:600;color:#fff;'
+        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+        f'{_html.escape(uname)}</div>',
+        '<div style="font-size:0.76rem;color:rgba(255,255,255,0.4);margin-top:3px">'
+        'プロフィールを編集</div>',
+        '</div>',   # info
+        # 右矢印
+        '<span style="color:rgba(255,255,255,0.25);font-size:1.1rem;flex-shrink:0">›</span>',
+        '</button>',  # タップ行
+        '</div>',   # カード
+        # ログアウトボタン（HTML → JS → stSetValue で Python に伝達）
+        # st.button() を使わないことで遷移時のフラッシュを防ぐ
+        '<div style="padding:8px 0 24px">',
+        '<button data-logout="true" '
+        'style="width:100%;padding:12px 16px;'
+        'background:rgba(255,80,80,0.10);'
+        'border:1px solid rgba(255,80,80,0.25);border-radius:14px;'
+        'color:rgba(255,120,120,0.85);font-size:0.95rem;'
+        'cursor:pointer;-webkit-tap-highlight-color:transparent">',
+        '🔒 ログアウト',
+        '</button>',
+        '</div>',
+        '</div>',   # _danran_room_list
+    ])
+
+    st.markdown('\n'.join(rows), unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────
 # 画面⑥ メインチャット
 # ─────────────────────────────────────
 def show_chat(current_user: dict) -> None:
@@ -1105,191 +1312,9 @@ def show_chat(current_user: dict) -> None:
     selected_room = st.session_state["active_room"]
     show_rooms    = st.query_params.get("sr") == "1"
 
-    # ── ＜ を押したときのルーム選択パネル ──
+    # ── ＜ を押したときのルーム選択パネル（フラグメント：5秒ごとに未読バッジを更新）──
     if show_rooms:
-        unread = get_unread_counts(current_user["id"], _all_room_names)
-
-        # ─ セクションラベルのスタイル（iOS Settings 風小文字グレー） ─
-        _sec_label = (
-            'display:block;font-size:0.68rem;font-weight:600;'
-            'color:rgba(255,255,255,0.38);letter-spacing:0.07em;'
-            'text-transform:uppercase;padding:18px 4px 6px'
-        )
-        _first_sec_label = (
-            'display:block;font-size:0.68rem;font-weight:600;'
-            'color:rgba(255,255,255,0.38);letter-spacing:0.07em;'
-            'text-transform:uppercase;padding:6px 4px 6px'
-        )
-
-        # ═══ 通知バナー（DB にサブスクリプションがなければ表示）═══
-        _show_push_banner = (
-            bool(_vapid_cfg().get("vapid_public_key"))
-            and not has_push_subscription(current_user["id"])
-        )
-
-        # ═══ Section 1: チャットルーム ═══
-        rows: list[str] = [
-            '<div id="_danran_room_list" style="padding-bottom:20px">',
-        ]
-
-        if _show_push_banner:
-            rows.append(
-                '<div id="_danran_push_banner" style="'
-                'display:flex;align-items:center;gap:10px;'
-                'background:rgba(52,199,89,0.1);'
-                'border:1px solid rgba(52,199,89,0.28);'
-                'border-radius:12px;padding:12px 14px;margin-bottom:12px;'
-                'cursor:pointer;-webkit-tap-highlight-color:transparent;">'
-                '<span style="font-size:1.4rem;flex-shrink:0">🔔</span>'
-                '<div style="flex:1">'
-                '<div style="font-size:0.88rem;font-weight:600;color:#fff">通知を有効にする</div>'
-                '<div style="font-size:0.75rem;color:rgba(255,255,255,0.5);margin-top:2px">'
-                '新着メッセージを iPhone に通知'
-                '</div></div>'
-                '<span style="color:rgba(255,255,255,0.25);font-size:1.1rem">›</span>'
-                '</div>'
-            )
-
-        rows.extend([
-            # ラベル + 新規ルーム作成ボタンを横並び
-            '<div style="display:flex;align-items:center;justify-content:space-between;'
-            'padding:6px 4px 6px">',
-            f'<span style="{_first_sec_label};padding:0">チャットルーム</span>',
-            '<button data-room-create="true" '
-            'style="width:30px;height:30px;border-radius:50%;'
-            'background:rgba(255,255,255,0.14);border:none;'
-            'color:#fff;font-size:1.2rem;line-height:1;cursor:pointer;'
-            'display:flex;align-items:center;justify-content:center;'
-            'flex-shrink:0;-webkit-tap-highlight-color:transparent">＋</button>',
-            '</div>',
-            # グループカード（iOS の grouped list 風）
-            '<div style="background:rgba(255,255,255,0.06);'
-            'border:1px solid rgba(255,255,255,0.1);'
-            'border-radius:14px;overflow:hidden">',
-        ])
-
-        for i, room in enumerate(_all_rooms):
-            rname   = room["name"]
-            ricon   = room.get("icon", "💬")
-            room_id = room["id"]
-            count   = unread.get(rname, 0)
-            is_last = (i == len(_all_rooms) - 1)
-            is_active = (rname == selected_room)
-
-            badge = (
-                f'<span style="background:#e03438;color:#fff;border-radius:20px;'
-                f'padding:1px 8px;font-size:0.68rem;font-weight:700;flex-shrink:0">'
-                f'+{count}</span>'
-            ) if count > 0 else ""
-
-            # アクティブインジケーター（緑の点）
-            active_dot = (
-                '<span style="width:7px;height:7px;border-radius:50%;'
-                'background:#34c759;flex-shrink:0"></span>'
-            ) if is_active else ""
-
-            if ricon.startswith("http"):
-                icon_html = (
-                    f'<img src="{_html.escape(ricon)}" '
-                    f'style="width:28px;height:28px;border-radius:7px;'
-                    f'object-fit:cover;flex-shrink:0">'
-                )
-            else:
-                icon_html = (
-                    f'<span style="font-size:1.3rem;width:28px;text-align:center;'
-                    f'flex-shrink:0;line-height:1">{ricon}</span>'
-                )
-
-            # 行の下ボーダー（最終行以外）
-            row_border = '' if is_last else 'border-bottom:1px solid rgba(255,255,255,0.07);'
-
-            rows.append(
-                f'<div style="display:flex;align-items:center;{row_border}">'
-                # ── ルームナビボタン（左・flex:1） ──
-                f'<button data-room-nav="{_html.escape(room_id)}" '
-                f'data-room-name="{_html.escape(rname)}" '
-                f'style="flex:1;display:flex;align-items:center;gap:10px;'
-                f'padding:12px 14px;min-height:52px;'
-                f'background:none;border:none;color:#fff;'
-                f'font-size:0.95rem;text-align:left;cursor:pointer;'
-                f'-webkit-tap-highlight-color:transparent;font-family:inherit">'
-                f'{icon_html}'
-                f'<span style="flex:1;white-space:nowrap;overflow:hidden;'
-                f'text-overflow:ellipsis">{_html.escape(rname)}</span>'
-                f'{badge}{active_dot}'
-                f'</button>'
-                # ── 歯車ボタン（右・固定幅） ──
-                f'<button data-room-gear="{_html.escape(room_id)}" '
-                f'style="width:48px;min-height:52px;flex-shrink:0;'
-                f'background:none;border:none;'
-                f'border-left:1px solid rgba(255,255,255,0.07);'
-                f'font-size:1.05rem;cursor:pointer;'
-                f'color:rgba(255,255,255,0.45);'
-                f'-webkit-tap-highlight-color:transparent">'
-                f'⚙️</button>'
-                f'</div>'
-            )
-
-        rows.append('</div>')  # グループカード閉じ
-
-        # ═══ Section 2: アカウント ═══
-        av = current_user["avatar"]
-        uname = current_user["name"]
-
-        if av.startswith("http"):
-            avatar_html = (
-                f'<img src="{_html.escape(av)}" '
-                f'style="width:48px;height:48px;border-radius:50%;'
-                f'object-fit:cover;flex-shrink:0">'
-            )
-        else:
-            avatar_html = (
-                f'<div style="width:48px;height:48px;border-radius:50%;'
-                f'background:rgba(255,255,255,0.12);'
-                f'display:flex;align-items:center;justify-content:center;'
-                f'font-size:1.8rem;flex-shrink:0">{av}</div>'
-            )
-
-        rows.extend([
-            f'<span style="{_sec_label}">アカウント</span>',
-            # プロフィールカード（タップでプロフィール編集へ）
-            '<div style="background:rgba(255,255,255,0.06);'
-            'border:1px solid rgba(255,255,255,0.1);'
-            'border-radius:14px;overflow:hidden;margin-bottom:10px">',
-            # タップ可能な行
-            '<button data-profile-nav="true" '
-            'style="width:100%;display:flex;align-items:center;gap:13px;'
-            'padding:14px 16px;background:none;border:none;cursor:pointer;'
-            '-webkit-tap-highlight-color:transparent;text-align:left">',
-            avatar_html,
-            '<div style="flex:1;min-width:0">',
-            f'<div style="font-size:1rem;font-weight:600;color:#fff;'
-            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
-            f'{_html.escape(uname)}</div>',
-            '<div style="font-size:0.76rem;color:rgba(255,255,255,0.4);margin-top:3px">'
-            'プロフィールを編集</div>',
-            '</div>',   # info
-            # 右矢印
-            '<span style="color:rgba(255,255,255,0.25);font-size:1.1rem;flex-shrink:0">›</span>',
-            '</button>',  # タップ行
-            '</div>',   # カード
-            # ログアウトボタン（HTML → JS → stSetValue で Python に伝達）
-            # st.button() を使わないことで遷移時のフラッシュを防ぐ
-            '<div style="padding:8px 0 24px">',
-            '<button data-logout="true" '
-            'style="width:100%;padding:12px 16px;'
-            'background:rgba(255,80,80,0.10);'
-            'border:1px solid rgba(255,80,80,0.25);border-radius:14px;'
-            'color:rgba(255,120,120,0.85);font-size:0.95rem;'
-            'cursor:pointer;-webkit-tap-highlight-color:transparent">',
-            '🔒 ログアウト',
-            '</button>',
-            '</div>',
-            '</div>',   # _danran_room_list
-        ])
-
-        st.markdown('\n'.join(rows), unsafe_allow_html=True)
-
+        render_room_list()
         return   # ルーム選択中はメッセージ非表示
 
     # ★ リアルタイム更新フラグメント（5秒ごと）

@@ -26,12 +26,12 @@
 - **スタック**: Python Streamlit + Supabase (PostgreSQL + Storage)
 - **起動**: `uv run python run.py`（旧: `uv run streamlit run app.py` — PWA後は run.py を使う）
 - **主ファイル**:
-  - `run.py` — エントリーポイント。Starlette の create_streamlit_routes をパッチして `/sw.js` `/manifest.json` `/static/*` を追加してから Streamlit を起動する
+  - `run.py` — エントリーポイント。Starlette の create_streamlit_routes をパッチして `/sw.js` `/manifest.json` `/icons/*` を追加してから Streamlit を起動する
   - `app.py` — Streamlit アプリ本体（全画面・全 DB 操作）
   - `components/longpress/index.html` — ゼロ高さカスタムコンポーネント（JS）
   - `sw.js` — Service Worker（プッシュ通知受信・通知タップ処理）
   - `manifest.json` — PWA マニフェスト（ホーム画面追加・スプラッシュ等）
-  - `static/` — アイコン画像（icon-192.png, icon-512.png, badge.png）
+  - `icons/` — アイコン画像（icon-192.png, icon-512.png, badge.png）
 
 ---
 
@@ -42,9 +42,11 @@
 ```
 select_user（ログイン）
     ↓ do_login()
-chat（チャット）← → room_edit（ルーム編集）
+chat（チャット）← → room_edit（既存ルーム編集）
+    │               room_create（新規ルーム作成）← ルーム選択画面の + ボタン
     ↓ go_profile
 profile（プロフィール編集）
+notifications（通知設定）
 ```
 
 `st.session_state["view"]` で管理。`match` 文でルーティング。
@@ -52,8 +54,9 @@ profile（プロフィール編集）
 ### セッション管理
 
 - ログイン時: `sessions` テーブルに INSERT → `?s=SESSION_ID` をURLにセット
-- ブラウザ復元: JS が localStorage → `?s=` → Python が `get_session_user()` で復元
+- ブラウザ復元: JS が localStorage → stSetValue(restore_session) → Python が `get_session_user()` で復元
 - ログアウト: `sessions` レコード削除 + localStorage クリア
+- **Render 1 フラッシュ防止**: `_lp_result is None` かつ未ログイン時は空白画面を表示しログインフォームを出さない。JS が必ず restore_session を送るので Render 2 以降で正しい画面に遷移。
 
 ### リアルタイム更新
 
@@ -75,12 +78,20 @@ window.parent.postMessage(
 );
 ```
 
-### Python へのナビゲーション指示
+### Python へのナビゲーション指示（全アクション一覧）
 
 ```javascript
-stSetValue({ action: 'go_rooms', ts: Date.now() });
-stSetValue({ action: 'go_chat',  ts: Date.now() });
-stSetValue({ action: 'go_profile', ts: Date.now() });
+stSetValue({ action: 'go_rooms',       ts: Date.now() });
+stSetValue({ action: 'go_chat',        ts: Date.now() });
+stSetValue({ action: 'go_profile',     ts: Date.now() });
+stSetValue({ action: 'go_back',        ts: Date.now() });
+stSetValue({ action: 'go_notifications', ts: Date.now() });
+stSetValue({ action: 'go_room',        room_name: '...', ts: Date.now() });
+stSetValue({ action: 'go_room_edit',   room_id: '...', ts: Date.now() });
+stSetValue({ action: 'go_room_create', ts: Date.now() });   // ← NEW: ルーム作成
+stSetValue({ action: 'logout',         ts: Date.now() });
+stSetValue({ action: 'restore_session', session_id: '...', ts: Date.now() });
+stSetValue({ action: 'save_push_subscription', subscription: '...', user_id: '...', ts: Date.now() });
 ```
 
 **必ず `ts: Date.now()` を付ける**。Python 側は `_last_nav_ts` で重複処理を防いでいる。`ts` がないと古いキャッシュ値が再発火して無限ループになる。
@@ -101,6 +112,39 @@ var room = cfg.getAttribute('data-room');
 ```
 
 `st.html()` は Streamlit rerun ごとに更新されるので、render イベント不要。
+
+#### `_danran_cfg` の全属性（現在）
+
+| 属性 | 内容 |
+|------|------|
+| `data-sb-url` | Supabase URL |
+| `data-sb-key` | Supabase anon key |
+| `data-user` | ログイン中ユーザー名 |
+| `data-avatar` | ログイン中ユーザーアバター |
+| `data-uid` | ログイン中ユーザーID |
+| `data-room` | アクティブルーム名 |
+| `data-sess` | 保存すべきセッションID |
+| `data-clear` | `"true"` でlocalStorageを消す |
+| `data-show-rooms` | `"true"` でルーム選択中 |
+| `data-view` | 現在の view 名 |
+| `data-vapid-pub` | VAPID 公開鍵 |
+| `data-users-json` | ★NEW: 全ユーザーの名前・電話番号 JSON（FaceTime 用） |
+
+#### `data-users-json` の形式（FaceTime 機能追加後）
+
+```python
+import json as _json
+_all_users = fetch_all_users()  # [{"name": "...", "phone": "...", "avatar": "..."}]
+data_users = _json.dumps(_all_users, ensure_ascii=False)
+st.html(f'<div id="_danran_cfg" ... data-users-json=\'{data_users}\'>')
+```
+
+```javascript
+// JS 側: ユーザー名 → 電話番号マップを構築
+var usersJson = cfg.getAttribute('data-users-json') || '[]';
+var _usersMap = {};  // name → { phone, avatar }
+JSON.parse(usersJson).forEach(function(u) { _usersMap[u.name] = u; });
+```
 
 ### data-room が空になってはいけない
 
@@ -126,7 +170,7 @@ JS コンポーネントをブラウザにキャッシュさせないため、�
 
 ```python
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v5",   # ← v5, v6, v7... と上げる
+    "danran_lp_v23",   # ← v23, v24, v25... と上げる（現在 v23）
     path=_LP_COMPONENT_DIR,
 )
 ```
@@ -238,7 +282,7 @@ def _fix_exif(f) -> tuple[bytes, str]:
 
 `st.image()` や他の処理でファイルポインタが消費されるため、`_fix_exif` 内で `f.seek(0)` している。
 
-### プロフィール / ルーム編集のウィジェットリセット
+### プロフィール / ルーム編集 / ルーム作成 のウィジェットリセット
 
 編集画面を開くたびに session_state からウィジェットキーを削除しないと、  
 前回の値が残り（特に radio）意図しないデフォルトになる。
@@ -253,6 +297,11 @@ def _reset_room_edit_widgets():
     for k in _ROOM_EDIT_WIDGET_KEYS: st.session_state.pop(k, None)
     for k in list(st.session_state.keys()):
         if k.startswith("room_delete_confirm_"): st.session_state.pop(k, None)
+
+# ★NEW: ルーム作成用
+_ROOM_CREATE_WIDGET_KEYS = ("room_create_atype", "room_create_emoji", "room_create_photo", "room_create_name")
+def _reset_room_create_widgets():
+    for k in _ROOM_CREATE_WIDGET_KEYS: st.session_state.pop(k, None)
 ```
 
 ### ルームキャッシュ
@@ -296,7 +345,7 @@ Streamlit 1.57 は Tornado ではなく **Starlette + Uvicorn** ベース。
 サービスワーカーに必要な `/sw.js` はルートパスで配信が必要だが、Streamlit は内部ルートを固定している。
 
 `run.py` は `create_streamlit_routes` を Streamlit が呼ぶ前にモンキーパッチし、  
-`/sw.js`・`/manifest.json`・`/static/*` の 3 ルートを最優先で追加する。  
+`/sw.js`・`/manifest.json`・`/icons/*` の 3 ルートを最優先で追加する。  
 sw.js には `Service-Worker-Allowed: /` ヘッダーを付与してスコープをルートに拡張している。
 
 ```
@@ -357,6 +406,94 @@ send_message() → send_push(room, sender_uid, sender_name, content)
 
 ---
 
+## FaceTime 通話機能
+
+### 概要（未実装・計画段階）
+
+チャット画面で他ユーザーのアバターをタップすると、プロフィールポップアップが表示され、  
+電話番号が登録されている場合は FaceTime 通話ボタンが現れる。
+
+### iOS FaceTime URL スキーム
+
+```
+facetime:{phone_or_email}        # ビデオ通話
+facetime-audio:{phone_or_email}  # 音声のみ
+```
+
+**制限**: iOS のみ。Android・PC ではリンクが動作しない。
+
+### 実装方針
+
+- `_danran_cfg` の `data-users-json` に全ユーザーの名前・電話番号を渡す
+- 他ユーザーのアバター要素に `data-lp-sender="{sender_name}"` 属性を付与（Python 側）
+- JS: アバタークリック → `_usersMap[senderName]` で電話番号を参照 → ポップアップ表示
+- JS ポップアップ: アバター大表示 + 名前 + FaceTime ボタン（電話番号がある場合のみ）
+
+### 自分のアバタータップとの使い分け
+
+| 対象 | 属性 | 動作 |
+|------|------|------|
+| 自分のアバター | `data-lp-my-avatar="1"` | → プロフィール編集画面へ |
+| 他人のアバター | `data-lp-sender="{name}"` | → FaceTime ポップアップ |
+
+### fetch_all_users()（追加する関数）
+
+```python
+@st.cache_data(ttl=300)
+def fetch_all_users() -> list[dict]:
+    """FaceTime 用: 全ユーザーの名前・電話番号・アバターを取得。"""
+    result = supabase.table("users")\
+        .select("name, avatar, phone")\
+        .execute()
+    return result.data or []
+```
+
+---
+
+## ルーム作成機能
+
+### 概要（未実装・計画段階）
+
+ルーム選択画面の「チャットルーム」セクションラベル横に `+` ボタンを配置。  
+タップするとルーム作成画面（`show_room_create()`）に遷移する。
+
+### `show_room_create()` の設計
+
+`show_room_edit()` と同じ UI だが以下の点が異なる:
+
+| 項目 | room_edit | room_create |
+|------|-----------|-------------|
+| タイトル | ⚙️ ルーム編集 | ✨ 新しいルーム |
+| 入力フォーム | 既存値を初期値 | 空欄（デフォルト絵文字 `💬`） |
+| 保存ボタン | 更新 | 作成 |
+| 削除ボタン | あり | なし |
+| DB 操作 | `update_room()` | `create_room()` |
+
+### `create_room()` DB 関数
+
+```python
+def create_room(name: str, icon: str) -> dict:
+    """新しいルームを作成して返す。"""
+    new_id = str(uuid.uuid4())
+    result = supabase.table("rooms")\
+        .insert({"id": new_id, "name": name, "icon": icon})\
+        .execute()
+    invalidate_rooms_cache()
+    return result.data[0] if result.data else {}
+```
+
+### + ボタンの HTML（ルームリスト内）
+
+```html
+<!-- セクションラベルと + ボタンを横並びに -->
+<div style="display:flex;align-items:center;justify-content:space-between;...">
+  <span>チャットルーム</span>
+  <button data-room-create="true" ...>＋</button>
+</div>
+```
+
+---
+
 ## 既知のハマりポイント（過去の失敗から）
 
 ### RLS UPDATE ポリシー漏れ
@@ -386,17 +523,28 @@ profile 画面から戻るたびにまた profile に飛ぶ無限ループにな
 その後 `upload_photo()` を呼んでも 0 バイトになる。  
 → `_fix_exif()` で `f.seek(0)` しているので、これを経由することで解決済み。
 
+### ルーム作成でキャッシュ破棄を忘れない
+
+`create_room()` 後は必ず `invalidate_rooms_cache()` を呼ぶ。  
+`fetch_rooms()` は TTL=60s でキャッシュされるため、呼ばないと新ルームが一覧に現れない。
+
+### FaceTime ポップアップが iOS 以外で動作しない
+
+`facetime:` URL スキームは iOS 専用。  
+Android・PC 環境では何も起きないか、ブラウザがエラーを出す。  
+ポップアップ上に「iPhone でのみ動作します」等の注意書きを入れることを検討。
+
 ---
 
 ## 開発時のデバッグ
 
 ```bash
-# Playwright テスト（.venv 内の uv 経由）
-uv run python /tmp/test_xxx.py
+# ローカル起動
+uv run python run.py
 
 # Supabase ログ確認
 # → MCP ツール: mcp__supabase__get_logs
 
 # コンポーネントキャッシュが怪しいとき
-# → "danran_lp_v5" の数字をインクリメント
+# → "danran_lp_v23" の数字をインクリメント（現在 v23）
 ```

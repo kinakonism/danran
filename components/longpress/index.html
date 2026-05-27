@@ -110,7 +110,7 @@
       handleSession(saveSess, clearSess);
 
       // 各状態が変わったら UI を更新
-      var isEditView = (newView === 'profile' || newView === 'room_edit' || newView === 'notifications');
+      var isEditView = (newView === 'profile' || newView === 'room_edit' || newView === 'notifications' || newView === 'room_create');
       var changed = (newUser !== ME || newRoom !== ACTIVE_ROOM || newShowRooms !== SHOW_ROOMS || newView !== VIEW);
       ME          = newUser;
       ME_AVATAR   = newAvatar;
@@ -119,6 +119,12 @@
       VIEW        = newView;
 
       if (changed) {
+        // ログアウト検出: ユーザーが消えたらヘッダー・カメラを除去
+        if (!ME) {
+          removeHeader();
+          removeCameraUI();
+          return true;
+        }
         // ヘッダーは Python 側が st.html() でレンダリング済み → JS 注入不要
         // ボタンのクリックハンドラは scan() → attachHdrButtons() が付与する
         if (isEditView || SHOW_ROOMS) {
@@ -1067,7 +1073,7 @@
     // （通常は Python が st.html() でレンダリングするため実行されない）
     try {
       if (ME && ACTIVE_ROOM && !window.parent.document.getElementById(HDR_ID)) {
-        var isEdit = (VIEW === 'profile' || VIEW === 'room_edit' || VIEW === 'notifications');
+        var isEdit = (VIEW === 'profile' || VIEW === 'room_edit' || VIEW === 'notifications' || VIEW === 'room_create');
         if (isEdit) { injectEditHeader(VIEW); } else { injectHeader(ACTIVE_ROOM, SHOW_ROOMS); }
       }
     } catch (e) {}
@@ -1079,6 +1085,41 @@
     } catch (e) {}
   }
 
+  /* ════════════════════════════════════════
+   *  右スワイプで戻る（エッジスワイプジェスチャー）
+   *  左端 40px 以内からのタッチ開始 → 右に 60px 以上でナビゲーション
+   * ════════════════════════════════════════ */
+  var _swipeTouchStart = null;
+
+  function setupSwipeBack() {
+    try {
+      var pDoc = window.parent.document;
+      if (pDoc._danranSwipeSetup) return;
+      pDoc._danranSwipeSetup = true;
+
+      pDoc.addEventListener('touchstart', function (e) {
+        var t = e.touches[0];
+        _swipeTouchStart = (t.clientX < 40) ? { x: t.clientX, y: t.clientY } : null;
+      }, { passive: true });
+
+      pDoc.addEventListener('touchend', function (e) {
+        if (!_swipeTouchStart) return;
+        var t  = e.changedTouches[0];
+        var dx = t.clientX - _swipeTouchStart.x;
+        var dy = Math.abs(t.clientY - _swipeTouchStart.y);
+        _swipeTouchStart = null;
+        if (dx > 60 && dx > dy) {
+          // 右スワイプ: 現在の画面に応じてナビゲーション
+          if (VIEW === 'profile' || VIEW === 'room_edit' || VIEW === 'notifications' || VIEW === 'room_create') {
+            stSetValue({ action: 'go_back', ts: Date.now() });
+          } else if (VIEW === 'chat' && !SHOW_ROOMS) {
+            stSetValue({ action: 'go_rooms', ts: Date.now() });
+          }
+        }
+      }, { passive: true });
+    } catch (e) {}
+  }
+
   function setupObs() {
     try {
       var body = window.parent.document.body;
@@ -1086,6 +1127,7 @@
       window._lpObs = new MutationObserver(scan);
       window._lpObs.observe(body, { childList: true, subtree: true });
     } catch (e) {}
+    setupSwipeBack();
     scan();
     setTimeout(scan, 400);
     setTimeout(scan, 1200);
@@ -1104,6 +1146,7 @@
       var title = view === 'profile'       ? 'プロフィール編集'
                 : view === 'room_edit'     ? 'ルーム編集'
                 : view === 'notifications' ? '🔔 通知設定'
+                : view === 'room_create'   ? 'ルーム作成'
                 :                           '設定';
 
       // ── CSS（チャットヘッダーと同スタイル） ──
@@ -1131,8 +1174,8 @@
       backBtn.textContent = '＜';
       backBtn.style.cssText =
         'background:none;border:none;color:#e0e0e0;font-size:1.25rem;' +
-        'cursor:pointer;padding:8px 12px;border-radius:10px;line-height:1;' +
-        'flex-shrink:0;min-width:44px;text-align:center;' +
+        'cursor:pointer;height:52px;padding:0 16px;border-radius:10px;line-height:1;' +
+        'flex-shrink:0;min-width:44px;text-align:center;box-sizing:border-box;' +
         '-webkit-tap-highlight-color:transparent;';
       backBtn.addEventListener('click', function () {
         stSetValue({ action: 'go_back', ts: Date.now() });
@@ -1201,8 +1244,8 @@
       backBtn.textContent = showRooms ? '✕' : '＜';
       backBtn.style.cssText =
         'background:none;border:none;color:#e0e0e0;font-size:1.25rem;' +
-        'cursor:pointer;padding:8px 12px;border-radius:10px;line-height:1;' +
-        'flex-shrink:0;min-width:44px;text-align:center;' +
+        'cursor:pointer;height:52px;padding:0 16px;border-radius:10px;line-height:1;' +
+        'flex-shrink:0;min-width:44px;text-align:center;box-sizing:border-box;' +
         '-webkit-tap-highlight-color:transparent;';
       backBtn.addEventListener('click', function () {
         // window.parent.location.href は iframe sandbox でブロックされるため

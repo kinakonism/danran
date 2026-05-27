@@ -1,6 +1,6 @@
 // danran service worker — push notifications + badge suppression
 // バージョンを上げると古いキャッシュが破棄される
-var SW_VERSION = '1.2.0';
+var SW_VERSION = '1.3.0';
 
 self.addEventListener('install', function (event) {
   self.skipWaiting();
@@ -41,10 +41,23 @@ self.addEventListener('fetch', function (event) {
             'a[href*="streamlit.io"]{display:none!important}' +
             '</style>';
 
+          // ── アプリバッジ用ヘルパーをトップレベルHTMLに注入 ──────────
+          // setAppBadge は「トップレベル閲覧コンテキスト」からしか呼べない仕様。
+          // iframe (Streamlit コンポーネント) からは NotAllowedError になるため、
+          // SW のフェッチインターセプターでページ初回ロード時に注入する。
+          // コンポーネントは window.top._danranSetBadge(n) 経由でこの関数を呼ぶ。
+          var badgeScript =
+            '<script id="_danran_badge_fn">window._danranSetBadge=function(n){' +
+            'try{if(!("setAppBadge"in navigator))return;' +
+            '(n>0?navigator.setAppBadge(n):navigator.clearAppBadge()).catch(function(){});}' +
+            'catch(e){}' +
+            '};<\/script>';
+
           // </head> の直前に挿入（なければ先頭に付ける）
+          var inject = css + badgeScript;
           var modified = html.indexOf('</head>') >= 0
-            ? html.replace('</head>', css + '</head>')
-            : css + html;
+            ? html.replace('</head>', inject + '</head>')
+            : inject + html;
 
           // Content-Length はバイト数が変わるので除去必須
           var headers = new Headers(res.headers);

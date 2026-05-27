@@ -762,11 +762,34 @@
    * ════════════════════════════════════════ */
   var _badgeTimer = null;
 
+  /* ════════════════════════════════════════
+   *  バッジ設定ヘルパー
+   *
+   *  【問題】setAppBadge は「トップレベル閲覧コンテキスト」でしか動かない仕様。
+   *    iframe (component / app iframe) から window.top.navigator.setAppBadge() を
+   *    呼んでも NotAllowedError になる（呼び出し元コンテキストがチェックされる）。
+   *
+   *  【解決】sw.js の fetch インターセプターがページ初期ロード時に外側シェル HTML へ
+   *    window._danranSetBadge() 関数を注入する。この関数はトップレベルで定義・実行
+   *    されるため navigator.setAppBadge() が有効。
+   *    コンポーネントからは window.top._danranSetBadge(n) 経由で呼ぶ。
+   * ════════════════════════════════════════ */
+  function danranSetBadge(n) {
+    try {
+      var fn = window.top._danranSetBadge;
+      if (typeof fn === 'function') { fn(n); return; }
+      // フォールバック: window.top.navigator が直接使える環境
+      var nav = window.top.navigator;
+      if ('setAppBadge' in nav) {
+        (n > 0 ? nav.setAppBadge(n) : nav.clearAppBadge()).catch(function () {});
+      }
+    } catch (e) {}
+  }
+  function danranClearBadge() { danranSetBadge(0); }
+
   function updateAppBadge() {
     try {
-      // window.top.navigator を使う: setAppBadge はトップレベルコンテキストのみ有効
-      var topNav = window.top.navigator;
-      if (!('setAppBadge' in topNav) || !SB_URL || !SB_KEY || !ME_UID) return;
+      if (!SB_URL || !SB_KEY || !ME_UID) return;
 
       sbGet('last_read?user_id=eq.' + ME_UID + '&select=room_name,read_at')
         .then(function (lastReads) {
@@ -784,10 +807,7 @@
             }).length;
           });
         })
-        .then(function (count) {
-          if (count > 0) topNav.setAppBadge(count).catch(function () {});
-          else           topNav.clearAppBadge().catch(function () {});
-        })
+        .then(function (count) { danranSetBadge(count); })
         .catch(function () {});
     } catch (e) {}
   }
@@ -799,7 +819,7 @@
   }
   function stopBadgeTimer() {
     if (_badgeTimer) { clearInterval(_badgeTimer); _badgeTimer = null; }
-    try { window.top.navigator.clearAppBadge().catch(function () {}); } catch (e) {}
+    danranClearBadge();
   }
 
   // 通知許可バナー（ルーム一覧表示中・未許可のときだけ表示）
@@ -1153,21 +1173,20 @@
   /* ════════════════════════════════════════
    *  右スワイプで戻る（エッジスワイプジェスチャー）
    *
-   *  【方式 A】iOS ネイティブ: history.pushState → popstate
-   *    iOS PWA の左エッジスワイプは history.back() を呼ぶ。
-   *    あらかじめ pushState で「戻り先」を作っておくと popstate が発火する。
+   *  タッチベース（capture フェーズ）のみ:
+   *    - { capture: true, passive: false } → React 合成イベントより前に発火
+   *    - touchend で e.preventDefault() → 合成クリックを抑制
+   *    - capture フェーズ click 抑制器 → 二重対策でクリックを 600ms 遮断
    *
-   *  【方式 B】タッチベース（Android など非 iOS フォールバック）
-   *    { capture: true } でReact の合成イベントより先に発火。
-   *    passive: true なので e.preventDefault() は呼ばない。
+   *  ★ pDoc._danranSwipeV30 フラグで二重登録防止。
+   *    ハンドラは pDoc._danranView / pDoc._danranSR を参照して最新状態を読む。
    *
-   *  ★ pDoc._danranSwipeV29 フラグ（親ドキュメントに保持）で
-   *    IIFE を何度再起動しても二重登録しない。
-   *    ハンドラは pDoc._danranView / pDoc._danranSR を直接参照するので
-   *    古い IIFE のクロージャでも最新の VIEW/SHOW_ROOMS を読める。
+   *  ★ history 方式 (pushState/popstate) は Streamlit の URL 管理と競合して
+   *    チャット画面に戻るバグを引き起こすため完全廃止。
+   *    代わりに popstate 監視で ?sr=1 が消えた場合のみ即座に復元する。
    * ════════════════════════════════════════ */
   var _swipeTouchStart = null;
-  var _swipeSetupDone  = false;   // IIFE スコープ（flag の二重チェック用）
+  var _swipeSetupDone  = false;
 
   function setupSwipeBack() {
     if (_swipeSetupDone) return;
@@ -1182,8 +1201,8 @@
     } catch (e) { return; }
 
     // 二重登録防止: バージョン付きフラグを親ドキュメントに保持
-    if (pDoc._danranSwipeV29) return;
-    pDoc._danranSwipeV29 = true;
+    if (pDoc._danranSwipeV30) return;
+    pDoc._danranSwipeV30 = true;
 
     // 前回スワイプ時刻（500ms デバウンス）
     if (!pDoc._danranLastSwipe) pDoc._danranLastSwipe = 0;
@@ -1207,52 +1226,57 @@
       return false;
     }
 
-    // ── 方式 A: history ベース（iOS エッジスワイプ）─────────────
-    function pushNavAnchor() {
-      try { outerWin.history.pushState({ _danran: 1 }, '', outerWin.location.href); } catch (e) {}
-    }
-    try {
-      pushNavAnchor();  // 初期アンカー
-      outerWin.addEventListener('popstate', function () {
-        // popstate 後に再度 pushState して次のスワイプに備える
-        pushNavAnchor();
-        var handled = execSwipe();
-        if (!handled && getShowRooms()) {
-          // ルームリスト表示中に戻るジェスチャー → sr=1 を維持
-          try {
-            var url = new URL(outerWin.location.href);
-            if (!url.searchParams.has('sr')) {
-              url.searchParams.set('sr', '1');
-              outerWin.history.replaceState(null, '', url.toString());
-            }
-          } catch (ex) {}
-        }
-      });
-    } catch (e) {}
-
-    // ── 方式 B: タッチベース（Android フォールバック）─────────────
+    // ── タッチベース: touchstart で開始点を記録 ─────────────────
     try {
       pDoc.addEventListener('touchstart', function (e) {
         var t = e.touches[0];
+        // 左端 50px 以内から始まったタッチのみ対象
         _swipeTouchStart = (t.clientX < 50) ? { x: t.clientX, y: t.clientY } : null;
       }, { capture: true, passive: true });
 
+      // passive: false → e.preventDefault() で合成クリックを抑制できる
       pDoc.addEventListener('touchend', function (e) {
         if (!_swipeTouchStart) return;
         var t  = e.changedTouches[0];
         var dx = t.clientX - _swipeTouchStart.x;
         var dy = Math.abs(t.clientY - _swipeTouchStart.y);
         _swipeTouchStart = null;
-        if (dx > 60 && dx > dy) { execSwipe(); }
-      }, { capture: true, passive: true });
+        if (dx > 60 && dx > dy) {
+          e.preventDefault();            // 合成クリック（→ ✕ボタン誤タップ）を抑制
+          pDoc._danranSwipeAt = Date.now();
+          execSwipe();
+        }
+      }, { capture: true, passive: false });
+
+      // ── クリック抑制器（belt + suspenders）──────────────────────
+      // スワイプ後 600ms 以内の click を捕捉フェーズで完全遮断
+      pDoc.addEventListener('click', function (e) {
+        if (pDoc._danranSwipeAt && Date.now() - pDoc._danranSwipeAt < 600) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      }, { capture: true });
+    } catch (e) {}
+
+    // ── popstate 監視: ?sr=1 が消えた場合のみ復元（ナビゲーションは行わない）──
+    // iOS ネイティブ戻るジェスチャーが Streamlit の ?sr=1 を消す可能性があるため
+    try {
+      outerWin.addEventListener('popstate', function () {
+        if (!getShowRooms()) return;   // ルームリスト表示中でなければ何もしない
+        try {
+          var url = new URL(outerWin.location.href);
+          if (!url.searchParams.has('sr')) {
+            url.searchParams.set('sr', '1');
+            outerWin.history.replaceState(null, '', url.toString());
+          }
+        } catch (ex) {}
+      });
     } catch (e) {}
 
     // ── アプリ復帰時にバッジをクリア ─────────────────────────────
     try {
       pDoc.addEventListener('visibilitychange', function () {
-        if (!pDoc.hidden && ME) {
-          try { window.top.navigator.clearAppBadge().catch(function () {}); } catch (ex) {}
-        }
+        if (!pDoc.hidden && ME) { danranClearBadge(); }
       });
     } catch (e) {}
   }

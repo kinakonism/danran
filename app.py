@@ -418,7 +418,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v11",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v12",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1325,11 +1325,10 @@ if "current_user" not in st.session_state:
 # Python が HTML data 属性として埋め込み JS が window.parent.document から参照。
 _cu          = st.session_state.get("current_user", {})
 _clear_flag  = st.session_state.pop("_clear_session", False)
-# プロフィール・ルーム編集画面中は JS ヘッダー・カメラボタンを非表示にするため active_room を空にする
+# プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
 _is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications")
 if "current_user" in st.session_state and not _is_profile:
     # active_room が未セット（セッション復元直後）のときは DB の先頭ルームをフォールバック
-    # → data-room="" になると JS がヘッダー・カメラ・padding-bottom CSS を注入しないため
     _rooms_for_hdr = fetch_rooms()
     _active_room   = st.session_state.get("active_room") or (
         _rooms_for_hdr[0]["name"] if _rooms_for_hdr else ""
@@ -1339,6 +1338,55 @@ else:
 _show_rooms  = st.query_params.get("sr") == "1"
 _cur_view    = st.session_state.get("view", "")
 _vapid_pub = _vapid_cfg().get("vapid_public_key", "")
+
+# ── ヘッダーを Python 側でレンダリング ──
+# JS 注入ではなく Python が st.html() で直接 DOM に書くことでタイミング問題を解消。
+# クリックハンドラだけは JS コンポーネント(attachHdrButtons)が付与する。
+_HDR_DIV_STYLE = (
+    'position:fixed;top:0;left:0;right:0;height:52px;z-index:9990;'
+    'background:rgba(28,28,30,0.97);border-bottom:1px solid rgba(255,255,255,0.1);'
+    'display:flex;align-items:center;padding:0 4px;gap:0;'
+    'box-shadow:0 1px 10px rgba(0,0,0,0.5);'
+    'backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);'
+    'user-select:none;-webkit-user-select:none;'
+)
+_HDR_BTN_STYLE = (
+    'background:none;border:none;color:#e0e0e0;font-size:1.25rem;'
+    'cursor:pointer;padding:8px 12px;border-radius:10px;line-height:1;'
+    'flex-shrink:0;min-width:44px;text-align:center;'
+    '-webkit-tap-highlight-color:transparent;'
+)
+_HDR_TITLE_STYLE = (
+    'flex:1;text-align:center;font-size:1rem;font-weight:700;color:#fff;'
+    'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px;'
+)
+_hdr_html = ""
+if "current_user" in st.session_state:
+    if _is_profile:
+        _title_map = {
+            "profile":       "プロフィール編集",
+            "room_edit":     "ルーム編集",
+            "notifications": "🔔 通知設定",
+        }
+        _hdr_title_text = _title_map.get(_cur_view, "設定")
+        _hdr_html = (
+            f'<div id="_danran_hdr" style="{_HDR_DIV_STYLE}">'
+            f'<button data-hdr-back style="{_HDR_BTN_STYLE}">＜</button>'
+            f'<div style="{_HDR_TITLE_STYLE}">{_html.escape(_hdr_title_text)}</div>'
+            f'<div style="flex-shrink:0;min-width:44px;"></div>'
+            f'</div>'
+        )
+    elif _active_room:
+        _hdr_btn_text  = "✕" if _show_rooms else "＜"
+        _hdr_title_text = "ルーム選択" if _show_rooms else _active_room
+        _hdr_html = (
+            f'<div id="_danran_hdr" style="{_HDR_DIV_STYLE}">'
+            f'<button data-hdr-nav style="{_HDR_BTN_STYLE}">{_html.escape(_hdr_btn_text)}</button>'
+            f'<div style="{_HDR_TITLE_STYLE}">{_html.escape(_hdr_title_text)}</div>'
+            f'<div style="flex-shrink:0;min-width:44px;"></div>'
+            f'</div>'
+        )
+
 st.html(
     # PWA manifest + iOS メタタグ（毎 rerun で同じ内容を書くが副作用なし）
     '<link rel="manifest" href="/manifest.json">'
@@ -1360,6 +1408,17 @@ st.html(
     f'data-vapid-pub="{_html.escape(_vapid_pub)}" '
     f'data-uid="{_html.escape(_cu.get("id",""))}">'
     f'</div>'
+    # ── Python レンダリングヘッダー ──
+    # ログイン済み: チャットヘッダー or 編集ヘッダー
+    # 未ログイン / active_room 未確定: 表示なし（JS フォールバックが担う）
+    + (
+        '<style>'
+        '[data-testid="stMainBlockContainer"]'
+        '{padding-top:62px!important;padding-bottom:160px!important;}'
+        '</style>'
+        + _hdr_html
+        if _hdr_html else ""
+    )
 )
 
 # ── グローバルコンポーネント（常時実行・ゼロ高さ）──

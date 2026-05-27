@@ -91,16 +91,14 @@
       VIEW        = newView;
 
       if (changed) {
-        if (isEditView) {
-          // プロフィール・ルーム編集画面：専用ヘッダーを注入、カメラ非表示
-          removeCameraUI();
-          injectEditHeader(newView);
-        } else if (SHOW_ROOMS) {
-          removeCameraUI();          // ルームパネル中はカメラ非表示
-          injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
+        // ヘッダーは Python 側が st.html() でレンダリング済み → JS 注入不要
+        // ボタンのクリックハンドラは scan() → attachHdrButtons() が付与する
+        if (isEditView || SHOW_ROOMS) {
+          removeCameraUI();   // 編集画面・ルームリスト中はカメラ非表示
+        } else if (ACTIVE_ROOM && ME) {
+          injectCameraUI(ACTIVE_ROOM, ME_AVATAR);   // チャット画面: カメラ表示
         } else {
-          injectCameraUI(ACTIVE_ROOM, ME_AVATAR);
-          injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
+          removeCameraUI();
         }
       }
       return true;
@@ -882,11 +880,39 @@
     } catch (e) {}
   }
 
+  /* ════════════════════════════════════════
+   *  Python レンダリングヘッダーのクリックハンドラを付与
+   *  Python が st.html() で #_danran_hdr を生成し、
+   *  JS はボタン（data-hdr-nav / data-hdr-back）にイベントを付与するだけ。
+   * ════════════════════════════════════════ */
+  function attachHdrButtons() {
+    try {
+      var pDoc = window.parent.document;
+      // チャットヘッダーの ＜/✕ ボタン
+      var navBtn = pDoc.querySelector('[data-hdr-nav]');
+      if (navBtn && !navBtn._danranHdrNav) {
+        navBtn._danranHdrNav = true;
+        navBtn.addEventListener('click', function () {
+          stSetValue({ action: SHOW_ROOMS ? 'go_chat' : 'go_rooms', ts: Date.now() });
+        });
+      }
+      // 編集ヘッダーの ＜ ボタン
+      var backBtn = pDoc.querySelector('[data-hdr-back]');
+      if (backBtn && !backBtn._danranHdrBack) {
+        backBtn._danranHdrBack = true;
+        backBtn.addEventListener('click', function () {
+          stSetValue({ action: 'go_back', ts: Date.now() });
+        });
+      }
+    } catch (e) {}
+  }
+
   function scan() {
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
     hideManageApp();
     fixStBottom();  // stBottom の display:none を強制解除
+    attachHdrButtons();     // Python レンダリングヘッダーのクリックハンドラを付与
     attachMyAvatarClick();  // 自分のアバタータップ → プロフィール画面
     attachRoomHandlers();   // ルームリストのカスタムHTMLボタンにイベントを付与
     injectSwSetup();        // Service Worker 登録（1回のみ）
@@ -894,10 +920,12 @@
     injectNotifSettings();  // 通知設定画面の UI（VIEW=notifications のときのみ）
     attachPushBannerClick(); // Python 描画バナーのクリックイベント付与
     setupInstallPrompt();   // Android: beforeinstallprompt キャプチャ（iOS は不可）
-    // ヘッダーが消えていたら強制再注入
+    // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
+    // （通常は Python が st.html() でレンダリングするため実行されない）
     try {
       if (ME && ACTIVE_ROOM && !window.parent.document.getElementById(HDR_ID)) {
-        injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
+        var isEdit = (VIEW === 'profile' || VIEW === 'room_edit' || VIEW === 'notifications');
+        if (isEdit) { injectEditHeader(VIEW); } else { injectHeader(ACTIVE_ROOM, SHOW_ROOMS); }
       }
     } catch (e) {}
     try {
@@ -1251,24 +1279,16 @@
   //    download ボタンが DOM に現れるまで tryClickDownload() がリトライする。
   setTimeout(injectAutoInstall, 300);
 
-  // 起動後 60 秒間毎秒チェック（Manage app 除去 + ヘッダー消失回復）
-  // readConfig() を毎回呼ぶことで ME/ACTIVE_ROOM を常に最新化し、
-  // セッション復元の遅延やリダイレクト後でも確実にヘッダーを表示する。
+  // 起動後 60 秒間毎秒チェック（Manage app 除去 + stBottom 修正 + ハンドラ再付与）
+  // ヘッダー自体は Python が render するため再注入不要。
+  // クリックハンドラは Streamlit の rerun で DOM が入れ替わるたびに再付与が必要。
   (function () {
     var _cnt = 0;
     var _iv = setInterval(function () {
-      // ── 設定を最新化 ──
       try { readConfig(); } catch (e) {}
       hideManageApp();
       fixStBottom();
-      // ── ヘッダー消失 watchdog ──
-      // MutationObserver のタイミング外でヘッダーが消えた場合に強制再注入
-      try {
-        var isEdit = (VIEW === 'profile' || VIEW === 'room_edit' || VIEW === 'notifications');
-        if (!isEdit && ME && ACTIVE_ROOM && !window.parent.document.getElementById(HDR_ID)) {
-          injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
-        }
-      } catch (e) {}
+      try { attachHdrButtons(); } catch (e) {}
       if (++_cnt >= 60) clearInterval(_iv);
     }, 1000);
   })();

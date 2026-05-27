@@ -6,9 +6,18 @@
 <meta http-equiv="Pragma" content="no-cache">
 <style>body{margin:0;padding:0;background:transparent;overflow:hidden}</style>
 <script>
-// ── 外側シェル（Streamlit Cloud ラッパー）にバッジ非表示 CSS を即時注入 ──
-// IIFE の外で最速実行することで、Streamlit が React バッジを描画する前に
-// display:none を仕掛けておく。SW 未活性（初回アクセス等）のフォールバック。
+// ── 外側シェル（Streamlit Cloud ラッパー）に PWA メタタグ + バッジ非表示 CSS を即時注入 ──
+// IIFE の外で最速実行することで、Streamlit が React を描画する前に仕掛ける。
+// SW 未活性（初回アクセス等）でも動作するフォールバック。
+//
+// 【なぜここで注入が必要か】
+// Streamlit Cloud の外側シェル HTML には <link rel="manifest"> も Apple PWA メタタグも
+// 含まれない。Safari はこれらを見つけられないため:
+//   ① 「ホーム画面に追加」でアイコンが Streamlit デフォルト（赤紙飛行機）になる
+//   ② PWA として認識されず → 通知設定・バッジが使えない
+// コンポーネントは同一オリジンの親ドキュメントを DOM 操作できるため、
+// ページ読み込み直後（Streamlit の React マウント前）に注入することで
+// Safari が「ホーム画面に追加」を実行する時点には既に存在する。
 (function () {
   try {
     // コンポーネント(window) → app iframe(parent) → 外側シェル(parent.parent)
@@ -18,6 +27,39 @@
       : null;
     if (!ow) return;
     var od = ow.document;
+    var head = od.head || od.documentElement;
+
+    // ── PWA manifest リンク ─────────────────────────────────────────
+    if (!od.querySelector('link[rel="manifest"]')) {
+      var mf = od.createElement('link');
+      mf.rel  = 'manifest';
+      mf.href = '/manifest.json';
+      head.appendChild(mf);
+    }
+
+    // ── Apple PWA メタタグ ──────────────────────────────────────────
+    // apple-mobile-web-app-capable: ホーム画面から開いたとき Safari UI を非表示にする
+    // apple-mobile-web-app-title:   ホーム画面アイコンの名前
+    // apple-touch-icon:             ホーム画面アイコン画像
+    [
+      ['name', 'apple-mobile-web-app-capable',          'yes'],
+      ['name', 'apple-mobile-web-app-status-bar-style', 'black-translucent'],
+      ['name', 'apple-mobile-web-app-title',            'danran'],
+    ].forEach(function (m) {
+      if (od.querySelector('meta[' + m[0] + '="' + m[1] + '"]')) return;
+      var el = od.createElement('meta');
+      el[m[0]] = m[1];
+      el.content = m[2];
+      head.appendChild(el);
+    });
+    if (!od.querySelector('link[rel="apple-touch-icon"]')) {
+      var ic = od.createElement('link');
+      ic.rel  = 'apple-touch-icon';
+      ic.href = '/icons/icon-192.png';
+      head.appendChild(ic);
+    }
+
+    // ── Streamlit バッジ非表示 CSS ──────────────────────────────────
     if (od.getElementById('_danran_nobadge')) return;  // 二重注入防止
     var s = od.createElement('style');
     s.id = '_danran_nobadge';
@@ -28,7 +70,7 @@
       '[class*="createdBy"]{display:none!important}' +
       '[class*="CreatedBy"]{display:none!important}' +
       'a[href*="streamlit.io"]{display:none!important}';
-    (od.head || od.documentElement).appendChild(s);
+    head.appendChild(s);
   } catch (e) {}
 })();
 

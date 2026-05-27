@@ -1,6 +1,6 @@
 // danran service worker — push notifications + badge suppression
 // バージョンを上げると古いキャッシュが破棄される
-var SW_VERSION = '1.3.1';
+var SW_VERSION = '1.3.2';
 
 self.addEventListener('install', function (event) {
   self.skipWaiting();
@@ -49,6 +49,14 @@ self.addEventListener('fetch', function (event) {
         return res.text().then(function (html) {
           // Streamlit Cloud が React で注入するバッジのクラスを狙い撃ち
           // クラス名はハッシュ付きなので部分一致（[class*=]）で消す
+          // PWA manifest + Apple メタタグ（Safari がホーム画面追加時に読む）
+          var pwa =
+            '<link rel="manifest" href="/manifest.json">' +
+            '<meta name="apple-mobile-web-app-capable" content="yes">' +
+            '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">' +
+            '<meta name="apple-mobile-web-app-title" content="danran">' +
+            '<link rel="apple-touch-icon" href="/icons/icon-192.png">';
+
           var css =
             '<style id="_danran_nobadge">' +
             '[class*="viewerBadge"]{display:none!important}' +
@@ -72,7 +80,7 @@ self.addEventListener('fetch', function (event) {
             '};<\/script>';
 
           // </head> の直前に挿入（なければ先頭に付ける）
-          var inject = css + badgeScript;
+          var inject = pwa + css + badgeScript;
           var modified = html.indexOf('</head>') >= 0
             ? html.replace('</head>', inject + '</head>')
             : inject + html;

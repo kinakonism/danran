@@ -172,7 +172,6 @@
         if (lsSid) {
           _sessionRestoreSent = true;
           console.log('[danran] → stSetValue restore_session firing with', lsSid.slice(0, 8) + '…');
-          showToast('⏳ セッション復元中...', 3000);
           stSetValue({ action: 'restore_session', session_id: lsSid, ts: Date.now() });
         } else {
           console.log('[danran] localStorage empty, no restore');

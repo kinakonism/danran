@@ -427,7 +427,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v21",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v22",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1511,6 +1511,7 @@ if isinstance(_lp_result, dict):
                     #    最初の描画で view="select_user" がすでにセットされているため
                     #    setdefault は何もせず chat に遷移できないバグを修正
                     st.session_state["view"] = "chat"
+                    st.query_params["sr"] = "1"   # 復元後はルーム選択画面から再開
                     st.rerun()
                 else:
                     # 復元失敗（セッション期限切れ等）→ ユーザーに再ログインを促す

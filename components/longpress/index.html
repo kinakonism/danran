@@ -133,6 +133,52 @@
     try { var o = window.parent.document.getElementById(POPUP_ID); if (o) o.remove(); } catch (e) {}
   }
 
+  /* ════════════════════════════════════════
+   *  リアクション pill をリアルタイムで DOM 更新
+   *  [data-lp-react="msgId"] コンテナを書き換える
+   * ════════════════════════════════════════ */
+  function renderPills(msgId, reactMap) {
+    try {
+      var container = window.parent.document.querySelector('[data-lp-react="' + msgId + '"]');
+      if (!container) return;
+      var isMine = !!window.parent.document.querySelector('[data-lp-msg="' + msgId + '"][data-lp-mine]');
+      var align  = isMine ? 'right' : 'left';
+      container.style.textAlign = align;
+      var html = '';
+      EMOJIS.forEach(function (emoji) {
+        var users = reactMap[emoji] || [];
+        if (!users.length) return;
+        var my  = users.indexOf(ME) >= 0;
+        var bg  = my ? 'rgba(0,185,0,0.3)'  : 'rgba(255,255,255,0.08)';
+        var bdr = my ? 'rgba(0,185,0,0.85)' : 'rgba(255,255,255,0.2)';
+        html +=
+          '<span style="display:inline-flex;align-items:center;gap:2px;' +
+          'background:' + bg + ';border:1px solid ' + bdr + ';border-radius:20px;' +
+          'padding:1px 7px;font-size:0.8rem;margin-right:3px">' +
+          emoji + '&nbsp;' + users.length + '</span>';
+      });
+      container.innerHTML = html;
+    } catch (e) {}
+  }
+
+  /* リアクション toggle → 即座に DB 再取得して pill を更新 */
+  function toggleReactionAndUpdate(msgId, emoji) {
+    hidePopup();
+    toggleReaction(msgId, emoji)
+      .then(function () {
+        return sbGet('reactions?message_id=eq.' + msgId + '&select=emoji,user_name');
+      })
+      .then(function (rows) {
+        if (!Array.isArray(rows)) return;
+        var map = {};
+        rows.forEach(function (r) {
+          if (!map[r.emoji]) map[r.emoji] = [];
+          map[r.emoji].push(r.user_name);
+        });
+        renderPills(msgId, map);
+      });
+  }
+
   function showPopup(el, msgId, isMine) {
     hidePopup();
     try {
@@ -165,15 +211,19 @@
         return b;
       }
 
-      EMOJIS.forEach(function (emoji) {
-        pop.appendChild(makeBtn(emoji, function (b) {
-          b.style.transform = 'scale(1.35)';
-          setTimeout(function () { b.style.transform = ''; }, 140);
-          toggleReaction(msgId, emoji).then(hidePopup);
-        }));
-      });
-      pop.appendChild(makeSep());
+      // 他人のメッセージ → 絵文字リアクション
+      if (!isMine) {
+        EMOJIS.forEach(function (emoji) {
+          pop.appendChild(makeBtn(emoji, function (b) {
+            b.style.transform = 'scale(1.35)';
+            setTimeout(function () { b.style.transform = ''; }, 140);
+            toggleReactionAndUpdate(msgId, emoji);   // 即 DOM 更新
+          }));
+        });
+        pop.appendChild(makeSep());
+      }
 
+      // 自分のメッセージ → 削除のみ（絵文字なし）
       if (isMine) {
         var delStage = 0;
         pop.appendChild(makeBtn('🗑️', function (b) {
@@ -184,7 +234,17 @@
           } else {
             deleteMsg(msgId).then(function () {
               hidePopup();
-              setTimeout(function () { window.parent.location.reload(); }, 80);
+              // フェードアウト → DOM 即削除（リロードなし・暗転なし）
+              try {
+                var msgEl = pDoc.querySelector('[data-lp-msg="' + msgId + '"]');
+                if (msgEl) {
+                  msgEl.style.transition = 'opacity 0.22s,transform 0.22s';
+                  msgEl.style.opacity    = '0';
+                  msgEl.style.transform  = 'scale(0.94)';
+                  setTimeout(function () { if (msgEl.parentNode) msgEl.remove(); }, 240);
+                }
+              } catch (ex) {}
+              showToast('🗑️ 削除しました');
             });
           }
         }));
@@ -254,9 +314,41 @@
     el.addEventListener('contextmenu', function (e) { e.preventDefault(); showPopup(el, msgId, isMine); });
   }
 
+  /* ════════════════════════════════════════
+   *  "Manage app" ボタンをテキスト検索で非表示
+   *  CSS セレクタが変わっても動くように JS で直接探す
+   * ════════════════════════════════════════ */
+  function hideManageApp() {
+    try {
+      var pDoc = window.parent.document;
+      // テキスト "Manage app" を持つ要素を探す
+      var all = pDoc.querySelectorAll('a, button, [role="button"], span');
+      for (var i = 0; i < all.length; i++) {
+        if (/^manage\s*app$/i.test((all[i].textContent || '').trim())) {
+          var anc = all[i];
+          for (var j = 0; j < 6; j++) {
+            if (!anc.parentElement || anc.parentElement === pDoc.body) break;
+            anc = anc.parentElement;
+          }
+          anc.style.cssText += ';display:none!important;visibility:hidden!important;';
+          break;
+        }
+      }
+      // クラス名ベースのフォールバック
+      var bs = pDoc.querySelectorAll(
+        '[class*="viewerBadge"],[class*="ViewerBadge"],' +
+        '[data-testid="stDeployButton"],[data-testid="manage-app-button"]'
+      );
+      for (var k = 0; k < bs.length; k++) {
+        bs[k].style.cssText += ';display:none!important;';
+      }
+    } catch (e) {}
+  }
+
   function scan() {
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
+    hideManageApp();
     try {
       var els = window.parent.document.querySelectorAll('[data-lp-msg]');
       for (var i = 0; i < els.length; i++) {

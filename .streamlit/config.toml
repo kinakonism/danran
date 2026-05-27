@@ -1,0 +1,6 @@
+[client]
+# "Manage app" ボタンなどのツールバーを最小化
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

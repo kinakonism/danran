@@ -1,7 +1,7 @@
 """
 danran - 家族専用チャットアプリ  Streamlit × Supabase
 セッション: Supabase sessions + URL ?s=SESSION_ID
-リアルタイム: @st.fragment(run_every="5s")
+リアルタイム: @st.fragment(run_every="2s")
 通知: in-app toast + ntfy.sh push (secrets.ntfy.topic が必要)
 """
 
@@ -280,7 +280,7 @@ _lp_detector = st.components.v1.declare_component(
 # ★ リアルタイムタイムライン（フラグメント）
 #   5秒ごとに自動更新。ページ全体は再描画しない。
 # ─────────────────────────────────────
-@st.fragment(run_every="5s")
+@st.fragment(run_every="2s")
 def render_messages() -> None:
     current_user  = st.session_state.get("current_user", {})
     selected_room = st.session_state.get("active_room", ROOMS[0])
@@ -352,10 +352,11 @@ def render_messages() -> None:
                     f'padding:1px 7px;font-size:0.8rem;margin-right:3px">'
                     f'{emoji}&nbsp;{len(users)}</span>'
                 )
+        # data-lp-react: JS がリアルタイムで書き換えるためのコンテナ（常に出力）
         pills_row = (
-            f'<div style="margin-top:4px;text-align:{"right" if is_mine else "left"};'
-            f'line-height:2">{pills}</div>'
-        ) if pills else ""
+            f'<div data-lp-react="{msg_id}" style="margin-top:4px;text-align:{"right" if is_mine else "left"};'
+            f'line-height:2;min-height:0">{pills}</div>'
+        )
 
         # ── LINE 風バブル HTML（自分＝右、他人＝左） ──
         # data-lp-mine="1" → JS が「自分のメッセージ」と判別して削除ボタン表示

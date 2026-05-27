@@ -1423,51 +1423,67 @@ def show_install_page() -> None:
         unsafe_allow_html=True,
     )
 
-    # ── メイン: Safari からホーム画面に追加 ──────────────────────────
-    st.markdown(
-        '<div style="background:rgba(0,185,0,0.12);border:1px solid rgba(0,185,0,0.35);'
-        'border-radius:14px;padding:14px 16px;margin:8px 0 4px">'
-        '<div style="font-size:1rem;font-weight:700;color:#0f0;margin-bottom:6px">'
-        '✅ この方法で追加（通知・バッジ対応）</div>'
-        '<div style="font-size:0.85rem;color:rgba(255,255,255,0.85);line-height:1.9">'
-        '<b>1.</b> このページを <b>Safari</b> で開く<br>'
-        '<b>2.</b> 画面下の <b>シェアボタン</b>（□↑）をタップ<br>'
-        '<b>3.</b>「<b>ホーム画面に追加</b>」をタップ<br>'
-        '<b>4.</b>「<b>追加</b>」をタップ<br>'
-        '<b>5.</b> ホーム画面の danran アイコンから起動 🎉<br>'
-        '<b>6.</b> アプリ内で <b>通知を許可</b> する'
-        '</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    # ── ステップごとの大きな説明カード ────────────────────────────
+    steps = [
+        ("1", "🧭", "Safari で開く",
+         "このページを <b>Safari</b> で開いてください。<br>"
+         "<span style='color:rgba(255,255,255,0.45);font-size:0.8rem'>"
+         "LINE や Chrome から開いている場合は、右上の「…」→「Safari で開く」</span>"),
+        ("2", "□↑", "シェアボタンをタップ",
+         "画面の <b>いちばん下の真ん中</b> にある<br>四角から矢印が出たボタンをタップ"),
+        ("3", "＋", "ホーム画面に追加",
+         "リストの中から「<b>ホーム画面に追加</b>」を選ぶ<br>"
+         "<span style='color:rgba(255,255,255,0.45);font-size:0.8rem'>"
+         "下にスクロールすると見つかります</span>"),
+        ("4", "✅", "「追加」をタップ",
+         "右上の <b>「追加」</b> をタップすれば完了 🎉<br>"
+         "ホーム画面に danran のアイコンが追加されます"),
+        ("5", "🔔", "通知を許可する",
+         "アイコンからアプリを開いて<br><b>通知の許可</b> を求められたら「許可」をタップ"),
+    ]
+
+    cards_html = '<div style="display:flex;flex-direction:column;gap:10px;margin:12px 0 20px">'
+    for num, icon, title, desc in steps:
+        cards_html += (
+            f'<div style="display:flex;align-items:flex-start;gap:14px;'
+            f'background:rgba(255,255,255,0.06);border-radius:14px;padding:14px 16px">'
+            f'<div style="flex-shrink:0;width:42px;height:42px;border-radius:50%;'
+            f'background:rgba(0,185,0,0.2);border:2px solid rgba(0,185,0,0.5);'
+            f'display:flex;align-items:center;justify-content:center;'
+            f'font-size:1.25rem;line-height:1">{icon}</div>'
+            f'<div>'
+            f'<div style="font-size:0.72rem;color:rgba(0,185,0,0.8);font-weight:700;'
+            f'letter-spacing:.06em;margin-bottom:2px">STEP {num}</div>'
+            f'<div style="font-size:0.95rem;font-weight:700;color:#fff;margin-bottom:4px">{title}</div>'
+            f'<div style="font-size:0.82rem;color:rgba(255,255,255,0.65);line-height:1.6">{desc}</div>'
+            f'</div></div>'
+        )
+    cards_html += '</div>'
+    st.markdown(cards_html, unsafe_allow_html=True)
 
     st.markdown(
-        '<div style="font-size:0.75rem;color:rgba(255,255,255,0.4);padding:4px 4px 16px">'
-        '⚠️ Chrome・LINE ブラウザ等では「ホーム画面に追加」が表示されないか、'
-        '通知が使えません。必ず <b style="color:rgba(255,255,255,0.7)">Safari</b> をお使いください。'
+        '<div style="background:rgba(255,200,0,0.08);border:1px solid rgba(255,200,0,0.25);'
+        'border-radius:10px;padding:10px 14px;font-size:0.8rem;'
+        'color:rgba(255,255,255,0.55);line-height:1.6;margin-bottom:16px">'
+        '⚠️ <b style="color:rgba(255,200,0,0.85)">必ず Safari を使ってください</b><br>'
+        'LINE・Chrome から開いた場合は通知・バッジが動きません'
         '</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown("---")
 
-    # ── サブ: mobileconfig（通知なし・アイコンのみ）──────────────────
+    # ── サブ: mobileconfig（アイコンのみ・通知なし）──────────────────
     st.markdown(
-        '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);'
-        'border-radius:14px;padding:14px 16px;margin:4px 0">'
-        '<div style="font-size:0.9rem;font-weight:600;color:rgba(255,255,255,0.55);margin-bottom:6px">'
-        '⚙️ プロファイルでインストール（通知・バッジ <b style="color:#f66">非対応</b>）</div>'
-        '<div style="font-size:0.8rem;color:rgba(255,255,255,0.4);line-height:1.7;margin-bottom:10px">'
-        'アイコンをホーム画面に追加するだけの方法です。<br>'
-        '通知やバッジが不要な場合はこちらでも使えます。'
-        '</div>'
+        '<div style="font-size:0.78rem;color:rgba(255,255,255,0.35);'
+        'text-align:center;padding:4px 0 8px">'
+        '上の手順が難しい場合のみ ↓（通知・バッジは使えません）'
         '</div>',
         unsafe_allow_html=True,
     )
-
     mobileconfig_bytes = _build_mobileconfig()
     st.download_button(
-        label="📥 プロファイルをダウンロード（通知なし）",
+        label="プロファイルでアイコンだけ追加（通知なし）",
         data=mobileconfig_bytes,
         file_name="danran.mobileconfig",
         mime="application/x-apple-aspen-config",
@@ -1476,8 +1492,8 @@ def show_install_page() -> None:
     )
 
     st.markdown(
-        '<div style="font-size:0.75rem;color:rgba(255,255,255,0.25);text-align:center;'
-        'margin-top:12px">iOS 16.4 以上 / Safari 推奨</div>',
+        '<div style="font-size:0.72rem;color:rgba(255,255,255,0.2);text-align:center;'
+        'margin-top:10px">iOS 16.4 以上 / Safari 推奨</div>',
         unsafe_allow_html=True,
     )
 

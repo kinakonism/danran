@@ -1677,49 +1677,11 @@
   });
 
   /* ════════════════════════════════════════
-   *  ?install=1 → mobileconfig を自動ダウンロード
-   *  コンポーネントは window.parent をナビゲートできるため
-   *  Blob URL を生成して iOS に「プロファイルをインストール」を促す
-   * ════════════════════════════════════════ */
-  function injectAutoInstall() {
-    try {
-      var pWin = window.parent;
-      var pUrl = new URL(pWin.location.href);
-      if (pUrl.searchParams.get('install') !== '1') return;
-      if (pWin._danranAutoInstallDone) return;
-      pWin._danranAutoInstallDone = true;
-
-      // ① Streamlit の download ボタンを探してクリック（リトライあり）
-      //    Python が show_install_page() でレンダリングした download button を
-      //    コンポーネントが同一オリジンの親ドキュメントから直接クリックする。
-      //    iOS Safari は正規の HTTP レスポンス（Streamlit 内部エンドポイント）経由なので
-      //    「プロファイルがダウンロードされました」が表示される。
-      function tryClickDownload(retries) {
-        try {
-          var btn = pWin.document.querySelector('[data-testid="stDownloadButton"] button');
-          if (btn) { btn.click(); return true; }
-        } catch (e) {}
-        if (retries > 0) {
-          setTimeout(function () { tryClickDownload(retries - 1); }, 500);
-        }
-        return false;
-      }
-      // 最大 3 秒間（0ms, 500ms, 1000ms, 1500ms, 2000ms, 2500ms, 3000ms）リトライ
-      tryClickDownload(6);
-    } catch (e) {}
-  }
-
-  /* ════════════════════════════════════════
    *  起動
    * ════════════════════════════════════════ */
   stReady();
   stSetHeight();
   setupObs();   // scan() → readConfig() → injectCameraUI() を試みる
-
-  // ?install=1: 300ms 後に自動インストール試行（その後 500ms ごとにリトライ）
-  // ★ _lp_detector が show_install_page() より先にレンダリングされるため、
-  //    download ボタンが DOM に現れるまで tryClickDownload() がリトライする。
-  setTimeout(injectAutoInstall, 300);
 
   // 起動後 60 秒間毎秒チェック（Manage app 除去 + stBottom 修正 + ハンドラ再付与）
   // ヘッダー自体は Python が render するため再注入不要。

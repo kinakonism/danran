@@ -2,6 +2,8 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
 <style>body{margin:0;padding:0;background:transparent;overflow:hidden}</style>
 <script>
 (function () {
@@ -26,17 +28,28 @@
   var ME_AVATAR   = '';
   var ACTIVE_ROOM = '';
   var SHOW_ROOMS  = false;
+  var VIEW        = '';     // 現在の画面（'chat'|'profile'|'room_edit'|...）
   var _embedFixed = false;  // embed=true 除去リダイレクトを1回のみ実行
+
+  // Web Push
+  var VAPID_PUB_KEY  = '';  // data-vapid-pub から取得
+  var ME_UID         = '';  // data-uid から取得（購読保存時に使う）
+  var _swRegistered  = false; // 二重登録防止
 
   /* ════════════════════════════════════════
    *  Streamlit コンポーネントプロトコル
-   *  setValue は一切送らない → Python rerun なし
+   *  setValue はナビゲーションアクション時のみ送る → Python が URL params を更新
    * ════════════════════════════════════════ */
   function stPost(type, data) {
-    window.parent.postMessage(Object.assign({ type: type }, data || {}), '*');
+    // isStreamlitMessage: true が必須（ないと Streamlit が全メッセージを無視する）
+    window.parent.postMessage(
+      Object.assign({ type: type, isStreamlitMessage: true }, data || {}), '*'
+    );
   }
   function stReady()     { stPost('streamlit:componentReady', { apiVersion: 1 }); }
   function stSetHeight() { stPost('streamlit:setFrameHeight', { height: 0 }); }
+  // ＜/✕ ボタン → Python にナビゲーション指示（sandbox で location.href が使えないため）
+  function stSetValue(val) { stPost('streamlit:setComponentValue', { value: val, dataType: 'json' }); }
 
   /* ════════════════════════════════════════
    *  DOM config 要素から設定を読み込む
@@ -56,27 +69,39 @@
       var saveSess    = cfg.getAttribute('data-sess')       || '';
       var clearSess   = cfg.getAttribute('data-clear')      === 'true';
       var newShowRooms= cfg.getAttribute('data-show-rooms') === 'true';
+      var newView     = cfg.getAttribute('data-view')       || '';
+      var newVapidPub = cfg.getAttribute('data-vapid-pub')  || '';
+      var newUid      = cfg.getAttribute('data-uid')        || '';
 
-      if (newSbUrl) SB_URL = newSbUrl;
-      if (newSbKey) SB_KEY = newSbKey;
+      if (newSbUrl)    SB_URL      = newSbUrl;
+      if (newSbKey)    SB_KEY      = newSbKey;
+      if (newVapidPub) VAPID_PUB_KEY = newVapidPub;
+      if (newUid)      ME_UID      = newUid;
 
       // セッション管理
       handleSession(saveSess, clearSess);
 
-      // ユーザー / ルーム / show_rooms が変わったら UI を更新
-      var changed = (newUser !== ME || newRoom !== ACTIVE_ROOM || newShowRooms !== SHOW_ROOMS);
+      // 各状態が変わったら UI を更新
+      var isEditView = (newView === 'profile' || newView === 'room_edit' || newView === 'notifications');
+      var changed = (newUser !== ME || newRoom !== ACTIVE_ROOM || newShowRooms !== SHOW_ROOMS || newView !== VIEW);
       ME          = newUser;
       ME_AVATAR   = newAvatar;
       ACTIVE_ROOM = newRoom;
       SHOW_ROOMS  = newShowRooms;
+      VIEW        = newView;
 
       if (changed) {
-        if (SHOW_ROOMS) {
+        if (isEditView) {
+          // プロフィール・ルーム編集画面：専用ヘッダーを注入、カメラ非表示
+          removeCameraUI();
+          injectEditHeader(newView);
+        } else if (SHOW_ROOMS) {
           removeCameraUI();          // ルームパネル中はカメラ非表示
+          injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
         } else {
           injectCameraUI(ACTIVE_ROOM, ME_AVATAR);
+          injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
         }
-        injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
       }
       return true;
     } catch (e) { return false; }
@@ -87,13 +112,16 @@
    * ════════════════════════════════════════ */
   function handleSession(saveSession, clearSession) {
     try {
-      // ① embed=true を最優先で除去（ログイン状態に関わらず・1回のみ）
+      // ① embed=true を除去（Python 側が rerun で正式に消すが、URL 表示だけでも先に直す）
+      //    location.replace() は Streamlit の iframe sandbox に阻まれるため
+      //    history.replaceState() でアドレスバーのみ書き換える（ナビゲーションなし）
       var pUrl = new URL(window.parent.location.href);
       if (pUrl.searchParams.has('embed') && !_embedFixed) {
         _embedFixed = true;
         pUrl.searchParams.delete('embed');
-        window.parent.location.replace(pUrl.toString());
-        return;
+        try { window.parent.history.replaceState(null, '', pUrl.toString()); } catch (e) {}
+        // 書き換え後に pUrl を最新化
+        pUrl = new URL(window.parent.location.href);
       }
       if (clearSession) { localStorage.removeItem(STORAGE_KEY); return; }
       if (saveSession)  { localStorage.setItem(STORAGE_KEY, saveSession); return; }
@@ -340,9 +368,9 @@
     try {
       var pDoc = window.parent.document;
 
-      // ① data-testid 直撃（stBottom が本命）
+      // ① data-testid 直撃
+      //    ※ stBottom / stBottomBlockContainer は除外（chat input を含むため）
       var byTestId = pDoc.querySelectorAll(
-        '[data-testid="stBottom"],[data-testid="stBottomBlockContainer"],' +
         '[data-testid="stDeployButton"],[data-testid="manage-app-button"],' +
         '[data-testid="stActionButton"],[data-testid="stMainMenu"],' +
         '[class*="viewerBadge"],[class*="ViewerBadge"]'
@@ -396,10 +424,475 @@
     } catch (e) {}
   }
 
+  /* ════════════════════════════════════════
+   *  stBottom 強制表示
+   *  Streamlit React が inline style="display:none !important" を毎回設定するため
+   *  scan() 内で上書きし続ける。setAttribute で cssText を置換する方式。
+   * ════════════════════════════════════════ */
+  var _stbObserver = null;
+
+  function fixStBottom() {
+    try {
+      var pDoc = window.parent.document;
+      var el   = pDoc.querySelector('[data-testid="stBottom"]');
+      if (!el) return;
+
+      var cur = el.getAttribute('style') || '';
+      // display:flex かつ position:fixed がすでに設定済みなら何もしない（ループ防止）
+      if (cur.indexOf('display: flex') !== -1 && cur.indexOf('position: fixed') !== -1) return;
+
+      // position:sticky では height:0 になるケースがあるため position:fixed に強制変換
+      // Streamlit dark テーマの背景色でカバー
+      el.setAttribute('style',
+        'display: flex !important; ' +
+        'position: fixed !important; ' +
+        'bottom: 0 !important; ' +
+        'left: 0 !important; ' +
+        'right: 0 !important; ' +
+        'z-index: 100 !important; ' +
+        'background: #0e1117 !important;'
+      );
+
+      // stBottom 自身の style 変更を監視（Streamlit / hideManageApp が書き戻したら即修正）
+      if (!_stbObserver || el._danranObsEl !== el) {
+        if (_stbObserver) _stbObserver.disconnect();
+        _stbObserver = new MutationObserver(function () {
+          requestAnimationFrame(fixStBottom);
+        });
+        _stbObserver.observe(el, { attributes: true, attributeFilter: ['style'] });
+        el._danranObsEl = el;
+      }
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
+   *  自分のアバタータップ → プロフィール画面（LINE 風）
+   *  [data-lp-my-avatar] 要素に click ハンドラを付与。
+   *  タップ（クイック）→ click → stSetValue({action:'go_profile'})
+   *  長押し → タイマーが先に発火してポップアップ表示（click は発火しない）
+   * ════════════════════════════════════════ */
+  /* ════════════════════════════════════════
+   *  ルームリスト（カスタム HTML）のクリックハンドラ
+   *  [data-room-nav]    → go_room（ルームに遷移）
+   *  [data-room-gear]   → go_room_edit（ルーム編集画面へ）
+   *  [data-profile-nav] → go_profile（プロフィール編集へ）
+   * ════════════════════════════════════════ */
+  function attachRoomHandlers() {
+    try {
+      var pDoc = window.parent.document;
+
+      // ルーム名ボタン
+      var navBtns = pDoc.querySelectorAll('[data-room-nav]');
+      for (var i = 0; i < navBtns.length; i++) {
+        (function (el) {
+          if (el._danranRoomNav) return;
+          el._danranRoomNav = true;
+          el.addEventListener('click', function (e) {
+            e.stopPropagation();
+            stSetValue({ action: 'go_room', room_name: el.getAttribute('data-room-name'), ts: Date.now() });
+          });
+        })(navBtns[i]);
+      }
+
+      // 歯車ボタン
+      var gearBtns = pDoc.querySelectorAll('[data-room-gear]');
+      for (var i = 0; i < gearBtns.length; i++) {
+        (function (el) {
+          if (el._danranRoomGear) return;
+          el._danranRoomGear = true;
+          el.addEventListener('click', function (e) {
+            e.stopPropagation();
+            stSetValue({ action: 'go_room_edit', room_id: el.getAttribute('data-room-gear'), ts: Date.now() });
+          });
+        })(gearBtns[i]);
+      }
+
+      // プロフィールカード
+      var profBtns = pDoc.querySelectorAll('[data-profile-nav]');
+      for (var i = 0; i < profBtns.length; i++) {
+        (function (el) {
+          if (el._danranProfileNav) return;
+          el._danranProfileNav = true;
+          el.addEventListener('click', function (e) {
+            e.stopPropagation();
+            stSetValue({ action: 'go_profile', ts: Date.now() });
+          });
+        })(profBtns[i]);
+      }
+    } catch (e) {}
+  }
+
+  function attachMyAvatarClick() {
+    try {
+      var pDoc = window.parent.document;
+      var avatars = pDoc.querySelectorAll('[data-lp-my-avatar]');
+      for (var i = 0; i < avatars.length; i++) {
+        var av = avatars[i];
+        if (!av._danranAvClk) {
+          av._danranAvClk = true;
+          (function (el) {
+            el.addEventListener('click', function (e) {
+              e.stopPropagation();
+              // ts: で一意なタイムスタンプを付与し Python 側が「同じ action を二重処理しない」ようにする
+              stSetValue({ action: 'go_profile', ts: Date.now() });
+            });
+          })(av);
+        }
+      }
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
+   *  Web Push — Service Worker 登録 & 購読
+   *  注: コンポーネントは同一オリジンの iframe 内で動く。
+   *      window.parent を通じて親ウィンドウの serviceWorker / Notification を操作する。
+   *  iOS 16.4+ は PWA（ホーム画面から起動）でのみ Web Push が有効。
+   * ════════════════════════════════════════ */
+
+  // SW 登録・購読ヘルパーを parent window に1回だけ注入する
+  function injectSwSetup() {
+    try {
+      var pWin = window.parent;
+      // UID が変わった場合（別ユーザーがログイン）は再実行
+      if (!VAPID_PUB_KEY || !ME_UID || pWin._danranSwDone === ME_UID) return;
+      if (!('serviceWorker' in pWin.navigator) || !('PushManager' in pWin)) return;
+      pWin._danranSwDone = ME_UID;
+
+      // /sw.js を scope:'/' で登録（run.py が Service-Worker-Allowed:/ ヘッダーを付与）
+      pWin.navigator.serviceWorker.register('/sw.js', { scope: '/' })
+        .then(function (reg) { pWin._danranSwReg = reg; })
+        .catch(function (err) { console.warn('[danran] SW reg failed:', err); });
+
+      // 購読ヘルパー（user gesture の応答として呼ぶ想定）
+      var _vapidKey = VAPID_PUB_KEY;
+      pWin._danranSubscribe = function (uid, onSub) {
+        pWin.Notification.requestPermission().then(function (perm) {
+          if (perm !== 'granted') return;
+          pWin.navigator.serviceWorker.ready.then(function (reg) {
+            // 既存の購読があれば使い回す
+            return reg.pushManager.getSubscription().then(function (existing) {
+              if (existing) return existing;
+              // VAPID public key (URL-safe base64) → Uint8Array
+              var pad = '='.repeat((4 - _vapidKey.length % 4) % 4);
+              var b64 = (_vapidKey + pad).replace(/-/g, '+').replace(/_/g, '/');
+              var raw = atob(b64);
+              var u8  = new Uint8Array(raw.length);
+              for (var i = 0; i < raw.length; i++) u8[i] = raw.charCodeAt(i);
+              return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: u8 });
+            });
+          }).then(function (sub) {
+            onSub(JSON.stringify(sub.toJSON()), uid);
+          }).catch(function (err) { console.warn('[danran] push subscribe failed:', err); });
+        });
+      };
+
+      // 既にユーザーが許可済みなら自動購読（バナータップ不要）
+      if (pWin.Notification.permission === 'granted') {
+        pWin._danranSubscribe(ME_UID, function (subJson, uid) {
+          stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
+        });
+      }
+    } catch (e) {}
+  }
+
+  // 通知許可バナー（ルーム一覧表示中・未許可のときだけ表示）
+  var PUSH_PROMPT_ID = '_danran_push_prompt';
+
+  function injectPushPrompt() {
+    try {
+      var pWin = window.parent;
+      var pDoc = pWin.document;
+      if (!SHOW_ROOMS || !VAPID_PUB_KEY || !ME_UID) return;
+      if (!('Notification' in pWin)) return;
+      if (pWin.Notification.permission !== 'default') return; // 既に許可/拒否済み
+      if (pDoc.getElementById(PUSH_PROMPT_ID)) return;        // 既に表示済み
+
+      var roomList = pDoc.getElementById('_danran_room_list');
+      if (!roomList) return;
+
+      var banner = pDoc.createElement('div');
+      banner.id = PUSH_PROMPT_ID;
+      banner.style.cssText =
+        'display:flex;align-items:center;gap:10px;' +
+        'background:rgba(52,199,89,0.1);' +
+        'border:1px solid rgba(52,199,89,0.28);' +
+        'border-radius:12px;padding:12px 14px;margin-bottom:12px;' +
+        'cursor:pointer;-webkit-tap-highlight-color:transparent;';
+      banner.innerHTML =
+        '<span style="font-size:1.4rem;flex-shrink:0">🔔</span>' +
+        '<div style="flex:1">' +
+          '<div style="font-size:0.88rem;font-weight:600;color:#fff">通知を有効にする</div>' +
+          '<div style="font-size:0.75rem;color:rgba(255,255,255,0.5);margin-top:2px">' +
+            '新着メッセージを iPhone に通知' +
+          '</div>' +
+        '</div>' +
+        '<span style="color:rgba(255,255,255,0.25);font-size:1.1rem">›</span>';
+
+      // バナータップ → アプリ内の通知設定画面へ遷移
+      banner.addEventListener('click', function () {
+        stSetValue({ action: 'go_notifications', ts: Date.now() });
+      });
+
+      // roomList の直前に挿入（Streamlit が room_list を再描画しても banner は残る）
+      roomList.parentNode.insertBefore(banner, roomList);
+    } catch (e) {}
+  }
+
+  // iOS ホーム画面追加の手順シートを表示（Safari ブラウザ内からバナーをタップしたとき）
+  function _danranShowInstallSheet() {
+    try {
+      var pWin = window.parent;
+      var pDoc = pWin.document;
+      var SHEET_ID = '_danran_install_sheet';
+      if (pDoc.getElementById(SHEET_ID)) return;
+      var sheet = pDoc.createElement('div');
+      sheet.id = SHEET_ID;
+      sheet.style.cssText =
+        'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:99999;' +
+        'display:flex;flex-direction:column;align-items:center;justify-content:flex-end;';
+      sheet.innerHTML =
+        '<div style="background:#1c1c1e;border-radius:20px 20px 0 0;width:100%;max-width:440px;' +
+        'padding:22px 20px 36px;color:#fff">' +
+          '<div style="font-size:1.05rem;font-weight:700;text-align:center;margin-bottom:6px">' +
+            '📲 ホーム画面に追加して通知を有効化' +
+          '</div>' +
+          '<div style="font-size:0.78rem;color:rgba(255,255,255,0.45);text-align:center;margin-bottom:18px">' +
+            '通知は PWA (ホーム画面アプリ) からのみ受け取れます' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px">' +
+            '<div style="display:flex;align-items:center;gap:12px">' +
+              '<div style="background:rgba(255,255,255,0.08);border-radius:50%;width:32px;height:32px;' +
+              'display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1rem">1</div>' +
+              '<div style="font-size:0.88rem">画面下の <strong style="color:#0af">共有 ⬆</strong> をタップ</div>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:12px">' +
+              '<div style="background:rgba(255,255,255,0.08);border-radius:50%;width:32px;height:32px;' +
+              'display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1rem">2</div>' +
+              '<div style="font-size:0.88rem"><strong style="color:#0af">「ホーム画面に追加」</strong> をタップ</div>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:12px">' +
+              '<div style="background:rgba(255,255,255,0.08);border-radius:50%;width:32px;height:32px;' +
+              'display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1rem">3</div>' +
+              '<div style="font-size:0.88rem">右上の <strong style="color:#0af">「追加」</strong> をタップ</div>' +
+            '</div>' +
+          '</div>' +
+          '<button id="_danran_sheet_close" style="width:100%;padding:13px;border:none;border-radius:12px;' +
+          'background:rgba(255,255,255,0.1);color:#fff;font-size:0.92rem;cursor:pointer">閉じる</button>' +
+        '</div>';
+      pDoc.body.appendChild(sheet);
+      sheet.addEventListener('click', function (e) {
+        if (e.target === sheet || e.target.id === '_danran_sheet_close') sheet.remove();
+      });
+    } catch (e) {}
+  }
+
+  // Python 側が描画した #_danran_push_banner のクリックイベントを付与
+  function attachPushBannerClick() {
+    try {
+      var pWin = window.parent;
+      var pDoc = pWin.document;
+      var btn = pDoc.getElementById('_danran_push_banner');
+      if (!btn || btn._danranPushAttached) return;
+      btn._danranPushAttached = true;
+      btn.addEventListener('click', function () {
+        var ua = pWin.navigator.userAgent;
+        var isIos = /iphone|ipad|ipod/i.test(ua);
+        var isStandalone = (pWin.matchMedia('(display-mode: standalone)').matches)
+                         || (('standalone' in pWin.navigator) && pWin.navigator.standalone);
+
+        // ── iOS Safari ブラウザ（非 PWA）: まずホーム画面追加を促す ──
+        if (isIos && !isStandalone) {
+          _danranShowInstallSheet();
+          return;
+        }
+
+        // ── Notification API 未サポート（非 iOS の非対応環境）──
+        if (!('Notification' in pWin)) return;
+
+        // ── 拒否済み（PWA 内）→ iOS 通知設定画面へ遷移 ──
+        if (pWin.Notification.permission === 'denied') {
+          try { pWin.location.href = 'App-Prefs:root=NOTIFICATIONS'; } catch (e) {}
+          return;
+        }
+
+        // ── 未許可（PWA 内）→ requestPermission → 購読 ──
+        if (!pWin._danranSubscribe || !ME_UID) return;
+        pWin._danranSubscribe(ME_UID, function (subJson, uid) {
+          stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
+          btn.style.opacity = '0.4';
+          btn.style.pointerEvents = 'none';
+        });
+      });
+    } catch (e) {}
+  }
+
+  // Android: beforeinstallprompt をキャプチャして追加バナーを表示
+  // iOS は Apple の制限により URL から自動インストール不可（ユーザー操作必須）
+  function setupInstallPrompt() {
+    try {
+      var pWin = window.parent;
+      var pDoc = pWin.document;
+      if (pWin._danranInstallSetup) return;
+      pWin._danranInstallSetup = true;
+      // インストール済み判定
+      var isStandalone = (pWin.matchMedia('(display-mode: standalone)').matches)
+                       || (('standalone' in pWin.navigator) && pWin.navigator.standalone);
+      if (isStandalone) return;
+      pWin.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        pWin._danranInstallEvent = e;
+        // Android 用インストールバナーを注入
+        if (pDoc.getElementById('_danran_android_install')) return;
+        var bar = pDoc.createElement('div');
+        bar.id = '_danran_android_install';
+        bar.style.cssText =
+          'position:fixed;bottom:env(safe-area-inset-bottom,0);left:0;right:0;' +
+          'background:#1c1c1e;border-top:1px solid rgba(255,255,255,0.1);' +
+          'display:flex;align-items:center;gap:10px;padding:12px 16px;z-index:9998;';
+        bar.innerHTML =
+          '<span style="font-size:1.4rem">🏠</span>' +
+          '<span style="flex:1;font-size:0.85rem;color:#fff">danran をホーム画面に追加</span>' +
+          '<button id="_danran_install_btn" style="background:#0a84ff;border:none;border-radius:8px;' +
+          'color:#fff;padding:8px 16px;font-size:0.85rem;font-weight:600;cursor:pointer">追加</button>' +
+          '<button id="_danran_install_dismiss" style="background:none;border:none;color:rgba(255,255,255,0.4);' +
+          'font-size:1.2rem;cursor:pointer;padding:4px 8px">✕</button>';
+        pDoc.body.appendChild(bar);
+        pDoc.getElementById('_danran_install_btn').addEventListener('click', function () {
+          if (!pWin._danranInstallEvent) return;
+          pWin._danranInstallEvent.prompt();
+          pWin._danranInstallEvent.userChoice.then(function (r) {
+            if (r.outcome === 'accepted') bar.remove();
+            pWin._danranInstallEvent = null;
+          });
+        });
+        pDoc.getElementById('_danran_install_dismiss').addEventListener('click', function () {
+          bar.remove();
+        });
+      });
+      pWin.addEventListener('appinstalled', function () {
+        var b = pDoc.getElementById('_danran_android_install');
+        if (b) b.remove();
+      });
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
+   *  通知設定画面の UI を #_danran_notif_ui に注入
+   *  VIEW === 'notifications' のときだけ実行
+   * ════════════════════════════════════════ */
+  function injectNotifSettings() {
+    if (VIEW !== 'notifications') return;
+    try {
+      var pWin = window.parent;
+      var pDoc = pWin.document;
+      var container = pDoc.getElementById('_danran_notif_ui');
+      if (!container || container._danranNotifDone) return;
+      container._danranNotifDone = true;
+
+      var perm = ('Notification' in pWin) ? pWin.Notification.permission : 'unsupported';
+      var html = '';
+
+      if (perm === 'granted') {
+        // ── 許可済み ──
+        html =
+          '<div style="background:rgba(52,199,89,0.12);border:1px solid rgba(52,199,89,0.3);' +
+          'border-radius:14px;padding:16px;margin-bottom:16px">' +
+            '<div style="font-size:1.1rem;font-weight:700;color:#34c759;margin-bottom:4px">✅ 通知が有効です</div>' +
+            '<div style="font-size:0.82rem;color:rgba(255,255,255,0.6)">新着メッセージが届いたときに通知が送られます。</div>' +
+          '</div>';
+
+        // まだ DB に購読がなければ自動購読
+        if (pWin._danranSubscribe && ME_UID) {
+          pWin._danranSubscribe(ME_UID, function (subJson, uid) {
+            stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
+          });
+        }
+
+      } else if (perm === 'default') {
+        // ── 未設定：許可ボタンを表示 ──
+        html =
+          '<div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);' +
+          'border-radius:14px;padding:16px;margin-bottom:16px">' +
+            '<div style="font-size:0.95rem;font-weight:600;color:#fff;margin-bottom:6px">通知は未設定です</div>' +
+            '<div style="font-size:0.82rem;color:rgba(255,255,255,0.55);margin-bottom:14px">' +
+              'ボタンを押すと iOS の通知許可ダイアログが表示されます。' +
+            '</div>' +
+            '<button data-notif-enable="true" ' +
+            'style="width:100%;padding:12px;background:#34c759;border:none;border-radius:10px;' +
+            'color:#fff;font-size:1rem;font-weight:700;cursor:pointer;' +
+            '-webkit-tap-highlight-color:transparent">🔔 通知を有効にする</button>' +
+          '</div>';
+
+      } else if (perm === 'denied') {
+        // ── 拒否済み：設定アプリへの案内 ──
+        html =
+          '<div style="background:rgba(255,59,48,0.1);border:1px solid rgba(255,59,48,0.25);' +
+          'border-radius:14px;padding:16px;margin-bottom:16px">' +
+            '<div style="font-size:0.95rem;font-weight:600;color:#ff3b30;margin-bottom:6px">🚫 通知がブロックされています</div>' +
+            '<div style="font-size:0.82rem;color:rgba(255,255,255,0.65);line-height:1.65;margin-bottom:14px">' +
+              'iPhone の設定から手動で許可してください：<br><br>' +
+              '<b style="color:#fff">設定 → アプリ → danran → 通知</b><br>' +
+              '「通知を許可」をオンにする' +
+            '</div>' +
+            '<button data-notif-open-settings="true" ' +
+            'style="width:100%;padding:12px;background:rgba(255,255,255,0.1);' +
+            'border:1px solid rgba(255,255,255,0.2);border-radius:10px;' +
+            'color:#fff;font-size:0.95rem;font-weight:600;cursor:pointer;' +
+            '-webkit-tap-highlight-color:transparent">⚙️ 設定アプリを開く</button>' +
+          '</div>';
+
+      } else {
+        // ── 非対応（Safari ブラウザタブ等） ──
+        html =
+          '<div style="background:rgba(255,159,10,0.1);border:1px solid rgba(255,159,10,0.25);' +
+          'border-radius:14px;padding:16px;margin-bottom:16px">' +
+            '<div style="font-size:0.95rem;font-weight:600;color:#ff9f0a;margin-bottom:6px">⚠️ ブラウザタブでは通知できません</div>' +
+            '<div style="font-size:0.82rem;color:rgba(255,255,255,0.65);line-height:1.65">' +
+              'iOS の Web Push は <b style="color:#fff">ホーム画面に追加</b> した<br>' +
+              'アプリからのみ利用できます（iOS 16.4以上）。<br><br>' +
+              'Safari で開いて 共有ボタン →「ホーム画面に追加」をしてください。' +
+            '</div>' +
+          '</div>';
+      }
+
+      container.innerHTML = html;
+
+      // 「通知を有効にする」ボタンのクリックハンドラ
+      var enableBtn = container.querySelector('[data-notif-enable]');
+      if (enableBtn && pWin._danranSubscribe) {
+        enableBtn.addEventListener('click', function () {
+          pWin._danranSubscribe(ME_UID, function (subJson, uid) {
+            stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
+            // ステータス表示を更新
+            container._danranNotifDone = false;
+            injectNotifSettings();
+          });
+        });
+      }
+
+      // 「設定アプリを開く」ボタン
+      var settingsBtn = container.querySelector('[data-notif-open-settings]');
+      if (settingsBtn) {
+        settingsBtn.addEventListener('click', function () {
+          // iOS は app-settings: スキームで設定アプリを開ける
+          pWin.location.href = 'app-settings:';
+        });
+      }
+    } catch (e) {}
+  }
+
   function scan() {
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
     hideManageApp();
+    fixStBottom();  // stBottom の display:none を強制解除
+    attachMyAvatarClick();  // 自分のアバタータップ → プロフィール画面
+    attachRoomHandlers();   // ルームリストのカスタムHTMLボタンにイベントを付与
+    injectSwSetup();        // Service Worker 登録（1回のみ）
+    injectPushPrompt();     // 通知許可バナー（ルーム一覧・未許可時のみ・JSフォールバック）
+    injectNotifSettings();  // 通知設定画面の UI（VIEW=notifications のときのみ）
+    attachPushBannerClick(); // Python 描画バナーのクリックイベント付与
+    setupInstallPrompt();   // Android: beforeinstallprompt キャプチャ（iOS は不可）
     // ヘッダーが消えていたら強制再注入
     try {
       if (ME && ACTIVE_ROOM && !window.parent.document.getElementById(HDR_ID)) {
@@ -424,6 +917,71 @@
     scan();
     setTimeout(scan, 400);
     setTimeout(scan, 1200);
+  }
+
+  /* ════════════════════════════════════════
+   *  プロフィール・ルーム編集画面専用の固定ヘッダー
+   *  view='profile' → 'プロフィール編集'
+   *  view='room_edit' → 'ルーム編集'
+   *  ＜ ボタン → go_back（ルームリストに戻る）
+   * ════════════════════════════════════════ */
+  function injectEditHeader(view) {
+    removeHeader();
+    try {
+      var pDoc  = window.parent.document;
+      var title = view === 'profile'       ? 'プロフィール編集'
+                : view === 'room_edit'     ? 'ルーム編集'
+                : view === 'notifications' ? '🔔 通知設定'
+                :                           '設定';
+
+      // ── CSS（チャットヘッダーと同スタイル） ──
+      var css = pDoc.createElement('style');
+      css.id  = HDR_CSS_ID;
+      css.textContent =
+        '#' + HDR_ID + '{' +
+          'position:fixed;top:0;left:0;right:0;height:52px;z-index:9990;' +
+          'background:rgba(28,28,30,0.97);' +
+          'border-bottom:1px solid rgba(255,255,255,0.1);' +
+          'display:flex;align-items:center;padding:0 4px;gap:0;' +
+          'box-shadow:0 1px 10px rgba(0,0,0,0.5);' +
+          'backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);' +
+          'user-select:none;-webkit-user-select:none;' +
+        '}' +
+        '[data-testid="stMainBlockContainer"]{padding-top:62px!important;}';
+      (pDoc.head || pDoc.body).appendChild(css);
+
+      // ── ヘッダー本体 ──
+      var hdr = pDoc.createElement('div');
+      hdr.id  = HDR_ID;
+
+      // ＜ ボタン（go_back → Python がルームリストに戻す）
+      var backBtn = pDoc.createElement('button');
+      backBtn.textContent = '＜';
+      backBtn.style.cssText =
+        'background:none;border:none;color:#e0e0e0;font-size:1.25rem;' +
+        'cursor:pointer;padding:8px 12px;border-radius:10px;line-height:1;' +
+        'flex-shrink:0;min-width:44px;text-align:center;' +
+        '-webkit-tap-highlight-color:transparent;';
+      backBtn.addEventListener('click', function () {
+        stSetValue({ action: 'go_back', ts: Date.now() });
+      });
+      hdr.appendChild(backBtn);
+
+      // タイトル（中央寄せ）
+      var titleEl = pDoc.createElement('div');
+      titleEl.style.cssText =
+        'flex:1;text-align:center;font-size:1rem;font-weight:700;color:#fff;' +
+        'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px;';
+      titleEl.textContent = title;
+      hdr.appendChild(titleEl);
+
+      // 右スペーサー（タイトルを完全中央に）
+      var spacer = pDoc.createElement('div');
+      spacer.style.cssText = 'flex-shrink:0;min-width:44px;';
+      hdr.appendChild(spacer);
+
+      pDoc.body.appendChild(hdr);
+    } catch (e) {}
   }
 
   /* ════════════════════════════════════════
@@ -459,7 +1017,7 @@
           'user-select:none;-webkit-user-select:none;' +
         '}' +
         // コンテンツをヘッダー分だけ押し下げる
-        '[data-testid="stMainBlockContainer"]{padding-top:62px!important;}';
+        '[data-testid="stMainBlockContainer"]{padding-top:62px!important;padding-bottom:160px!important;}';
       (pDoc.head || pDoc.body).appendChild(css);
 
       // ── ヘッダー本体 ──
@@ -475,15 +1033,10 @@
         'flex-shrink:0;min-width:44px;text-align:center;' +
         '-webkit-tap-highlight-color:transparent;';
       backBtn.addEventListener('click', function () {
-        try {
-          var pUrl = new URL(window.parent.location.href);
-          if (showRooms) {
-            pUrl.searchParams.delete('sr');   // ✕ → chat に戻る
-          } else {
-            pUrl.searchParams.set('sr', '1'); // ＜ → ルームパネルへ
-          }
-          window.parent.location.href = pUrl.toString();
-        } catch (e) {}
+        // window.parent.location.href は iframe sandbox でブロックされるため
+        // Streamlit の setComponentValue 経由で Python にナビゲーション指示を送る
+        // ts: で一意タイムスタンプを付与し Python 側が同じ action を二重処理しないようにする
+        stSetValue({ action: showRooms ? 'go_chat' : 'go_rooms', ts: Date.now() });
       });
       hdr.appendChild(backBtn);
 
@@ -664,6 +1217,7 @@
     var _cnt = 0;
     var _iv = setInterval(function () {
       hideManageApp();
+      fixStBottom();   // hideManageApp が stBottom を隠した場合に即修正
       if (++_cnt >= 30) clearInterval(_iv);
     }, 1000);
   })();

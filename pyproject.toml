@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
     "bcrypt>=5.0.0",
+    "pywebpush>=2.3.0",
     "streamlit>=1.57.0",
     "supabase>=2.30.0",
 ]

@@ -6,6 +6,32 @@
 <meta http-equiv="Pragma" content="no-cache">
 <style>body{margin:0;padding:0;background:transparent;overflow:hidden}</style>
 <script>
+// ── 外側シェル（Streamlit Cloud ラッパー）にバッジ非表示 CSS を即時注入 ──
+// IIFE の外で最速実行することで、Streamlit が React バッジを描画する前に
+// display:none を仕掛けておく。SW 未活性（初回アクセス等）のフォールバック。
+(function () {
+  try {
+    // コンポーネント(window) → app iframe(parent) → 外側シェル(parent.parent)
+    var ow = (window.parent && window.parent !== window)
+      ? ((window.parent.parent && window.parent.parent !== window.parent)
+        ? window.parent.parent : window.parent)
+      : null;
+    if (!ow) return;
+    var od = ow.document;
+    if (od.getElementById('_danran_nobadge')) return;  // 二重注入防止
+    var s = od.createElement('style');
+    s.id = '_danran_nobadge';
+    s.textContent =
+      '[class*="viewerBadge"]{display:none!important}' +
+      '[class*="hostedWith"]{display:none!important}' +
+      '[class*="HostedWith"]{display:none!important}' +
+      '[class*="createdBy"]{display:none!important}' +
+      '[class*="CreatedBy"]{display:none!important}' +
+      'a[href*="streamlit.io"]{display:none!important}';
+    (od.head || od.documentElement).appendChild(s);
+  } catch (e) {}
+})();
+
 (function () {
   'use strict';
 

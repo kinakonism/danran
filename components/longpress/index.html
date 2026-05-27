@@ -107,27 +107,48 @@
 
   /* ════════════════════════════════════════
    *  セッション管理
+   *
+   *  【修正経緯】
+   *  Streamlit Cloud は 3 層構造:
+   *    外側シェル (/)       ← st.query_params はここの URL を読む
+   *    └ app iframe (/~/+/) ← window.parent
+   *        └ component     ← window (ここ)
+   *
+   *  以前は window.parent.location.href (app iframe) を書き換えていたため
+   *  Python の st.query_params.get("s") が外側 URL を参照しており
+   *  セッションが復元されなかった。
+   *  → window.parent.parent (外側シェル) を書き換えることで修正。
    * ════════════════════════════════════════ */
   function handleSession(saveSession, clearSession) {
     try {
-      // ① embed=true を除去（Python 側が rerun で正式に消すが、URL 表示だけでも先に直す）
-      //    location.replace() は Streamlit の iframe sandbox に阻まれるため
-      //    history.replaceState() でアドレスバーのみ書き換える（ナビゲーションなし）
-      var pUrl = new URL(window.parent.location.href);
+      // 外側シェルを基準にする
+      // Streamlit Cloud: window.parent.parent = 外側 (/)
+      // ローカル開発:    window.parent.parent === window.parent (同じ) → 従来通り
+      var outerWin = (window.parent.parent && window.parent.parent !== window.parent)
+                     ? window.parent.parent
+                     : window.parent;
+
+      // ① embed=true を外側 URL から除去（アドレスバー表示のみ補正）
+      var pUrl = new URL(outerWin.location.href);
       if (pUrl.searchParams.has('embed') && !_embedFixed) {
         _embedFixed = true;
         pUrl.searchParams.delete('embed');
-        try { window.parent.history.replaceState(null, '', pUrl.toString()); } catch (e) {}
-        // 書き換え後に pUrl を最新化
-        pUrl = new URL(window.parent.location.href);
+        try { outerWin.history.replaceState(null, '', pUrl.toString()); } catch (e) {}
+        pUrl = new URL(outerWin.location.href);
       }
+
       if (clearSession) { localStorage.removeItem(STORAGE_KEY); return; }
       if (saveSession)  { localStorage.setItem(STORAGE_KEY, saveSession); return; }
-      // ② 未ログイン: localStorage → ?s= に復元
-      //    ただし ?install=1 の場合はリダイレクト不要（インストールページはログイン不問）
+
+      // ② 未ログイン: localStorage → 外側シェルに ?s= を付けてリダイレクト
+      //    st.query_params は外側 URL を読むためここを書き換えることで Python に届く
+      //    ?install=1 の場合はリダイレクト不要（インストールページはログイン不問）
       if (!pUrl.searchParams.get('s') && pUrl.searchParams.get('install') !== '1') {
         var lsSid = localStorage.getItem(STORAGE_KEY);
-        if (lsSid) { pUrl.searchParams.set('s', lsSid); window.parent.location.href = pUrl.toString(); }
+        if (lsSid) {
+          pUrl.searchParams.set('s', lsSid);
+          outerWin.location.href = pUrl.toString();
+        }
       }
     } catch (e) {}
   }

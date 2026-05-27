@@ -635,6 +635,19 @@
         })(profBtns[i]);
       }
 
+      // 新規ルーム作成ボタン（data-room-create）
+      var createBtns = pDoc.querySelectorAll('[data-room-create]');
+      for (var i = 0; i < createBtns.length; i++) {
+        (function (el) {
+          if (el._danranRoomCreate) return;
+          el._danranRoomCreate = true;
+          el.addEventListener('click', function (e) {
+            e.stopPropagation();
+            stSetValue({ action: 'go_room_create', ts: Date.now() });
+          });
+        })(createBtns[i]);
+      }
+
       // ログアウトボタン（data-logout）
       var logoutBtns = pDoc.querySelectorAll('[data-logout]');
       for (var i = 0; i < logoutBtns.length; i++) {

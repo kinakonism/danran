@@ -300,6 +300,13 @@ def update_room(room_id: str, old_name: str, new_name: str, icon: str) -> None:
     except Exception as e:
         raise RuntimeError(str(e))
 
+def create_room(name: str, icon: str) -> dict:
+    """新しいルームを作成して返す。"""
+    new_id = str(uuid.uuid4())
+    result = supabase.table("rooms").insert({"id": new_id, "name": name, "icon": icon}).execute()
+    invalidate_rooms_cache()
+    return result.data[0] if result.data else {}
+
 def delete_room(room_id: str, room_name: str) -> None:
     """ルームと、そのメッセージ・リアクション・既読情報をすべて削除。"""
     try:
@@ -427,7 +434,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v24",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v25",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -989,6 +996,99 @@ def show_room_edit(room: dict) -> None:
                 st.rerun()
 
 # ─────────────────────────────────────
+# 画面⑤-b ルーム作成（room_edit から削除機能を除いたもの）
+# ─────────────────────────────────────
+_ROOM_CREATE_WIDGET_KEYS = ("room_create_atype", "room_create_emoji", "room_create_photo", "room_create_name")
+
+def _reset_room_create_widgets() -> None:
+    for k in _ROOM_CREATE_WIDGET_KEYS:
+        st.session_state.pop(k, None)
+
+def show_room_create() -> None:
+    import time as _time
+
+    _, col, _ = st.columns([1, 3, 1])
+    with col:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("## ✨ 新しいルーム")
+        st.divider()
+
+        # ── ルーム名 ──
+        st.markdown("**ルーム名**")
+        new_name = (
+            st.text_input("", placeholder="例：おでかけ計画", max_chars=30,
+                          label_visibility="collapsed", key="room_create_name")
+            or ""
+        ).strip()
+
+        # ── アイコン ──
+        st.divider()
+        st.markdown("**アイコン**")
+        atype = st.radio("", ["絵文字", "写真"], horizontal=True,
+                         label_visibility="collapsed", key="room_create_atype")
+
+        new_icon: str = "💬"
+        icon_photo = None
+
+        if atype == "絵文字":
+            st.caption("スマホのキーボードから絵文字を選んでね 😊")
+            new_icon = (
+                st.text_input("", value="💬", max_chars=8,
+                              label_visibility="collapsed", key="room_create_emoji")
+                or "💬"
+            )
+            if new_name:
+                st.markdown(f"プレビュー: {new_icon} **{new_name}**")
+        else:
+            icon_photo = st.file_uploader("", type=["jpg", "jpeg", "png", "webp"],
+                                          label_visibility="collapsed", key="room_create_photo")
+            if icon_photo:
+                try:
+                    preview_bytes, _ = _fix_exif(icon_photo)
+                    st.image(preview_bytes, width=80)
+                except Exception:
+                    st.image(icon_photo, width=80)
+                st.caption("このアイコンで作成します")
+
+        st.divider()
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ 作成", type="primary", use_container_width=True, key="room_create_save"):
+                if not new_name:
+                    st.error("ルーム名を入力してください"); return
+                # 同名ルームの重複チェック
+                existing = [r["name"] for r in fetch_rooms()]
+                if new_name in existing:
+                    st.error(f"「{new_name}」はすでに存在します"); return
+                try:
+                    if atype == "写真":
+                        if not icon_photo:
+                            st.error("写真を選択してください"); return
+                        with st.spinner("アップロード中…"):
+                            tmp_id = str(uuid.uuid4())
+                            icon_url = upload_photo(AVATAR_BUCKET, f"room_{tmp_id}", icon_photo)
+                            new_icon = icon_url
+                    with st.spinner("作成中…"):
+                        new_room = create_room(new_name, new_icon)
+                    st.success(f"✅ 「{new_name}」を作成しました！")
+                    _time.sleep(0.6)
+                    # 作成したルームをアクティブにしてチャットへ
+                    st.session_state["active_room"] = new_name
+                    _reset_room_create_widgets()
+                    st.session_state["view"] = "chat"
+                    if "sr" in st.query_params:
+                        del st.query_params["sr"]
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 作成に失敗しました: {e}")
+        with c2:
+            if st.button("← 戻る", use_container_width=True, key="room_create_back"):
+                _reset_room_create_widgets()
+                st.session_state["view"] = "chat"
+                st.query_params["sr"] = "1"
+                st.rerun()
+
+# ─────────────────────────────────────
 # 画面⑥ メインチャット
 # ─────────────────────────────────────
 def show_chat(current_user: dict) -> None:
@@ -1051,7 +1151,17 @@ def show_chat(current_user: dict) -> None:
             )
 
         rows.extend([
-            f'<span style="{_first_sec_label}">チャットルーム</span>',
+            # ラベル + 新規ルーム作成ボタンを横並び
+            '<div style="display:flex;align-items:center;justify-content:space-between;'
+            'padding:6px 4px 6px">',
+            f'<span style="{_first_sec_label};padding:0">チャットルーム</span>',
+            '<button data-room-create="true" '
+            'style="width:30px;height:30px;border-radius:50%;'
+            'background:rgba(255,255,255,0.14);border:none;'
+            'color:#fff;font-size:1.2rem;line-height:1;cursor:pointer;'
+            'display:flex;align-items:center;justify-content:center;'
+            'flex-shrink:0;-webkit-tap-highlight-color:transparent">＋</button>',
+            '</div>',
             # グループカード（iOS の grouped list 風）
             '<div style="background:rgba(255,255,255,0.06);'
             'border:1px solid rgba(255,255,255,0.1);'
@@ -1506,6 +1616,11 @@ if isinstance(_lp_result, dict):
                     st.session_state["editing_room"] = _found[0]
                     st.session_state["view"] = "room_edit"
                     st.rerun()
+        elif _nav == "go_room_create":
+            # ルームリストの + ボタン → ルーム作成画面
+            _reset_room_create_widgets()
+            st.session_state["view"] = "room_create"
+            st.rerun()
         elif _nav == "logout":
             # HTML ログアウトボタン（data-logout）→ JS → stSetValue で通知
             do_logout()
@@ -1557,6 +1672,8 @@ else:
             show_profile(st.session_state["current_user"])
         case "room_edit" if "current_user" in st.session_state:
             show_room_edit(st.session_state.get("editing_room", {}))
+        case "room_create" if "current_user" in st.session_state:
+            show_room_create()
         case "notifications" if "current_user" in st.session_state:
             show_notifications(st.session_state["current_user"])
         case "enter_password":

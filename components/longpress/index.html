@@ -765,43 +765,58 @@
   /* ════════════════════════════════════════
    *  バッジ設定ヘルパー
    *
-   *  【問題】setAppBadge は「トップレベル閲覧コンテキスト」でしか動かない仕様。
-   *    iframe (component / app iframe) から window.top.navigator.setAppBadge() を
-   *    呼んでも NotAllowedError になる（呼び出し元コンテキストがチェックされる）。
+   *  【iOS Permissions Policy の問題】
+   *  Streamlit の <iframe> タグに allow="badging" が含まれないため、
+   *  iframe 内から navigator.setAppBadge() を呼ぶと iOS で拒否される。
+   *  API が navigator に存在していても Promise が reject されるケースがある。
+   *  → 複数の手段を全て並行で試みる（短絡しない）。
    *
-   *  【解決】sw.js の fetch インターセプターがページ初期ロード時に外側シェル HTML へ
-   *    window._danranSetBadge() 関数を注入する。この関数はトップレベルで定義・実行
-   *    されるため navigator.setAppBadge() が有効。
-   *    コンポーネントからは window.top._danranSetBadge(n) 経由で呼ぶ。
+   *  【最も確実な手段: SW への postMessage】
+   *  SW は TopLevel コンテキストのワーカーとして扱われ iframe 権限制限を受けない。
+   *  sw.js に 'message' ハンドラを追加し、バッジ更新を依頼する。
    * ════════════════════════════════════════ */
   function danranSetBadge(n) {
-    // MDN: 同一オリジンの iframe からは navigator.setAppBadge() を直接呼べる。
-    // クロスオリジンの iframe のみ NG。Streamlit コンポーネントは同一オリジンなので OK。
-    // 試す順序:
-    //   1. コンポーネント自身の navigator（最もシンプル・同一オリジン確定）
-    //   2. sw.js fetch インターセプターが外側 HTML に注入したヘルパー関数
-    //   3. window.top.navigator（トップレベルナビゲーター直接参照）
-    var called = false;
+    var count = (typeof n === 'number' && n > 0) ? n : 0;
+    console.log('[danran] danranSetBadge(' + count + ')');
+
+    // 手段 1: コンポーネント自身の navigator（同一オリジン iframe — 動く可能性あり）
     try {
       if ('setAppBadge' in navigator) {
-        (n > 0 ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(function () {});
-        called = true;
+        (count > 0 ? navigator.setAppBadge(count) : navigator.clearAppBadge())
+          .catch(function (e) { console.warn('[danran] badge m1 reject:', e && e.message); });
       }
     } catch (e) {}
-    if (!called) {
-      try {
-        var fn = window.top._danranSetBadge;
-        if (typeof fn === 'function') { fn(n); called = true; }
-      } catch (e) {}
-    }
-    if (!called) {
-      try {
-        var nav = window.top.navigator;
-        if ('setAppBadge' in nav) {
-          (n > 0 ? nav.setAppBadge(n) : nav.clearAppBadge()).catch(function () {});
-        }
-      } catch (e) {}
-    }
+
+    // 手段 2: sw.js fetch インターセプターが外側 HTML に注入したヘルパー関数
+    try {
+      var fn = window.top._danranSetBadge;
+      if (typeof fn === 'function') { fn(count); }
+    } catch (e) {}
+
+    // 手段 3: window.top.navigator 直接参照
+    try {
+      var topNav = window.top.navigator;
+      if (topNav && 'setAppBadge' in topNav) {
+        (count > 0 ? topNav.setAppBadge(count) : topNav.clearAppBadge())
+          .catch(function (e) { console.warn('[danran] badge m3 reject:', e && e.message); });
+      }
+    } catch (e) {}
+
+    // 手段 4: Service Worker への postMessage（最も確実 — SW は iframe 権限制約を受けない）
+    try {
+      var swNav = null;
+      try { if (navigator.serviceWorker)             swNav = navigator.serviceWorker; } catch (ex) {}
+      if (!swNav) try { swNav = window.parent.navigator.serviceWorker; } catch (ex) {}
+      if (!swNav) try { swNav = window.top.navigator.serviceWorker;    } catch (ex) {}
+      if (swNav) {
+        swNav.ready.then(function (reg) {
+          if (reg && reg.active) {
+            reg.active.postMessage({ type: 'danran-set-badge', count: count });
+            console.log('[danran] badge m4 SW postMessage sent, count=' + count);
+          }
+        }).catch(function () {});
+      }
+    } catch (e) {}
   }
   function danranClearBadge() { danranSetBadge(0); }
 
@@ -815,18 +830,21 @@
           if (Array.isArray(lastReads)) {
             lastReads.forEach(function (r) { readMap[r.room_name] = r.read_at; });
           }
+          // 自分以外のメッセージのうち未読のものをカウント
           return sbGet(
             'messages?user_id=neq.' + ME_UID +
             '&select=room_name,created_at&order=created_at.desc&limit=300'
           ).then(function (msgs) {
             if (!Array.isArray(msgs)) return 0;
-            return msgs.filter(function (m) {
+            var cnt = msgs.filter(function (m) {
               var r = readMap[m.room_name]; return !r || m.created_at > r;
             }).length;
+            console.log('[danran] updateAppBadge unread=' + cnt + ' uid=' + ME_UID.slice(0, 8));
+            return cnt;
           });
         })
         .then(function (count) { danranSetBadge(count); })
-        .catch(function () {});
+        .catch(function (e) { console.warn('[danran] updateAppBadge err:', e); });
     } catch (e) {}
   }
 

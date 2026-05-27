@@ -1,6 +1,6 @@
 // danran service worker — push notifications + badge suppression
 // バージョンを上げると古いキャッシュが破棄される
-var SW_VERSION = '1.3.0';
+var SW_VERSION = '1.3.1';
 
 self.addEventListener('install', function (event) {
   self.skipWaiting();
@@ -8,6 +8,24 @@ self.addEventListener('install', function (event) {
 
 self.addEventListener('activate', function (event) {
   event.waitUntil(clients.claim());
+});
+
+// ── クライアント（コンポーネント iframe）からのバッジ設定メッセージ受信 ───────
+// iframe 内から navigator.setAppBadge() を呼ぶと Permissions Policy で拒否される
+// ことがあるため、クライアントが SW に postMessage してバッジ更新を依頼する。
+// SW は TopLevel コンテキストのワーカーとして扱われ API 呼び出しが確実に通る。
+self.addEventListener('message', function (event) {
+  if (!event.data) return;
+  var type = event.data.type;
+  if (type !== 'danran-set-badge' && type !== 'danran-clear-badge') return;
+
+  var count = (type === 'danran-clear-badge') ? 0 : (event.data.count || 0);
+  try {
+    var nav = self.navigator || navigator;
+    if (!('setAppBadge' in nav)) return;
+    (count > 0 ? nav.setAppBadge(count) : nav.clearAppBadge())
+      .catch(function () {});
+  } catch (e) {}
 });
 
 // ── ページ初期ロード時に Streamlit Cloud バッジ非表示 CSS を注入 ──────────

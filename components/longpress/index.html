@@ -775,15 +775,33 @@
    *    コンポーネントからは window.top._danranSetBadge(n) 経由で呼ぶ。
    * ════════════════════════════════════════ */
   function danranSetBadge(n) {
+    // MDN: 同一オリジンの iframe からは navigator.setAppBadge() を直接呼べる。
+    // クロスオリジンの iframe のみ NG。Streamlit コンポーネントは同一オリジンなので OK。
+    // 試す順序:
+    //   1. コンポーネント自身の navigator（最もシンプル・同一オリジン確定）
+    //   2. sw.js fetch インターセプターが外側 HTML に注入したヘルパー関数
+    //   3. window.top.navigator（トップレベルナビゲーター直接参照）
+    var called = false;
     try {
-      var fn = window.top._danranSetBadge;
-      if (typeof fn === 'function') { fn(n); return; }
-      // フォールバック: window.top.navigator が直接使える環境
-      var nav = window.top.navigator;
-      if ('setAppBadge' in nav) {
-        (n > 0 ? nav.setAppBadge(n) : nav.clearAppBadge()).catch(function () {});
+      if ('setAppBadge' in navigator) {
+        (n > 0 ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(function () {});
+        called = true;
       }
     } catch (e) {}
+    if (!called) {
+      try {
+        var fn = window.top._danranSetBadge;
+        if (typeof fn === 'function') { fn(n); called = true; }
+      } catch (e) {}
+    }
+    if (!called) {
+      try {
+        var nav = window.top.navigator;
+        if ('setAppBadge' in nav) {
+          (n > 0 ? nav.setAppBadge(n) : nav.clearAppBadge()).catch(function () {});
+        }
+      } catch (e) {}
+    }
   }
   function danranClearBadge() { danranSetBadge(0); }
 
@@ -1227,14 +1245,24 @@
     }
 
     // ── タッチベース: touchstart で開始点を記録 ─────────────────
+    // 【重要】passive: false が必須
+    //   iOS Safari は touchstart をデフォルトで passive として扱う。
+    //   passive: true のままだと e.preventDefault() が効かず、
+    //   iOS がエッジスワイプをネイティブ「戻る」ジェスチャーとして処理してしまう。
+    //   → Streamlit が ?sr=1 を pushState した履歴が消えてチャット画面に戻る。
+    //   e.preventDefault() を touchstart で呼ぶことで iOS ジェスチャーを遮断する。
     try {
       pDoc.addEventListener('touchstart', function (e) {
         var t = e.touches[0];
-        // 左端 50px 以内から始まったタッチのみ対象
-        _swipeTouchStart = (t.clientX < 50) ? { x: t.clientX, y: t.clientY } : null;
-      }, { capture: true, passive: true });
+        if (t.clientX < 50) {
+          // 左端 50px: iOS ネイティブ戻るジェスチャーを阻止
+          e.preventDefault();
+          _swipeTouchStart = { x: t.clientX, y: t.clientY };
+        } else {
+          _swipeTouchStart = null;
+        }
+      }, { capture: true, passive: false });  // ← passive: false が THE FIX
 
-      // passive: false → e.preventDefault() で合成クリックを抑制できる
       pDoc.addEventListener('touchend', function (e) {
         if (!_swipeTouchStart) return;
         var t  = e.changedTouches[0];
@@ -1242,14 +1270,13 @@
         var dy = Math.abs(t.clientY - _swipeTouchStart.y);
         _swipeTouchStart = null;
         if (dx > 60 && dx > dy) {
-          e.preventDefault();            // 合成クリック（→ ✕ボタン誤タップ）を抑制
+          e.preventDefault();
           pDoc._danranSwipeAt = Date.now();
           execSwipe();
         }
       }, { capture: true, passive: false });
 
-      // ── クリック抑制器（belt + suspenders）──────────────────────
-      // スワイプ後 600ms 以内の click を捕捉フェーズで完全遮断
+      // クリック抑制器: スワイプ後 600ms 以内の click を完全遮断
       pDoc.addEventListener('click', function (e) {
         if (pDoc._danranSwipeAt && Date.now() - pDoc._danranSwipeAt < 600) {
           e.stopImmediatePropagation();

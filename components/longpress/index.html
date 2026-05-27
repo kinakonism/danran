@@ -377,44 +377,38 @@
   function hideManageApp() {
     try {
       // ── A. 外側シェル (window.parent.parent) の管理ボタンを消す ──
-      //    Playwright で確認: A._container_gzau3_1 (badge) と
-      //    DIV._profileContainer_gzau3_53 (manage app) がここにある
+      //    【Playwright 検証結果】
+      //    - A._container_gzau3_1 (badge): position:fixed z:50 (324,798) 66x46
+      //    - DIV._profileContainer_gzau3_53 (manage): position:fixed z:40 (253,798) 80x46
+      //    - elementsFromPoint はクロスフレーム呼び出しで座標系がずれて使えない
+      //    - querySelectorAll で全 fixed 要素を走査する方式に変更
       try {
         var outerWin = window.parent.parent;
-        // ローカル開発や 1 段だけの場合は parent.parent === parent → スキップ
+        // ローカル開発など 1 段のみの場合 parent.parent === parent → スキップ
         if (outerWin && outerWin !== window.parent) {
           var outerDoc = outerWin.document;
           var oW = outerWin.innerWidth;
           var oH = outerWin.innerHeight;
 
-          // 右下コーナー 3 点: 実測で (324,798) と (253,798) にボタンがある
-          var oPts = [
-            [oW - 30, oH - 48],
-            [oW - 80, oH - 48],
-            [oW - 140, oH - 48],
-          ];
-          var oHidden = [];
-          oPts.forEach(function (pt) {
-            try {
-              var elems = outerDoc.elementsFromPoint(pt[0], pt[1]);
-              if (!elems) return;
-              for (var _i = 0; _i < elems.length; _i++) {
-                var _e = elems[_i];
-                if (!_e || !_e.style) continue;
-                if (_e === outerDoc.body || _e === outerDoc.documentElement) continue;
-                if (oHidden.indexOf(_e) >= 0) continue;
-                // Streamlit app iframe（全画面）は絶対に消さない
-                if (_e.tagName === 'IFRAME') continue;
-                // ほぼ全画面サイズのコンテナもスキップ
-                var _r = _e.getBoundingClientRect();
-                if (_r.width > oW * 0.8 || _r.height > oH * 0.8) continue;
-                oHidden.push(_e);
-                _e.style.setProperty('display', 'none', 'important');
-              }
-            } catch (_e2) {}
-          });
+          // 全要素を走査: position:fixed かつ右半分・下半分にある小要素を非表示
+          var oAll = outerDoc.querySelectorAll('*');
+          for (var _oi = 0; _oi < oAll.length; _oi++) {
+            var _oe = oAll[_oi];
+            if (!_oe || !_oe.style) continue;
+            if (_oe.tagName === 'IFRAME' || _oe.tagName === 'SCRIPT' ||
+                _oe.tagName === 'STYLE' || _oe.tagName === 'HTML' || _oe.tagName === 'HEAD') continue;
+            var _ocs = outerWin.getComputedStyle(_oe);
+            if (_ocs.position !== 'fixed') continue;
+            var _or = _oe.getBoundingClientRect();
+            // 大きすぎる要素（全画面コンテナ等）はスキップ
+            if (_or.width > oW * 0.8 || _or.height > oH * 0.8) continue;
+            // 右半分 かつ 下半分 にある要素のみ非表示
+            if (_or.right < oW * 0.3 || _or.bottom < oH * 0.4) continue;
+            if (_or.width < 5 || _or.height < 5) continue;
+            _oe.style.setProperty('display', 'none', 'important');
+          }
 
-          // statuspage.io / streamlitstatus の iframe も外側シェルから消す
+          // statuspage.io / streamlitstatus の iframe も消す
           try {
             var _stIo = outerDoc.querySelectorAll(
               'iframe[src*="statuspage.io"],iframe[src*="streamlitstatus"],iframe[title*="Streamlit Cloud Status"]'
@@ -958,7 +952,8 @@
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
     hideManageApp();
-    fixStBottom();  // stBottom の display:none を強制解除
+    fixStBottom();   // stBottom の display:none を強制解除
+    alignCamBtn();   // 📷 ボタンを stChatInput の垂直中央に追従させる
     attachHdrButtons();     // Python レンダリングヘッダーのクリックハンドラを付与
     attachMyAvatarClick();  // 自分のアバタータップ → プロフィール画面
     attachRoomHandlers();   // ルームリストのカスタムHTMLボタンにイベントを付与
@@ -1155,12 +1150,13 @@
       var pDoc = window.parent.document;
 
       // chat input 用 CSS（左に 📷 スペース確保）
+      // bottom は alignCamBtn() で stChatInput の実際の垂直中央に動的補正する
       var css = pDoc.createElement('style');
       css.id  = CAM_CSS_ID;
       css.textContent =
         '[data-testid="stChatInput"]{padding-left:52px!important;}' +
         '#' + CAM_BTN_ID + '{' +
-        'position:fixed;bottom:10px;left:8px;' +
+        'position:fixed;bottom:14px;left:8px;' +   // 初期値 14px: alignCamBtn() が上書き
         'width:40px;height:40px;' +
         'background:rgba(44,44,46,0.92);' +
         'border:1px solid rgba(255,255,255,0.18);' +
@@ -1192,7 +1188,41 @@
       btn.title       = '写真を送る';
       btn.addEventListener('click', function () { fileInput.click(); });
       pDoc.body.appendChild(btn);
+
+      // 注入直後に垂直位置を補正（DOM が先に描画されている場合）
+      setTimeout(alignCamBtn, 120);
     } catch (err) { console.error('[danran-cam] injectCameraUI:', err); }
+  }
+
+  /* ════════════════════════════════════════
+   *  📷 カメラボタンの垂直位置を stChatInput に合わせる
+   *  stChatInput が存在するとき: ボタンの垂直中央 = stChatInput の垂直中央
+   *  キーボード表示などで stChatInput が動いても scan() で追跡する
+   * ════════════════════════════════════════ */
+  function alignCamBtn() {
+    try {
+      var pDoc = window.parent.document;
+      var pWin = window.parent;
+      var btn = pDoc.getElementById(CAM_BTN_ID);
+      if (!btn) return;
+
+      // stChatInputTextArea > stChatInput > stBottom の順に探す
+      var ref = pDoc.querySelector('[data-testid="stChatInputTextArea"]')
+             || pDoc.querySelector('[data-testid="stChatInput"]')
+             || pDoc.querySelector('[data-testid="stBottom"]');
+      if (!ref) return;
+
+      var rect = ref.getBoundingClientRect();
+      var H    = pWin.innerHeight;
+      var btnH = 40;
+
+      // ref の垂直中央 (viewport 上端から) → bottom 値に変換
+      var centerY  = rect.top + rect.height / 2;
+      var bottomPx = Math.round(H - centerY - btnH / 2);
+
+      // 最低 6px（画面端から落ちないように）
+      btn.style.bottom = Math.max(bottomPx, 6) + 'px';
+    } catch (e) {}
   }
 
   /* ────────────────────────────────────────

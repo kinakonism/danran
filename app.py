@@ -427,7 +427,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v18",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v19",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1497,6 +1497,17 @@ if isinstance(_lp_result, dict):
                     _reset_room_edit_widgets()
                     st.session_state["editing_room"] = _found[0]
                     st.session_state["view"] = "room_edit"
+                    st.rerun()
+        elif _nav == "restore_session":
+            # JS コンポーネントが localStorage からセッションIDを読み取り postMessage で通知
+            # sandbox の allow-top-navigation がないため location.href が使えないための代替手段
+            _sid = _lp_result.get("session_id", "")
+            if _sid and "current_user" not in st.session_state:
+                _user = get_session_user(_sid)
+                if _user:
+                    st.session_state["current_user"] = _user
+                    st.session_state["session_id"]   = _sid
+                    st.session_state.setdefault("view", "chat")
                     st.rerun()
         elif _nav == "save_push_subscription":
             # JS からの Web Push 購読情報を DB に保存（rerun 不要）

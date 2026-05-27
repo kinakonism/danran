@@ -29,7 +29,8 @@
   var ACTIVE_ROOM = '';
   var SHOW_ROOMS  = false;
   var VIEW        = '';     // 現在の画面（'chat'|'profile'|'room_edit'|...）
-  var _embedFixed = false;  // embed=true 除去リダイレクトを1回のみ実行
+  var _embedFixed          = false;  // embed=true 除去リダイレクトを1回のみ実行
+  var _sessionRestoreSent = false;  // restore_session postMessage を1回のみ送る
 
   // Web Push
   var VAPID_PUB_KEY  = '';  // data-vapid-pub から取得
@@ -121,33 +122,36 @@
    * ════════════════════════════════════════ */
   function handleSession(saveSession, clearSession) {
     try {
-      // 外側シェルを基準にする
-      // Streamlit Cloud: window.parent.parent = 外側 (/)
-      // ローカル開発:    window.parent.parent === window.parent (同じ) → 従来通り
-      var outerWin = (window.parent.parent && window.parent.parent !== window.parent)
-                     ? window.parent.parent
-                     : window.parent;
-
       // ① embed=true を外側 URL から除去（アドレスバー表示のみ補正）
-      var pUrl = new URL(outerWin.location.href);
-      if (pUrl.searchParams.has('embed') && !_embedFixed) {
-        _embedFixed = true;
-        pUrl.searchParams.delete('embed');
-        try { outerWin.history.replaceState(null, '', pUrl.toString()); } catch (e) {}
-        pUrl = new URL(outerWin.location.href);
-      }
+      //    outerWin.history.replaceState は sandbox 内でも動作する
+      try {
+        var outerWin = (window.parent.parent && window.parent.parent !== window.parent)
+                       ? window.parent.parent
+                       : window.parent;
+        var pUrl = new URL(outerWin.location.href);
+        if (pUrl.searchParams.has('embed') && !_embedFixed) {
+          _embedFixed = true;
+          pUrl.searchParams.delete('embed');
+          try { outerWin.history.replaceState(null, '', pUrl.toString()); } catch (e) {}
+        }
+      } catch (e) {}
 
       if (clearSession) { localStorage.removeItem(STORAGE_KEY); return; }
       if (saveSession)  { localStorage.setItem(STORAGE_KEY, saveSession); return; }
 
-      // ② 未ログイン: localStorage → 外側シェルに ?s= を付けてリダイレクト
-      //    st.query_params は外側 URL を読むためここを書き換えることで Python に届く
-      //    ?install=1 の場合はリダイレクト不要（インストールページはログイン不問）
-      if (!pUrl.searchParams.get('s') && pUrl.searchParams.get('install') !== '1') {
+      // ② 未ログイン: localStorage のセッションIDを postMessage で Python に送る
+      //
+      //    【理由】Streamlit Cloud の iframe sandbox に allow-top-navigation がないため
+      //    outerWin.location.href への書き込みは SecurityError になる（v18 で確認済み）。
+      //    stSetValue（postMessage）は sandbox でも動作するので Python に restore_session
+      //    アクションとして通知し、Python 側で get_session_user() → st.rerun() で復元する。
+      //
+      //    _sessionRestoreSent フラグで二重送信を防ぐ（scan() が毎秒呼ばれるため必須）。
+      if (!_sessionRestoreSent) {
         var lsSid = localStorage.getItem(STORAGE_KEY);
         if (lsSid) {
-          pUrl.searchParams.set('s', lsSid);
-          outerWin.location.href = pUrl.toString();
+          _sessionRestoreSent = true;
+          stSetValue({ action: 'restore_session', session_id: lsSid, ts: Date.now() });
         }
       }
     } catch (e) {}

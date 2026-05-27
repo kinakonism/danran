@@ -203,14 +203,15 @@
       function outsideHandler(e) {
         if (!pop.contains(e.target)) {
           hidePopup();
-          pDoc.removeEventListener('click',    outsideHandler, true);
-          pDoc.removeEventListener('touchend', outsideHandler, true);
+          pDoc.removeEventListener('click',      outsideHandler, true);
+          pDoc.removeEventListener('touchstart', outsideHandler, true);
         }
       }
+      // 350ms 後に登録：長押し解除の touchend/touchstart を巻き込まないため
       setTimeout(function () {
-        pDoc.addEventListener('click',    outsideHandler, true);
-        pDoc.addEventListener('touchend', outsideHandler, true);
-      }, 120);
+        pDoc.addEventListener('click',      outsideHandler, true);
+        pDoc.addEventListener('touchstart', outsideHandler, true);
+      }, 350);
     } catch (err) { console.error('[danran-lp] showPopup:', err); }
   }
 
@@ -338,6 +339,42 @@
     } catch (err) { console.error('[danran-cam] injectCameraUI:', err); }
   }
 
+  /* ────────────────────────────────────────
+   *  フローティングトースト（親ドキュメントに注入）
+   * ──────────────────────────────────────── */
+  function showToast(msg, duration) {
+    duration = duration || 2500;
+    try {
+      var pDoc = window.parent.document;
+      var old  = pDoc.getElementById('_danran_toast');
+      if (old) old.remove();
+      var t = pDoc.createElement('div');
+      t.id = '_danran_toast';
+      t.style.cssText =
+        'position:fixed;bottom:72px;left:50%;transform:translateX(-50%) translateY(0);' +
+        'background:rgba(0,185,0,0.94);color:#fff;padding:10px 22px;border-radius:22px;' +
+        'font-size:0.9rem;font-weight:600;z-index:9999;pointer-events:none;' +
+        'box-shadow:0 4px 18px rgba(0,0,0,0.45);white-space:nowrap;' +
+        'animation:_danranFadeIn 0.25s ease;';
+      // animation keyframes（1回だけ注入）
+      if (!pDoc.getElementById('_danran_toast_css')) {
+        var ks = pDoc.createElement('style');
+        ks.id = '_danran_toast_css';
+        ks.textContent =
+          '@keyframes _danranFadeIn{from{opacity:0;transform:translateX(-50%) translateY(8px)}' +
+          'to{opacity:1;transform:translateX(-50%) translateY(0)}}';
+        (pDoc.head || pDoc.body).appendChild(ks);
+      }
+      t.textContent = msg;
+      pDoc.body.appendChild(t);
+      setTimeout(function () {
+        t.style.transition = 'opacity 0.35s';
+        t.style.opacity    = '0';
+        setTimeout(function () { if (t.parentNode) t.remove(); }, 380);
+      }, duration);
+    } catch (e) {}
+  }
+
   async function handleImageUpload(file, room, avatar) {
     var btn = window.parent.document.getElementById(CAM_BTN_ID);
     if (btn) { btn.textContent = '⏳'; btn.style.pointerEvents = 'none'; }
@@ -364,12 +401,16 @@
         room_name: room, user_name: ME, user_avatar: avatar, content: '', image_url: imageUrl,
       });
       if (!insertResp.ok) throw new Error('Insert ' + insertResp.status);
-      if (btn) btn.textContent = '✅';
-      setTimeout(function () { window.parent.location.reload(); }, 300);
+
+      // ✅ 成功トースト → リロードなし（5秒フラグメントが自動反映）
+      showToast('📷 写真を送信しました！');
+      if (btn) { btn.textContent = '✅'; btn.style.pointerEvents = ''; }
+      setTimeout(function () { if (btn) btn.textContent = '📷'; }, 2500);
+
     } catch (err) {
       console.error('[danran-cam] upload error:', err);
       if (btn) { btn.textContent = '📷'; btn.style.pointerEvents = ''; }
-      try { window.parent.alert('写真の送信に失敗しました:\n' + err.message); } catch (e) {}
+      showToast('❌ 送信失敗: ' + err.message.slice(0, 40));
     }
   }
 

@@ -33,6 +33,10 @@ st.markdown("""
 [data-testid="stSidebar"]          { display: none !important; }
 [data-testid="collapsedControl"]   { display: none !important; }
 [data-testid="stMainBlockContainer"] > div:first-child { padding-top: 0.5rem; }
+/* Streamlit Cloud "Manage app" バッジを非表示 */
+[class*="viewerBadge"]             { display: none !important; }
+[data-testid="stDeployButton"]     { display: none !important; }
+footer                             { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 

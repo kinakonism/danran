@@ -126,7 +126,8 @@
       if (clearSession) { localStorage.removeItem(STORAGE_KEY); return; }
       if (saveSession)  { localStorage.setItem(STORAGE_KEY, saveSession); return; }
       // ② 未ログイン: localStorage → ?s= に復元
-      if (!pUrl.searchParams.get('s')) {
+      //    ただし ?install=1 の場合はリダイレクト不要（インストールページはログイン不問）
+      if (!pUrl.searchParams.get('s') && pUrl.searchParams.get('install') !== '1') {
         var lsSid = localStorage.getItem(STORAGE_KEY);
         if (lsSid) { pUrl.searchParams.set('s', lsSid); window.parent.location.href = pUrl.toString(); }
       }
@@ -1218,42 +1219,23 @@
       if (pWin._danranAutoInstallDone) return;
       pWin._danranAutoInstallDone = true;
 
-      function genUUID() {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-          var r = Math.random() * 16 | 0;
-          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16).toUpperCase();
-        });
+      // ① Streamlit の download ボタンを探してクリック（リトライあり）
+      //    Python が show_install_page() でレンダリングした download button を
+      //    コンポーネントが同一オリジンの親ドキュメントから直接クリックする。
+      //    iOS Safari は正規の HTTP レスポンス（Streamlit 内部エンドポイント）経由なので
+      //    「プロファイルがダウンロードされました」が表示される。
+      function tryClickDownload(retries) {
+        try {
+          var btn = pWin.document.querySelector('[data-testid="stDownloadButton"] button');
+          if (btn) { btn.click(); return true; }
+        } catch (e) {}
+        if (retries > 0) {
+          setTimeout(function () { tryClickDownload(retries - 1); }, 500);
+        }
+        return false;
       }
-      var appUrl = pUrl.origin + '/';
-      var pU = genUUID(), wU = genUUID();
-      var xml =
-        '<?xml version="1.0" encoding="UTF-8"?>\n' +
-        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
-        '<plist version="1.0"><dict>\n' +
-        '<key>PayloadContent</key><array><dict>\n' +
-        '<key>FullScreen</key><true/>\n' +
-        '<key>IsRemovable</key><true/>\n' +
-        '<key>Label</key><string>danran</string>\n' +
-        '<key>PayloadDescription</key><string>danran ホーム画面に追加</string>\n' +
-        '<key>PayloadDisplayName</key><string>danran</string>\n' +
-        '<key>PayloadIdentifier</key><string>com.danran.webclip</string>\n' +
-        '<key>PayloadType</key><string>com.apple.webClip.managed</string>\n' +
-        '<key>PayloadUUID</key><string>' + wU + '</string>\n' +
-        '<key>PayloadVersion</key><integer>1</integer>\n' +
-        '<key>URL</key><string>' + appUrl + '</string>\n' +
-        '</dict></array>\n' +
-        '<key>PayloadDescription</key><string>danran をホーム画面に追加します</string>\n' +
-        '<key>PayloadDisplayName</key><string>danran 🏠</string>\n' +
-        '<key>PayloadIdentifier</key><string>com.danran.profile.' + pU.toLowerCase() + '</string>\n' +
-        '<key>PayloadRemovalDisallowed</key><false/>\n' +
-        '<key>PayloadType</key><string>Configuration</string>\n' +
-        '<key>PayloadUUID</key><string>' + pU + '</string>\n' +
-        '<key>PayloadVersion</key><integer>1</integer>\n' +
-        '</dict></plist>';
-
-      // Blob URL でナビゲート → iOS が「プロファイルをインストール」を表示
-      var blob = new pWin.Blob([xml], { type: 'application/x-apple-aspen-config' });
-      pWin.location.href = pWin.URL.createObjectURL(blob);
+      // 最大 3 秒間（0ms, 500ms, 1000ms, 1500ms, 2000ms, 2500ms, 3000ms）リトライ
+      tryClickDownload(6);
     } catch (e) {}
   }
 
@@ -1264,13 +1246,19 @@
   stSetHeight();
   setupObs();   // scan() → readConfig() → injectCameraUI() を試みる
 
-  // ?install=1: 800ms 後に自動インストール（画面が一瞬表示されてからナビゲート）
-  setTimeout(injectAutoInstall, 800);
+  // ?install=1: 300ms 後に自動インストール試行（その後 500ms ごとにリトライ）
+  // ★ _lp_detector が show_install_page() より先にレンダリングされるため、
+  //    download ボタンが DOM に現れるまで tryClickDownload() がリトライする。
+  setTimeout(injectAutoInstall, 300);
 
-  // 起動後 30 秒間毎秒チェック（Manage app 除去 + ヘッダー消失回復）
+  // 起動後 60 秒間毎秒チェック（Manage app 除去 + ヘッダー消失回復）
+  // readConfig() を毎回呼ぶことで ME/ACTIVE_ROOM を常に最新化し、
+  // セッション復元の遅延やリダイレクト後でも確実にヘッダーを表示する。
   (function () {
     var _cnt = 0;
     var _iv = setInterval(function () {
+      // ── 設定を最新化 ──
+      try { readConfig(); } catch (e) {}
       hideManageApp();
       fixStBottom();
       // ── ヘッダー消失 watchdog ──
@@ -1281,7 +1269,7 @@
           injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
         }
       } catch (e) {}
-      if (++_cnt >= 30) clearInterval(_iv);
+      if (++_cnt >= 60) clearInterval(_iv);
     }, 1000);
   })();
 

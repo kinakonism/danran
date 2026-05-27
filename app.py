@@ -418,7 +418,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v10",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v11",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1303,11 +1303,6 @@ def show_notifications(current_user: dict) -> None:
 # エントリーポイント
 # ─────────────────────────────────────
 
-# ── ?install=1 → PWA インストールページ（ログイン不要）──
-if st.query_params.get("install") == "1":
-    show_install_page()
-    st.stop()
-
 # embed=true を URL から除去（Streamlit embed モード = chat input 非表示を防ぐ）
 # JS コンポーネントから location.replace() は sandbox に阻まれるため Python 側で処理する
 if "embed" in st.query_params:
@@ -1376,6 +1371,13 @@ _lp_result = _lp_detector(
     clear_session = _clear_flag,
     default       = None,
 )
+
+# ── ?install=1 → PWA インストールページ（ログイン不要）──
+# ★ _lp_detector の後に置くことで JS コンポーネントが先にロードされ、
+#    injectAutoInstall() が download ボタンを自動クリックできる。
+if st.query_params.get("install") == "1":
+    show_install_page()
+    st.stop()
 
 # JS ヘッダー ＜/✕ ボタン・アバタータップからのナビゲーション指示
 # 全アクションに ts タイムスタンプを付与し、同じ値は一度だけ処理する

@@ -136,8 +136,22 @@
         }
       } catch (e) {}
 
+      // ── iOS PWA warm-resume 対策 ─────────────────────────────
+      //    iOS はスワイプ終了後もWebプロセスをメモリに保持して「再開」することがある。
+      //    その場合 Streamlit だけ新セッションで再接続され ME は非空のまま。
+      //    saveSession="" で呼ばれたら「セッションリセット」と判断し
+      //    _sessionRestoreSent フラグをクリアして restore を再試行できるようにする。
+      if (ME && !saveSession && !clearSession) {
+        console.log('[danran] session reset detected (ME was:', ME, ') → resetting restore flag');
+        _sessionRestoreSent = false;
+      }
+
       if (clearSession) { localStorage.removeItem(STORAGE_KEY); return; }
-      if (saveSession)  { localStorage.setItem(STORAGE_KEY, saveSession); return; }
+      if (saveSession)  {
+        localStorage.setItem(STORAGE_KEY, saveSession);
+        console.log('[danran] session saved to localStorage:', saveSession.slice(0, 8) + '…');
+        return;
+      }
 
       // ② 未ログイン: localStorage のセッションIDを postMessage で Python に送る
       //
@@ -149,12 +163,14 @@
       //    _sessionRestoreSent フラグで二重送信を防ぐ（scan() が毎秒呼ばれるため必須）。
       if (!_sessionRestoreSent) {
         var lsSid = localStorage.getItem(STORAGE_KEY);
+        console.log('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '"');
         if (lsSid) {
           _sessionRestoreSent = true;
+          console.log('[danran] → stSetValue restore_session firing');
           stSetValue({ action: 'restore_session', session_id: lsSid, ts: Date.now() });
         }
       }
-    } catch (e) {}
+    } catch (e) { console.error('[danran] handleSession error:', e); }
   }
 
   /* ════════════════════════════════════════

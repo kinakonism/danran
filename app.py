@@ -2,61 +2,8 @@
 danran - 家族専用チャットアプリ  Streamlit × Supabase
 セッション: Supabase sessions + URL ?s=SESSION_ID
 リアルタイム: @st.fragment(run_every="2s")
-通知: PWA Web Push (/sw.js, /manifest.json, /icons/* を Starlette カスタムルートで配信)
+通知: PWA Web Push (static/ → /app/static/ で配信、enableStaticServing=true)
 """
-
-# ─────────────────────────────────────
-# Starlette カスタムルートパッチ（app.py import 時点で適用）
-#
-# Streamlit Cloud は run.py を使わず直接 app.py を実行するため、
-# ここで create_streamlit_routes を上書きして PWA 用ファイルを配信する。
-# try/except で囲むことで Streamlit 内部 API の変更があっても app 本体は壊れない。
-# ─────────────────────────────────────
-try:
-    import base64 as _b64_pwa
-    import os as _os_pwa
-    import streamlit.web.server.starlette.starlette_app as _starlette_mod
-    from starlette.routing import Route as _Route
-    from starlette.responses import FileResponse as _FileResponse, Response as _RawResponse
-
-    _PWA_BASE   = _os_pwa.path.dirname(_os_pwa.path.abspath(__file__))
-    _PWA_ICONS  = _os_pwa.path.join(_PWA_BASE, "icons")
-    _PWA_SW     = _os_pwa.path.join(_PWA_BASE, "sw.js")
-    _PWA_MF     = _os_pwa.path.join(_PWA_BASE, "manifest.json")
-
-    async def _serve_sw(request):
-        return _FileResponse(
-            _PWA_SW,
-            media_type="application/javascript; charset=utf-8",
-            headers={"Cache-Control": "no-store, no-cache", "Service-Worker-Allowed": "/"},
-        )
-
-    async def _serve_manifest(request):
-        return _FileResponse(
-            _PWA_MF,
-            media_type="application/manifest+json; charset=utf-8",
-            headers={"Cache-Control": "no-store"},
-        )
-
-    async def _serve_icons(request):
-        path = _os_pwa.path.join(_PWA_ICONS, request.path_params["filename"])
-        if not _os_pwa.path.isfile(path):
-            return _RawResponse(status_code=404)
-        return _FileResponse(path)
-
-    _orig_create_routes = _starlette_mod.create_streamlit_routes
-
-    def _patched_create_routes(runtime):
-        custom = [
-            _Route("/sw.js",                 endpoint=_serve_sw),
-            _Route("/manifest.json",         endpoint=_serve_manifest),
-            _Route("/icons/{filename:path}", endpoint=_serve_icons),
-        ]
-        return custom + _orig_create_routes(runtime)
-
-    _starlette_mod.create_streamlit_routes = _patched_create_routes
-except Exception:
-    pass  # Streamlit 内部 API が変わっていても app 本体は動作し続ける
 
 import html as _html
 import io

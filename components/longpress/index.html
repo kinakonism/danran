@@ -1245,23 +1245,37 @@
     }
 
     // ── タッチベース: touchstart で開始点を記録 ─────────────────
-    // 【重要】passive: false が必須
-    //   iOS Safari は touchstart をデフォルトで passive として扱う。
-    //   passive: true のままだと e.preventDefault() が効かず、
-    //   iOS がエッジスワイプをネイティブ「戻る」ジェスチャーとして処理してしまう。
-    //   → Streamlit が ?sr=1 を pushState した履歴が消えてチャット画面に戻る。
-    //   e.preventDefault() を touchstart で呼ぶことで iOS ジェスチャーを遮断する。
+    // 【重要】passive: false が必須 — e.preventDefault() で iOS ネイティブ戻るジェスチャーを遮断
+    //
+    // 【注意】左端ゾーン内にある ＜ ボタン・📷 ボタン（left:8px）への
+    //   タップ時は preventDefault() を呼ばない。
+    //   インタラクティブ要素へのタッチは iOS が tap/click として扱い、
+    //   横スワイプ量がないので native back gesture にはならない。
     try {
       pDoc.addEventListener('touchstart', function (e) {
         var t = e.touches[0];
-        if (t.clientX < 50) {
-          // 左端 50px: iOS ネイティブ戻るジェスチャーを阻止
+        if (t.clientX >= 50) { _swipeTouchStart = null; return; }
+
+        // ── ボタン等のインタラクティブ要素への tap は preventDefault しない ──
+        var tgt = e.target;
+        var isInteractive = false;
+        try {
+          isInteractive = !!(tgt && tgt.closest(
+            'button,a,input,select,textarea,[role="button"],[data-hdr-back],[data-hdr-close]'
+          ));
+        } catch (ex) {
+          isInteractive = tgt && /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(tgt.tagName);
+        }
+
+        if (isInteractive) {
+          // ボタンタップ → スワイプ検出は無効化、タップを通常処理に委ねる
+          _swipeTouchStart = null;
+        } else {
+          // 空白エリアからのスワイプ開始 → iOS native 戻るジェスチャーを遮断
           e.preventDefault();
           _swipeTouchStart = { x: t.clientX, y: t.clientY };
-        } else {
-          _swipeTouchStart = null;
         }
-      }, { capture: true, passive: false });  // ← passive: false が THE FIX
+      }, { capture: true, passive: false });
 
       pDoc.addEventListener('touchend', function (e) {
         if (!_swipeTouchStart) return;

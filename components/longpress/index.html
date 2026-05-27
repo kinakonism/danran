@@ -438,23 +438,23 @@
         }
       }
 
-      // ⑤ 座標ベース: elementsFromPoint で右下エリアを直接調査
-      //    position:fixed / absolute / sticky を問わず、視覚的にその座標にある要素を取得。
-      //    除外: 自前要素・stBottom・stChatInput・stMainBlockContainer 内の要素
+      // ⑤ 座標ベース: elementsFromPoint で右下コーナーのみ調査
+      //    ★ サイズ制約付き: 幅55%超・高さ35%超の大きな要素（コンテナ）はスキップ
+      //    ★ 座標は右下コーナー3点のみ（中央付近の座標で大コンテナを誤検出しないため）
       try {
         var W = pWin.innerWidth;
         var H = pWin.innerHeight;
-        var _skipTids = ['stBottom','stChatInput','stBottomBlockContainer','stMainBlockContainer'];
+        var _skipTids = [
+          'stBottom','stChatInput','stBottomBlockContainer',
+          'stMainBlockContainer','stAppViewContainer',
+        ];
         var _hiddenSet = [];
 
-        // 右下エリアの複数点をサンプリング（ボタン2つに対応）
+        // 右下コーナー付近のみ（中央・左側座標は stAppViewContainer 等を誤検出する）
         var _pts = [
-          [W - 40,  H - 55],
-          [W - 95,  H - 55],
-          [W - 155, H - 55],
-          [W - 40,  H - 110],
-          [W - 95,  H - 110],
-          [W - 155, H - 110],
+          [W - 35, H - 52],
+          [W - 80, H - 52],
+          [W - 130, H - 52],
         ];
 
         _pts.forEach(function (pt) {
@@ -475,11 +475,18 @@
               var _ftid = (_fe.getAttribute && _fe.getAttribute('data-testid')) || '';
               if (_skipTids.indexOf(_ftid) >= 0) continue;
 
-              // stMainBlockContainer / stBottom 内の要素はスキップ（チャットバブル等を守る）
+              // stMainBlockContainer / stBottom 内の要素はスキップ
               if (_fe.closest) {
                 if (_fe.closest('[data-testid="stMainBlockContainer"]') ||
-                    _fe.closest('[data-testid="stBottom"]')) continue;
+                    _fe.closest('[data-testid="stBottom"]') ||
+                    _fe.closest('[data-testid="stAppViewContainer"]')) continue;
               }
+
+              // サイズ制約: 大きすぎるコンテナは誤検出なのでスキップ
+              var _rect2 = _fe.getBoundingClientRect();
+              if (_rect2.width > W * 0.55 || _rect2.height > H * 0.35) continue;
+              // 右半分・下半分にある要素のみ対象
+              if (_rect2.left < W * 0.35 || _rect2.top < H * 0.5) continue;
 
               _hiddenSet.push(_fe);
               _fe.style.setProperty('display', 'none', 'important');
@@ -488,18 +495,30 @@
         });
       } catch (e) {}
 
-      // ⑥ 右下にある小さな iframe は Streamlit Cloud 管理 UI の可能性
-      //    クロスオリジンで DOM 内検索が届かない場合は iframe 自体を隠す
+      // ⑥ Streamlit Cloud status embed (statuspage.io) を src で直接ターゲット
+      try {
+        var _stIframes = pDoc.querySelectorAll(
+          'iframe[src*="statuspage.io"],iframe[src*="streamlitstatus"],iframe[title*="Streamlit Cloud Status"]'
+        );
+        for (var _si = 0; _si < _stIframes.length; _si++) {
+          _stIframes[_si].style.setProperty('display', 'none', 'important');
+        }
+      } catch (e) {}
+
+      // ⑦ 右下の小 iframe: クロスオリジン管理 UI のフォールバック
+      //    （全幅 iframe は ⑥ で処理するため width<80% 制約を追加）
       try {
         var _W2 = pWin.innerWidth, _H2 = pWin.innerHeight;
         var _iframes = pDoc.querySelectorAll('iframe');
         for (var _ii = 0; _ii < _iframes.length; _ii++) {
           var _ifr = _iframes[_ii];
           try { if (_ifr.contentWindow === window) continue; } catch (_ie) {}
+          var _isrc = _ifr.src || '';
+          if (_isrc.indexOf('statuspage') >= 0 || _isrc.indexOf('streamlitstatus') >= 0) continue; // ⑥ で処理済み
           var _ir = _ifr.getBoundingClientRect();
-          // 右半分・下半分にある、ゼロ高さでない iframe
           if (_ir.right > _W2 * 0.4 && _ir.bottom > _H2 * 0.5 &&
-              _ir.width > 20 && _ir.height > 20) {
+              _ir.width > 20 && _ir.height > 20 &&
+              _ir.width < _W2 * 0.75) {  // 全幅は除外
             _ifr.style.setProperty('display', 'none', 'important');
           }
         }

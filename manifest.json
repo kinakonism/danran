@@ -3,7 +3,7 @@
   "short_name": "danran",
   "description": "家族専用プライベートチャット",
   "lang": "ja",
-  "start_url": "/",
+  "start_url": "/?embed=true",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#1a1a2e",

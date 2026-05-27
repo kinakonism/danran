@@ -14,6 +14,7 @@
   var CAM_BTN_ID      = '_danran_cam_btn';
   var CAM_FILE_ID     = '_danran_cam_file';
   var CAM_CSS_ID      = '_danran_cam_css';
+  var COVER_ID        = '_danran_manage_cover';
   var LP_CSS_ID       = '_danran_lp_css';
   var POPUP_ID        = '_danran_lp_popup';
 
@@ -411,9 +412,33 @@
   function removeCameraUI() {
     try {
       var pDoc = window.parent.document;
-      [CAM_BTN_ID, CAM_FILE_ID, CAM_CSS_ID].forEach(function (id) {
+      [CAM_BTN_ID, CAM_FILE_ID, CAM_CSS_ID, COVER_ID].forEach(function (id) {
         var el = pDoc.getElementById(id); if (el) el.remove();
       });
+    } catch (e) {}
+  }
+
+  /* "Manage app" バーを視覚的に覆うカバー div を注入
+   * CSS/JS でバーを消せない場合（cross-origin iframe 等）の保険手段 */
+  function injectManageCover() {
+    try {
+      var pDoc = window.parent.document;
+      if (pDoc.getElementById(COVER_ID)) return;
+      // Streamlit ダークテーマの背景色を取得（失敗時は #0e1117）
+      var bg = '#0e1117';
+      try {
+        var appEl = pDoc.querySelector('[data-testid="stApp"]') || pDoc.body;
+        var c = window.parent.getComputedStyle(appEl).backgroundColor;
+        if (c && c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent') bg = c;
+      } catch (_) {}
+      var cover = pDoc.createElement('div');
+      cover.id = COVER_ID;
+      // カメラボタン（left:8px, width:40px）は避けて left:56px から覆う
+      cover.style.cssText =
+        'position:fixed;bottom:0;left:56px;right:0;height:56px;' +
+        'background:' + bg + ';z-index:9998;' +
+        '-webkit-tap-highlight-color:transparent;';
+      pDoc.body.appendChild(cover);
     } catch (e) {}
   }
 
@@ -434,12 +459,13 @@
         'background:rgba(44,44,46,0.92);' +
         'border:1px solid rgba(255,255,255,0.18);' +
         'border-radius:50%;font-size:1.25rem;line-height:1;' +
-        'cursor:pointer;z-index:9998;' +
+        'cursor:pointer;z-index:9999;' +   /* カバーdiv(9998)より上 */
         'display:flex;align-items:center;justify-content:center;' +
         '-webkit-tap-highlight-color:transparent;' +
         'box-shadow:0 2px 10px rgba(0,0,0,0.45);transition:transform 0.1s;}' +
         '#' + CAM_BTN_ID + ':active{transform:scale(0.92);}';
       (pDoc.head || pDoc.body).appendChild(css);
+      injectManageCover();   // Manage app バーを被覆
 
       // 非表示 file input
       var fileInput = pDoc.createElement('input');

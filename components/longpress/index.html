@@ -26,6 +26,7 @@
   var ME_AVATAR   = '';
   var ACTIVE_ROOM = '';
   var SHOW_ROOMS  = false;
+  var _embedFixed = false;  // embed=true 除去リダイレクトを1回のみ実行
 
   /* ════════════════════════════════════════
    *  Streamlit コンポーネントプロトコル
@@ -86,15 +87,17 @@
    * ════════════════════════════════════════ */
   function handleSession(saveSession, clearSession) {
     try {
-      if (clearSession) { localStorage.removeItem(STORAGE_KEY); return; }
-      if (saveSession)  { localStorage.setItem(STORAGE_KEY, saveSession); return; }
+      // ① embed=true を最優先で除去（ログイン状態に関わらず・1回のみ）
       var pUrl = new URL(window.parent.location.href);
-      // embed=true が残っていれば除去（リロードなし）
-      if (pUrl.searchParams.has('embed')) {
+      if (pUrl.searchParams.has('embed') && !_embedFixed) {
+        _embedFixed = true;
         pUrl.searchParams.delete('embed');
         window.parent.location.replace(pUrl.toString());
         return;
       }
+      if (clearSession) { localStorage.removeItem(STORAGE_KEY); return; }
+      if (saveSession)  { localStorage.setItem(STORAGE_KEY, saveSession); return; }
+      // ② 未ログイン: localStorage → ?s= に復元
       if (!pUrl.searchParams.get('s')) {
         var lsSid = localStorage.getItem(STORAGE_KEY);
         if (lsSid) { pUrl.searchParams.set('s', lsSid); window.parent.location.href = pUrl.toString(); }
@@ -397,6 +400,12 @@
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
     hideManageApp();
+    // ヘッダーが消えていたら強制再注入
+    try {
+      if (ME && ACTIVE_ROOM && !window.parent.document.getElementById(HDR_ID)) {
+        injectHeader(ACTIVE_ROOM, SHOW_ROOMS);
+      }
+    } catch (e) {}
     try {
       var els = window.parent.document.querySelectorAll('[data-lp-msg]');
       for (var i = 0; i < els.length; i++) {

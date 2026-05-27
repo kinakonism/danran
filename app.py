@@ -36,6 +36,9 @@ st.markdown("""
 #MainMenu                          { display: none !important; }
 [data-testid="stDeployButton"]     { display: none !important; }
 [class*="viewerBadge"]             { display: none !important; }
+/* embed モードが chat input を隠す場合の保険 */
+[data-testid="stBottom"]           { display: block !important; visibility: visible !important; }
+[data-testid="stChatInput"]        { display: flex !important; visibility: visible !important; }
 /* コンテンツの余白調整 */
 [data-testid="stMainBlockContainer"] > div:first-child { padding-top: 0.5rem; }
 </style>
@@ -513,10 +516,8 @@ def show_chat(current_user: dict) -> None:
             if st.button(btn_label, key=f"rs_{room}", use_container_width=True):
                 st.session_state["active_room"] = room
                 # ?sr=1 を除去して chat ビューに戻る（Python rerun なので session 保持）
-                _p = {k: v for k, v in st.query_params.items() if k != "sr"}
-                st.query_params.clear()
-                if _p:
-                    st.query_params.update(_p)
+                if "sr" in st.query_params:
+                    del st.query_params["sr"]
                 st.rerun()
         st.divider()
         # ユーザー情報 + ログアウト

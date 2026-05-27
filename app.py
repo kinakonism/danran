@@ -1177,7 +1177,111 @@ def show_chat(current_user: dict) -> None:
         st.rerun()
 
 # ─────────────────────────────────────
-# 画面⑦ 通知設定
+# 画面⑦ PWA インストールページ（?install=1）
+# Streamlit Cloud はカスタム HTTP ルートを遮断するため、
+# st.download_button 経由で mobileconfig を配信する。
+# ─────────────────────────────────────
+def _build_mobileconfig() -> bytes:
+    """danran Web Clip 用 .mobileconfig (plist XML) を生成して返す。"""
+    import base64 as _b64
+    import uuid as _uuid
+
+    app_url = (
+        st.secrets.get("app", {}).get("url", "")
+        or "https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/"
+    )
+
+    icon_path = os.path.join(os.path.dirname(__file__), "icons", "icon-192.png")
+    try:
+        with open(icon_path, "rb") as f:
+            icon_b64 = _b64.b64encode(f.read()).decode()
+    except OSError:
+        icon_b64 = ""
+
+    profile_uuid = str(_uuid.uuid4()).upper()
+    webclip_uuid = str(_uuid.uuid4()).upper()
+
+    icon_elem = f"      <key>Icon</key><data>{icon_b64}</data>\n" if icon_b64 else ""
+
+    plist = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
+        ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0">\n<dict>\n'
+        '  <key>PayloadContent</key><array><dict>\n'
+        '    <key>FullScreen</key><true/>\n'
+        f'{icon_elem}'
+        '    <key>IsRemovable</key><true/>\n'
+        '    <key>Label</key><string>danran</string>\n'
+        '    <key>PayloadDescription</key><string>danran ホーム画面に追加</string>\n'
+        '    <key>PayloadDisplayName</key><string>danran</string>\n'
+        '    <key>PayloadIdentifier</key><string>com.danran.webclip</string>\n'
+        '    <key>PayloadType</key><string>com.apple.webClip.managed</string>\n'
+        f'    <key>PayloadUUID</key><string>{webclip_uuid}</string>\n'
+        '    <key>PayloadVersion</key><integer>1</integer>\n'
+        f'    <key>URL</key><string>{app_url}</string>\n'
+        '  </dict></array>\n'
+        '  <key>PayloadDescription</key><string>danran をホーム画面に追加します</string>\n'
+        '  <key>PayloadDisplayName</key><string>danran 🏠</string>\n'
+        f'  <key>PayloadIdentifier</key><string>com.danran.profile.{profile_uuid.lower()}</string>\n'
+        '  <key>PayloadRemovalDisallowed</key><false/>\n'
+        '  <key>PayloadType</key><string>Configuration</string>\n'
+        f'  <key>PayloadUUID</key><string>{profile_uuid}</string>\n'
+        '  <key>PayloadVersion</key><integer>1</integer>\n'
+        '</dict>\n</plist>'
+    )
+    return plist.encode("utf-8")
+
+
+def show_install_page() -> None:
+    """?install=1 でアクセスしたとき表示する iOS PWA インストールページ。
+    ログイン不要・セッション不問でアクセス可能。"""
+    st.markdown("""
+<style>
+[data-testid="stToolbar"],[data-testid="stDecoration"],[data-testid="stSidebar"],
+[data-testid="collapsedControl"],#MainMenu,[data-testid="stDeployButton"],
+[class*="viewerBadge"]{display:none!important}
+[data-testid="stMainBlockContainer"]>div:first-child{padding-top:2rem}
+</style>""", unsafe_allow_html=True)
+
+    st.markdown(
+        '<div style="text-align:center;padding:16px 0 8px">'
+        '<div style="font-size:3rem">🏠</div>'
+        '<div style="font-size:1.4rem;font-weight:700;color:#fff;margin-top:8px">danran</div>'
+        '<div style="font-size:0.85rem;color:rgba(255,255,255,0.5);margin-top:4px">家族チャット</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+    st.markdown("### 📲 ホーム画面に追加する方法")
+    st.markdown("""
+1. 下の **「プロファイルをダウンロード」** ボタンをタップ
+2. 「**設定**」アプリを開く
+3. 一番上に「**プロファイルがダウンロードされました**」→ タップ
+4. 「**インストール**」→「**インストール**」
+5. ホーム画面に **danran** のアイコンが追加されます 🎉
+""")
+
+    mobileconfig_bytes = _build_mobileconfig()
+    st.download_button(
+        label="📥 プロファイルをダウンロード",
+        data=mobileconfig_bytes,
+        file_name="danran.mobileconfig",
+        mime="application/x-apple-aspen-config",
+        use_container_width=True,
+        type="primary",
+    )
+
+    st.markdown(
+        '<div style="font-size:0.75rem;color:rgba(255,255,255,0.3);text-align:center;'
+        'margin-top:16px">iOS 16 以上 / Safari 対応</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ─────────────────────────────────────
+# 画面⑧ 通知設定
 # ─────────────────────────────────────
 def show_notifications(current_user: dict) -> None:
     """通知設定画面 — JS が Notification.permission を読んで UI を更新する。"""
@@ -1198,6 +1302,11 @@ def show_notifications(current_user: dict) -> None:
 # ─────────────────────────────────────
 # エントリーポイント
 # ─────────────────────────────────────
+
+# ── ?install=1 → PWA インストールページ（ログイン不要）──
+if st.query_params.get("install") == "1":
+    show_install_page()
+    st.stop()
 
 # embed=true を URL から除去（Streamlit embed モード = chat input 非表示を防ぐ）
 # JS コンポーネントから location.replace() は sandbox に阻まれるため Python 側で処理する

@@ -131,9 +131,19 @@ def save_push_subscription(user_id: str, subscription_json: str) -> None:
     except Exception:
         pass
 
+def _total_unread(user_id: str) -> int:
+    """プッシュペイロード用: 特定ユーザーの全ルーム未読数合計"""
+    try:
+        rooms = fetch_rooms()
+        counts = get_unread_counts(user_id, [r["name"] for r in rooms])
+        return sum(counts.values())
+    except Exception:
+        return 1
+
 def send_push(room: str, sender_uid: str, sender_name: str,
               content: str, has_image: bool = False) -> None:
-    """送信者以外の全購読者に Web Push 通知を送る。"""
+    """送信者以外の全購読者に Web Push 通知を送る。
+    ペイロードに unread_count を含めることで sw.js が即座にバッジを更新できる。"""
     try:
         cfg = _vapid_cfg()
         priv = cfg.get("vapid_private_key", "")
@@ -144,21 +154,25 @@ def send_push(room: str, sender_uid: str, sender_name: str,
         from pywebpush import webpush, WebPushException
 
         body = f"{sender_name}: {'📷 写真' if has_image and not content else content[:80]}"
-        payload = json.dumps({
-            "title": f"danran 🏠 {room}",
-            "body":  body,
-            "room":  room,
-            "url":   "/",
-        })
 
-        # 送信者以外の購読情報を取得
+        # 送信者以外の購読情報を user_id ごとに取得
         rows = supabase.table("push_subscriptions")\
-            .select("endpoint, p256dh, auth")\
+            .select("endpoint, p256dh, auth, user_id")\
             .neq("user_id", sender_uid)\
             .execute().data or []
 
         expired: list[str] = []
         for row in rows:
+            # 受信者ごとに未読数を計算してペイロードに乗せる（sw.js がバッジに使う）
+            recipient_uid = row.get("user_id", "")
+            unread = _total_unread(recipient_uid) if recipient_uid else 1
+            payload = json.dumps({
+                "title":        f"danran 🏠 {room}",
+                "body":         body,
+                "room":         room,
+                "url":          "/",
+                "unread_count": unread,
+            }, ensure_ascii=False)
             try:
                 webpush(
                     subscription_info={
@@ -434,7 +448,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v27",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v29",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 

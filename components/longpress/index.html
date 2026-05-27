@@ -118,6 +118,12 @@
       SHOW_ROOMS  = newShowRooms;
       VIEW        = newView;
 
+      // pDoc に共有状態を書く → スワイプハンドラが複数インスタンス間で最新値を参照できる
+      try {
+        window.parent.document._danranView = VIEW;
+        window.parent.document._danranSR   = SHOW_ROOMS;
+      } catch (e) {}
+
       if (changed) {
         // ログアウト検出: ユーザーが消えたらヘッダー・カメラ・バッジを除去
         if (!ME) {
@@ -748,35 +754,39 @@
   /* ════════════════════════════════════════
    *  🏠 ホームアイコンバッジ（Web Badging API）
    *  iOS 16.4+ / Chrome PWA のみ対応。
-   *  Supabase から自分以外の未読メッセージ数を取得して badge に反映。
+   *
+   *  【リアルタイム更新の仕組み】
+   *  ① プッシュ通知受信時: sw.js が受信者別の未読数を即座に setAppBadge()
+   *  ② アプリ復帰時: clearAppBadge()（setupSwipeBack の visibilitychange で実施）
+   *  ③ バックグラウンド補完: アプリが開いているときも 30 秒ごとに Supabase から再取得
    * ════════════════════════════════════════ */
   var _badgeTimer = null;
 
   function updateAppBadge() {
     try {
-      var pWin = window.parent;
-      if (!('setAppBadge' in pWin.navigator) || !SB_URL || !SB_KEY || !ME_UID) return;
+      // window.top.navigator を使う: setAppBadge はトップレベルコンテキストのみ有効
+      var topNav = window.top.navigator;
+      if (!('setAppBadge' in topNav) || !SB_URL || !SB_KEY || !ME_UID) return;
 
-      // ① last_read テーブルから自分の既読情報を取得
       sbGet('last_read?user_id=eq.' + ME_UID + '&select=room_name,read_at')
         .then(function (lastReads) {
           var readMap = {};
           if (Array.isArray(lastReads)) {
             lastReads.forEach(function (r) { readMap[r.room_name] = r.read_at; });
           }
-          // ② 自分以外が送ったメッセージを取得（直近 500 件で十分）
-          return sbGet('messages?user_id=neq.' + ME_UID + '&select=room_name,created_at&order=created_at.desc&limit=500')
-            .then(function (msgs) {
-              if (!Array.isArray(msgs)) return 0;
-              return msgs.filter(function (m) {
-                var r = readMap[m.room_name];
-                return !r || m.created_at > r;
-              }).length;
-            });
+          return sbGet(
+            'messages?user_id=neq.' + ME_UID +
+            '&select=room_name,created_at&order=created_at.desc&limit=300'
+          ).then(function (msgs) {
+            if (!Array.isArray(msgs)) return 0;
+            return msgs.filter(function (m) {
+              var r = readMap[m.room_name]; return !r || m.created_at > r;
+            }).length;
+          });
         })
         .then(function (count) {
-          if (count > 0) pWin.navigator.setAppBadge(count).catch(function () {});
-          else           pWin.navigator.clearAppBadge().catch(function () {});
+          if (count > 0) topNav.setAppBadge(count).catch(function () {});
+          else           topNav.clearAppBadge().catch(function () {});
         })
         .catch(function () {});
     } catch (e) {}
@@ -784,12 +794,12 @@
 
   function startBadgeTimer() {
     if (_badgeTimer) return;
-    updateAppBadge();                                    // 即時実行
-    _badgeTimer = setInterval(updateAppBadge, 60000);   // 60 秒ごと
+    updateAppBadge();                                   // 即時実行
+    _badgeTimer = setInterval(updateAppBadge, 30000);  // 30 秒ごと（バックグラウンド補完）
   }
   function stopBadgeTimer() {
     if (_badgeTimer) { clearInterval(_badgeTimer); _badgeTimer = null; }
-    try { window.parent.navigator.clearAppBadge().catch(function () {}); } catch (e) {}
+    try { window.top.navigator.clearAppBadge().catch(function () {}); } catch (e) {}
   }
 
   // 通知許可バナー（ルーム一覧表示中・未許可のときだけ表示）
@@ -1142,21 +1152,90 @@
 
   /* ════════════════════════════════════════
    *  右スワイプで戻る（エッジスワイプジェスチャー）
-   *  左端 40px 以内からのタッチ開始 → 右に 60px 以上でナビゲーション
+   *
+   *  【方式 A】iOS ネイティブ: history.pushState → popstate
+   *    iOS PWA の左エッジスワイプは history.back() を呼ぶ。
+   *    あらかじめ pushState で「戻り先」を作っておくと popstate が発火する。
+   *
+   *  【方式 B】タッチベース（Android など非 iOS フォールバック）
+   *    { capture: true } でReact の合成イベントより先に発火。
+   *    passive: true なので e.preventDefault() は呼ばない。
+   *
+   *  ★ pDoc._danranSwipeV29 フラグ（親ドキュメントに保持）で
+   *    IIFE を何度再起動しても二重登録しない。
+   *    ハンドラは pDoc._danranView / pDoc._danranSR を直接参照するので
+   *    古い IIFE のクロージャでも最新の VIEW/SHOW_ROOMS を読める。
    * ════════════════════════════════════════ */
   var _swipeTouchStart = null;
+  var _swipeSetupDone  = false;   // IIFE スコープ（flag の二重チェック用）
 
   function setupSwipeBack() {
-    try {
-      var pDoc = window.parent.document;
-      if (pDoc._danranSwipeSetup) return;
-      pDoc._danranSwipeSetup = true;
+    if (_swipeSetupDone) return;
+    _swipeSetupDone = true;
 
-      // ── 左端からの右スワイプ → 前画面に戻る ──────────────
+    var pDoc;
+    var outerWin;
+    try {
+      pDoc     = window.parent.document;
+      outerWin = (window.parent.parent && window.parent.parent !== window.parent)
+                 ? window.parent.parent : window.parent;
+    } catch (e) { return; }
+
+    // 二重登録防止: バージョン付きフラグを親ドキュメントに保持
+    if (pDoc._danranSwipeV29) return;
+    pDoc._danranSwipeV29 = true;
+
+    // 前回スワイプ時刻（500ms デバウンス）
+    if (!pDoc._danranLastSwipe) pDoc._danranLastSwipe = 0;
+
+    function getView()      { return pDoc._danranView !== undefined ? pDoc._danranView : VIEW; }
+    function getShowRooms() { return pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS; }
+
+    function execSwipe() {
+      var now = Date.now();
+      if (now - pDoc._danranLastSwipe < 500) return false;
+      pDoc._danranLastSwipe = now;
+      var view      = getView();
+      var showRooms = getShowRooms();
+      if (view === 'profile' || view === 'room_edit' || view === 'notifications' || view === 'room_create') {
+        stSetValue({ action: 'go_back', ts: now });
+        return true;
+      } else if (view === 'chat' && !showRooms) {
+        stSetValue({ action: 'go_rooms', ts: now });
+        return true;
+      }
+      return false;
+    }
+
+    // ── 方式 A: history ベース（iOS エッジスワイプ）─────────────
+    function pushNavAnchor() {
+      try { outerWin.history.pushState({ _danran: 1 }, '', outerWin.location.href); } catch (e) {}
+    }
+    try {
+      pushNavAnchor();  // 初期アンカー
+      outerWin.addEventListener('popstate', function () {
+        // popstate 後に再度 pushState して次のスワイプに備える
+        pushNavAnchor();
+        var handled = execSwipe();
+        if (!handled && getShowRooms()) {
+          // ルームリスト表示中に戻るジェスチャー → sr=1 を維持
+          try {
+            var url = new URL(outerWin.location.href);
+            if (!url.searchParams.has('sr')) {
+              url.searchParams.set('sr', '1');
+              outerWin.history.replaceState(null, '', url.toString());
+            }
+          } catch (ex) {}
+        }
+      });
+    } catch (e) {}
+
+    // ── 方式 B: タッチベース（Android フォールバック）─────────────
+    try {
       pDoc.addEventListener('touchstart', function (e) {
         var t = e.touches[0];
-        _swipeTouchStart = (t.clientX < 40) ? { x: t.clientX, y: t.clientY } : null;
-      }, { passive: true });
+        _swipeTouchStart = (t.clientX < 50) ? { x: t.clientX, y: t.clientY } : null;
+      }, { capture: true, passive: true });
 
       pDoc.addEventListener('touchend', function (e) {
         if (!_swipeTouchStart) return;
@@ -1164,39 +1243,17 @@
         var dx = t.clientX - _swipeTouchStart.x;
         var dy = Math.abs(t.clientY - _swipeTouchStart.y);
         _swipeTouchStart = null;
-        if (dx > 60 && dx > dy) {
-          // passive:false なので合成クリック（戻るジェスチャー後に発生するタップ）を抑制
-          e.preventDefault();
-          if (VIEW === 'profile' || VIEW === 'room_edit' || VIEW === 'notifications' || VIEW === 'room_create') {
-            stSetValue({ action: 'go_back', ts: Date.now() });
-          } else if (VIEW === 'chat' && !SHOW_ROOMS) {
-            stSetValue({ action: 'go_rooms', ts: Date.now() });
-          }
-        }
-      }, { passive: false });  // passive:false → e.preventDefault() で合成クリックを抑制
+        if (dx > 60 && dx > dy) { execSwipe(); }
+      }, { capture: true, passive: true });
+    } catch (e) {}
 
-      // ── iOS ネイティブ戻るジェスチャー対策 ────────────────
-      // iOS PWA のエッジスワイプで ?sr=1 が消えた場合、即座にルームリストに戻す
-      try {
-        var outerWin = (window.parent.parent && window.parent.parent !== window.parent)
-                         ? window.parent.parent : window.parent;
-        if (!outerWin._danranPopstateSetup) {
-          outerWin._danranPopstateSetup = true;
-          outerWin.addEventListener('popstate', function (ev) {
-            if (!SHOW_ROOMS) return;
-            // sr=1 が失われていたら URL を即座に復元（Streamlit の rerun 前に）
-            try {
-              var url = new URL(outerWin.location.href);
-              if (!url.searchParams.has('sr')) {
-                url.searchParams.set('sr', '1');
-                outerWin.history.replaceState(ev.state, '', url.toString());
-              }
-            } catch (ex) {}
-            // Python にも go_rooms を再送（セーフガード）
-            stSetValue({ action: 'go_rooms', ts: Date.now() });
-          });
+    // ── アプリ復帰時にバッジをクリア ─────────────────────────────
+    try {
+      pDoc.addEventListener('visibilitychange', function () {
+        if (!pDoc.hidden && ME) {
+          try { window.top.navigator.clearAppBadge().catch(function () {}); } catch (ex) {}
         }
-      } catch (ex) {}
+      });
     } catch (e) {}
   }
 

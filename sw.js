@@ -1,6 +1,6 @@
 // danran service worker — push notifications + badge suppression
 // バージョンを上げると古いキャッシュが破棄される
-var SW_VERSION = '1.1.0';
+var SW_VERSION = '1.2.0';
 
 self.addEventListener('install', function (event) {
   self.skipWaiting();
@@ -70,24 +70,36 @@ self.addEventListener('push', function (event) {
   var data = {};
   try { data = event.data.json(); } catch (e) { data = { body: event.data.text() }; }
 
-  var title   = data.title  || 'danran 🏠';
-  var body    = data.body   || '新しいメッセージがあります';
-  var icon    = data.icon   || '/icons/icon-192.png';
-  var badge   = '/icons/badge.png';
-  var tag     = data.room   || 'danran';
-  var destUrl = data.url    || '/';
+  var title        = data.title        || 'danran 🏠';
+  var body         = data.body         || '新しいメッセージがあります';
+  var icon         = data.icon         || '/icons/icon-192.png';
+  var tag          = data.room         || 'danran';
+  var destUrl      = data.url          || '/';
+  var unreadCount  = data.unread_count;   // Python が受信者別の未読数を送る
 
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body:       body,
-      icon:       icon,
-      badge:      badge,
-      tag:        tag,
-      renotify:   true,
-      silent:     false,
-      data:       { url: destUrl },
-    })
-  );
+  // ── 通知表示 + バッジ即時更新 ───────────────────────
+  var notifPromise = self.registration.showNotification(title, {
+    body:     body,
+    icon:     icon,
+    badge:    '/icons/badge.png',
+    tag:      tag,
+    renotify: true,
+    silent:   false,
+    data:     { url: destUrl },
+  });
+
+  // navigator.setAppBadge は ServiceWorker でも使用可能（iOS 16.4+ / Chrome PWA）
+  var badgePromise = Promise.resolve();
+  try {
+    var nav = self.navigator || navigator;
+    if ('setAppBadge' in nav) {
+      badgePromise = (unreadCount !== undefined)
+        ? nav.setAppBadge(unreadCount).catch(function () {})
+        : nav.setAppBadge().catch(function () {});        // dot badge（数字なし）
+    }
+  } catch (e) {}
+
+  event.waitUntil(Promise.all([notifPromise, badgePromise]));
 });
 
 // ── 通知タップ → アプリを前面に ──────────────────────

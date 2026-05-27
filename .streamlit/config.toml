@@ -5,7 +5,4 @@ toolbarMode = "minimal"
 [browser]
 gatherUsageStats = false
 
-[server]
-# static/ ディレクトリを /app/static/ で配信（sw.js・manifest.json・icons）
-enableStaticServing = true
 

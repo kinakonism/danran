@@ -32,6 +32,8 @@ st.set_page_config(
 st.markdown("""
 <style>
 /* ── Streamlit chrome を非表示 ── */
+/* stHeader はコンテナごと非表示（z-index:999990 でカスタムヘッダーを覆うため）*/
+[data-testid="stHeader"]           { display: none !important; }
 [data-testid="stToolbar"]          { display: none !important; }
 [data-testid="stDecoration"]       { display: none !important; }
 [data-testid="stSidebar"]          { display: none !important; }
@@ -1343,7 +1345,7 @@ _vapid_pub = _vapid_cfg().get("vapid_public_key", "")
 # JS 注入ではなく Python が st.html() で直接 DOM に書くことでタイミング問題を解消。
 # クリックハンドラだけは JS コンポーネント(attachHdrButtons)が付与する。
 _HDR_DIV_STYLE = (
-    'position:fixed;top:0;left:0;right:0;height:52px;z-index:9990;'
+    'position:fixed;top:0;left:0;right:0;height:52px;z-index:2147483647;'
     'background:rgba(28,28,30,0.97);border-bottom:1px solid rgba(255,255,255,0.1);'
     'display:flex;align-items:center;padding:0 4px;gap:0;'
     'box-shadow:0 1px 10px rgba(0,0,0,0.5);'

@@ -360,167 +360,111 @@
   }
 
   /* ════════════════════════════════════════
-   *  "Manage app" バーを確実に非表示
-   *  ① data-testid 直撃  ② textContent 全検索 + fixed 祖先を探す
+   *  "Manage app" ボタンを非表示
+   *
+   *  【構造】
+   *  外側シェル (streamlit.app/)           ← 管理ボタンはここ
+   *    └ Streamlit app iframe (/~/+/)      ← window.parent
+   *        └ コンポーネント iframe (index.html)  ← window (ここ)
+   *
+   *  window.parent          = Streamlit app iframe（stMainBlockContainer 等がある）
+   *  window.parent.parent   = 外側シェル（管理ボタンがある）
+   *
+   *  CSS (st.markdown) も JS の window.parent.document も
+   *  Streamlit app iframe に対してのみ効くため、外側シェルには届かなかった。
+   *  → window.parent.parent.document を直接操作する必要がある。
    * ════════════════════════════════════════ */
   function hideManageApp() {
     try {
-      var pDoc = window.parent.document;
-      var pWin = window.parent;
-
-      // ① data-testid 直撃
-      var byTestId = pDoc.querySelectorAll(
-        '[data-testid="stDeployButton"],[data-testid="manage-app-button"],' +
-        '[data-testid="stActionButton"],[data-testid="stMainMenu"],' +
-        '[data-testid="stStatusWidget"],' +
-        '[class*="viewerBadge"],[class*="ViewerBadge"]'
-      );
-      for (var t = 0; t < byTestId.length; t++) {
-        byTestId[t].style.setProperty('display', 'none', 'important');
-      }
-
-      // ② Streamlit へのリンクを含む fixed 祖先を隠す
-      //    （ブランドバッジ "Made with Streamlit" などを対象）
-      var stLinks = pDoc.querySelectorAll('a[href*="streamlit"]');
-      for (var sl = 0; sl < stLinks.length; sl++) {
-        var sla = stLinks[sl];
-        for (var slj = 0; slj < 10; slj++) {
-          var slcs = pWin.getComputedStyle(sla);
-          if (slcs.position === 'fixed' || slcs.position === 'sticky') {
-            sla.style.setProperty('display', 'none', 'important');
-            break;
-          }
-          if (!sla.parentElement || sla.parentElement === pDoc.body) {
-            sla.style.setProperty('display', 'none', 'important');
-            break;
-          }
-          sla = sla.parentElement;
-        }
-      }
-
-      // ③ textContent に "Manage app" を含む fixed 祖先を隠す
-      var all = pDoc.querySelectorAll('*');
-      for (var i = 0; i < all.length; i++) {
-        var el = all[i];
-        var txt = (el.textContent || '').trim();
-        if (/manage\s*app/i.test(txt) && txt.length < 60) {
-          var anc = el;
-          for (var j = 0; j < 12; j++) {
-            var cs = pWin.getComputedStyle(anc);
-            if (cs.position === 'fixed' || cs.position === 'sticky') {
-              anc.style.setProperty('display', 'none', 'important');
-              break;
-            }
-            if (!anc.parentElement || anc.parentElement === pDoc.body) {
-              anc.style.setProperty('display', 'none', 'important');
-              break;
-            }
-            anc = anc.parentElement;
-          }
-        }
-      }
-
-      // ④ href に manage を含むリンクの fixed 祖先を隠す
-      var mLinks = pDoc.querySelectorAll('a[href*="manage"]');
-      for (var li = 0; li < mLinks.length; li++) {
-        var la = mLinks[li];
-        for (var lj = 0; lj < 10; lj++) {
-          var lcs = pWin.getComputedStyle(la);
-          if (lcs.position === 'fixed' || lcs.position === 'sticky') {
-            la.style.setProperty('display', 'none', 'important');
-            break;
-          }
-          if (!la.parentElement || la.parentElement === pDoc.body) {
-            la.style.setProperty('display', 'none', 'important');
-            break;
-          }
-          la = la.parentElement;
-        }
-      }
-
-      // ⑤ 座標ベース: elementsFromPoint で右下コーナーのみ調査
-      //    ★ サイズ制約付き: 幅55%超・高さ35%超の大きな要素（コンテナ）はスキップ
-      //    ★ 座標は右下コーナー3点のみ（中央付近の座標で大コンテナを誤検出しないため）
+      // ── A. 外側シェル (window.parent.parent) の管理ボタンを消す ──
+      //    Playwright で確認: A._container_gzau3_1 (badge) と
+      //    DIV._profileContainer_gzau3_53 (manage app) がここにある
       try {
-        var W = pWin.innerWidth;
-        var H = pWin.innerHeight;
-        var _skipTids = [
-          'stBottom','stChatInput','stBottomBlockContainer',
-          'stMainBlockContainer','stAppViewContainer',
-        ];
-        var _hiddenSet = [];
+        var outerWin = window.parent.parent;
+        // ローカル開発や 1 段だけの場合は parent.parent === parent → スキップ
+        if (outerWin && outerWin !== window.parent) {
+          var outerDoc = outerWin.document;
+          var oW = outerWin.innerWidth;
+          var oH = outerWin.innerHeight;
 
-        // 右下コーナー付近のみ（中央・左側座標は stAppViewContainer 等を誤検出する）
-        var _pts = [
-          [W - 35, H - 52],
-          [W - 80, H - 52],
-          [W - 130, H - 52],
-        ];
-
-        _pts.forEach(function (pt) {
-          try {
-            if (pt[0] < 0 || pt[1] < 0) return;
-            var elems = pDoc.elementsFromPoint(pt[0], pt[1]);
-            if (!elems) return;
-            for (var _ei = 0; _ei < elems.length; _ei++) {
-              var _fe = elems[_ei];
-              if (!_fe || !_fe.style) continue;
-              if (_fe === pDoc.body || _fe === pDoc.documentElement) continue;
-              if (_hiddenSet.indexOf(_fe) >= 0) continue;
-
-              // 自前の要素はスキップ
-              if (_fe.id === CAM_BTN_ID || _fe.id === HDR_ID || _fe.id === POPUP_ID) continue;
-
-              // Streamlit コア要素はスキップ
-              var _ftid = (_fe.getAttribute && _fe.getAttribute('data-testid')) || '';
-              if (_skipTids.indexOf(_ftid) >= 0) continue;
-
-              // stMainBlockContainer / stBottom 内の要素はスキップ
-              if (_fe.closest) {
-                if (_fe.closest('[data-testid="stMainBlockContainer"]') ||
-                    _fe.closest('[data-testid="stBottom"]') ||
-                    _fe.closest('[data-testid="stAppViewContainer"]')) continue;
+          // 右下コーナー 3 点: 実測で (324,798) と (253,798) にボタンがある
+          var oPts = [
+            [oW - 30, oH - 48],
+            [oW - 80, oH - 48],
+            [oW - 140, oH - 48],
+          ];
+          var oHidden = [];
+          oPts.forEach(function (pt) {
+            try {
+              var elems = outerDoc.elementsFromPoint(pt[0], pt[1]);
+              if (!elems) return;
+              for (var _i = 0; _i < elems.length; _i++) {
+                var _e = elems[_i];
+                if (!_e || !_e.style) continue;
+                if (_e === outerDoc.body || _e === outerDoc.documentElement) continue;
+                if (oHidden.indexOf(_e) >= 0) continue;
+                // Streamlit app iframe（全画面）は絶対に消さない
+                if (_e.tagName === 'IFRAME') continue;
+                // ほぼ全画面サイズのコンテナもスキップ
+                var _r = _e.getBoundingClientRect();
+                if (_r.width > oW * 0.8 || _r.height > oH * 0.8) continue;
+                oHidden.push(_e);
+                _e.style.setProperty('display', 'none', 'important');
               }
+            } catch (_e2) {}
+          });
 
-              // サイズ制約: 大きすぎるコンテナは誤検出なのでスキップ
-              var _rect2 = _fe.getBoundingClientRect();
-              if (_rect2.width > W * 0.55 || _rect2.height > H * 0.35) continue;
-              // 右半分・下半分にある要素のみ対象
-              if (_rect2.left < W * 0.35 || _rect2.top < H * 0.5) continue;
-
-              _hiddenSet.push(_fe);
-              _fe.style.setProperty('display', 'none', 'important');
+          // statuspage.io / streamlitstatus の iframe も外側シェルから消す
+          try {
+            var _stIo = outerDoc.querySelectorAll(
+              'iframe[src*="statuspage.io"],iframe[src*="streamlitstatus"],iframe[title*="Streamlit Cloud Status"]'
+            );
+            for (var _si2 = 0; _si2 < _stIo.length; _si2++) {
+              _stIo[_si2].style.setProperty('display', 'none', 'important');
             }
-          } catch (_e2) {}
-        });
+          } catch (_e3) {}
+        }
       } catch (e) {}
 
-      // ⑥ Streamlit Cloud status embed (statuspage.io) を src で直接ターゲット
+      // ── B. Streamlit app iframe 内 (window.parent.document) の残存要素も念のため消す ──
+      //    ローカル開発など外側シェルがない場合のフォールバック
       try {
+        var pDoc = window.parent.document;
+        var pWin = window.parent;
+
+        var byTestId = pDoc.querySelectorAll(
+          '[data-testid="stDeployButton"],[data-testid="manage-app-button"],' +
+          '[data-testid="stActionButton"],[data-testid="stMainMenu"],' +
+          '[data-testid="stStatusWidget"],' +
+          '[class*="viewerBadge"],[class*="ViewerBadge"]'
+        );
+        for (var t = 0; t < byTestId.length; t++) {
+          byTestId[t].style.setProperty('display', 'none', 'important');
+        }
+
+        var stLinks = pDoc.querySelectorAll('a[href*="streamlit"]');
+        for (var sl = 0; sl < stLinks.length; sl++) {
+          var sla = stLinks[sl];
+          for (var slj = 0; slj < 8; slj++) {
+            var slcs = pWin.getComputedStyle(sla);
+            if (slcs.position === 'fixed' || slcs.position === 'sticky') {
+              sla.style.setProperty('display', 'none', 'important');
+              break;
+            }
+            if (!sla.parentElement || sla.parentElement === pDoc.body) {
+              sla.style.setProperty('display', 'none', 'important');
+              break;
+            }
+            sla = sla.parentElement;
+          }
+        }
+
+        // statuspage.io iframe (Streamlit app iframe 側にもあれば消す)
         var _stIframes = pDoc.querySelectorAll(
           'iframe[src*="statuspage.io"],iframe[src*="streamlitstatus"],iframe[title*="Streamlit Cloud Status"]'
         );
         for (var _si = 0; _si < _stIframes.length; _si++) {
           _stIframes[_si].style.setProperty('display', 'none', 'important');
-        }
-      } catch (e) {}
-
-      // ⑦ 右下の小 iframe: クロスオリジン管理 UI のフォールバック
-      //    （全幅 iframe は ⑥ で処理するため width<80% 制約を追加）
-      try {
-        var _W2 = pWin.innerWidth, _H2 = pWin.innerHeight;
-        var _iframes = pDoc.querySelectorAll('iframe');
-        for (var _ii = 0; _ii < _iframes.length; _ii++) {
-          var _ifr = _iframes[_ii];
-          try { if (_ifr.contentWindow === window) continue; } catch (_ie) {}
-          var _isrc = _ifr.src || '';
-          if (_isrc.indexOf('statuspage') >= 0 || _isrc.indexOf('streamlitstatus') >= 0) continue; // ⑥ で処理済み
-          var _ir = _ifr.getBoundingClientRect();
-          if (_ir.right > _W2 * 0.4 && _ir.bottom > _H2 * 0.5 &&
-              _ir.width > 20 && _ir.height > 20 &&
-              _ir.width < _W2 * 0.75) {  // 全幅は除外
-            _ifr.style.setProperty('display', 'none', 'important');
-          }
         }
       } catch (e) {}
     } catch (e) {}

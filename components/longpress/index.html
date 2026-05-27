@@ -438,27 +438,69 @@
         }
       }
 
-      // ⑤ 位置ベース: 右下エリアにある固定要素を隠す
-      //    testid が変わっても確実に消えるよう、座標で判定する。
-      //    除外: カメラボタン(左下)・stBottom/stChatInput(チャット入力)・自前ヘッダー
+      // ⑤ 座標ベース: elementsFromPoint で右下エリアを直接調査
+      //    position:fixed / absolute / sticky を問わず、視覚的にその座標にある要素を取得。
+      //    除外: 自前要素・stBottom・stChatInput・stMainBlockContainer 内の要素
       try {
         var W = pWin.innerWidth;
         var H = pWin.innerHeight;
-        var fixed = pDoc.querySelectorAll('*');
-        for (var fi = 0; fi < fixed.length; fi++) {
-          var fe = fixed[fi];
-          if (fe.id === CAM_BTN_ID || fe.id === HDR_ID) continue;
-          var tid = fe.getAttribute('data-testid') || '';
-          if (tid === 'stBottom' || tid === 'stChatInput' ||
-              tid === 'stBottomBlockContainer' || tid === 'stMainBlockContainer') continue;
-          var fcs = pWin.getComputedStyle(fe);
-          if (fcs.position !== 'fixed') continue;
-          var rect = fe.getBoundingClientRect();
-          // 右半分・下半分・かつ十分なサイズがある固定要素
-          if (rect.left > W * 0.35 && rect.top > H * 0.5 &&
-              rect.width > 8 && rect.height > 8 &&
-              rect.width < W * 0.7) {  // 幅が広すぎるものは stBottom なので除外
-            fe.style.setProperty('display', 'none', 'important');
+        var _skipTids = ['stBottom','stChatInput','stBottomBlockContainer','stMainBlockContainer'];
+        var _hiddenSet = [];
+
+        // 右下エリアの複数点をサンプリング（ボタン2つに対応）
+        var _pts = [
+          [W - 40,  H - 55],
+          [W - 95,  H - 55],
+          [W - 155, H - 55],
+          [W - 40,  H - 110],
+          [W - 95,  H - 110],
+          [W - 155, H - 110],
+        ];
+
+        _pts.forEach(function (pt) {
+          try {
+            if (pt[0] < 0 || pt[1] < 0) return;
+            var elems = pDoc.elementsFromPoint(pt[0], pt[1]);
+            if (!elems) return;
+            for (var _ei = 0; _ei < elems.length; _ei++) {
+              var _fe = elems[_ei];
+              if (!_fe || !_fe.style) continue;
+              if (_fe === pDoc.body || _fe === pDoc.documentElement) continue;
+              if (_hiddenSet.indexOf(_fe) >= 0) continue;
+
+              // 自前の要素はスキップ
+              if (_fe.id === CAM_BTN_ID || _fe.id === HDR_ID || _fe.id === POPUP_ID) continue;
+
+              // Streamlit コア要素はスキップ
+              var _ftid = (_fe.getAttribute && _fe.getAttribute('data-testid')) || '';
+              if (_skipTids.indexOf(_ftid) >= 0) continue;
+
+              // stMainBlockContainer / stBottom 内の要素はスキップ（チャットバブル等を守る）
+              if (_fe.closest) {
+                if (_fe.closest('[data-testid="stMainBlockContainer"]') ||
+                    _fe.closest('[data-testid="stBottom"]')) continue;
+              }
+
+              _hiddenSet.push(_fe);
+              _fe.style.setProperty('display', 'none', 'important');
+            }
+          } catch (_e2) {}
+        });
+      } catch (e) {}
+
+      // ⑥ 右下にある小さな iframe は Streamlit Cloud 管理 UI の可能性
+      //    クロスオリジンで DOM 内検索が届かない場合は iframe 自体を隠す
+      try {
+        var _W2 = pWin.innerWidth, _H2 = pWin.innerHeight;
+        var _iframes = pDoc.querySelectorAll('iframe');
+        for (var _ii = 0; _ii < _iframes.length; _ii++) {
+          var _ifr = _iframes[_ii];
+          try { if (_ifr.contentWindow === window) continue; } catch (_ie) {}
+          var _ir = _ifr.getBoundingClientRect();
+          // 右半分・下半分にある、ゼロ高さでない iframe
+          if (_ir.right > _W2 * 0.4 && _ir.bottom > _H2 * 0.5 &&
+              _ir.width > 20 && _ir.height > 20) {
+            _ifr.style.setProperty('display', 'none', 'important');
           }
         }
       } catch (e) {}

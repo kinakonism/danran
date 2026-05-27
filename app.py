@@ -497,27 +497,11 @@ def show_register() -> None:
 # ─────────────────────────────────────
 def show_chat(current_user: dict) -> None:
 
-    # ── サイドバー ──
     # ── ルーム状態 ──
+    # ヘッダー（＜/✕ + ルーム名）は JS が fixed 位置に注入する
+    # show_rooms は URL パラメータ ?sr=1 を正として参照する
     selected_room = st.session_state.setdefault("active_room", ROOMS[0])
-    show_rooms    = st.session_state.get("show_rooms", False)
-
-    # ── LINE 風ヘッダー：[ ＜ | ルーム名 ] ──
-    # 📷 ボタンは JS コンポーネントがチャット入力欄の左側に固定表示するため不要
-    c_back, c_title = st.columns([1, 8])
-    with c_back:
-        label = "✕" if show_rooms else "＜"
-        if st.button(label, use_container_width=True):
-            st.session_state["show_rooms"] = not show_rooms
-            st.rerun()
-    with c_title:
-        av = current_user["avatar"]
-        av_str = (f'<img src="{av}" style="width:22px;height:22px;border-radius:4px;vertical-align:middle;margin-right:6px">'
-                  if av.startswith("http") else f'{av} ')
-        st.markdown(
-            f'<h3 style="margin:0;line-height:1.4">{av_str}{selected_room}</h3>',
-            unsafe_allow_html=True,
-        )
+    show_rooms    = st.query_params.get("sr") == "1"
 
     # ── ＜ を押したときのルーム選択パネル ──
     if show_rooms:
@@ -528,7 +512,11 @@ def show_chat(current_user: dict) -> None:
             btn_label = f"{'▶ ' if room == selected_room else '　'}{room}{badge}"
             if st.button(btn_label, key=f"rs_{room}", use_container_width=True):
                 st.session_state["active_room"] = room
-                st.session_state["show_rooms"]  = False
+                # ?sr=1 を除去して chat ビューに戻る（Python rerun なので session 保持）
+                _p = {k: v for k, v in st.query_params.items() if k != "sr"}
+                st.query_params.clear()
+                if _p:
+                    st.query_params.update(_p)
                 st.rerun()
         st.divider()
         # ユーザー情報 + ログアウト
@@ -580,6 +568,7 @@ _cu          = st.session_state.get("current_user", {})
 _clear_flag  = st.session_state.pop("_clear_session", False)
 _active_room = (st.session_state.get("active_room", ROOMS[0])
                 if "current_user" in st.session_state else "")
+_show_rooms  = st.query_params.get("sr") == "1"
 st.html(
     f'<div id="_danran_cfg" style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none" '
     f'data-sb-url="{_html.escape(st.secrets["supabase"]["url"])}" '
@@ -588,7 +577,8 @@ st.html(
     f'data-avatar="{_html.escape(_cu.get("avatar",""))}" '
     f'data-room="{_html.escape(_active_room)}" '
     f'data-sess="{_html.escape(st.session_state.get("session_id",""))}" '
-    f'data-clear="{str(_clear_flag).lower()}">'
+    f'data-clear="{str(_clear_flag).lower()}" '
+    f'data-show-rooms="{str(_show_rooms).lower()}">'
     f'</div>'
 )
 

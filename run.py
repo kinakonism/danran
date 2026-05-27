@@ -68,9 +68,7 @@ async def _serve_mobileconfig(request):
     host = request.headers.get("host", "localhost:8501")
     # Streamlit Cloud / リバースプロキシ越しは https
     proto = request.headers.get("x-forwarded-proto", "http")
-    # embed=true を付けることで Streamlit Cloud の「Hosted with Streamlit」等の
-    # バッジを起動時から非表示にする。JS が読み込み後に URL バーから除去する。
-    app_url = f"{proto}://{host}/?embed=true"
+    app_url = f"{proto}://{host}/"
 
     # アイコンを Base64 エンコード（プロファイルに埋め込む）
     icon_path = os.path.join(_ICONS_DIR, "icon-192.png")

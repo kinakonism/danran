@@ -43,10 +43,7 @@ st.markdown("""
 [data-testid="stActionButton"]     { display: none !important; }
 [data-testid="stStatusWidget"]     { display: none !important; }
 [class*="viewerBadge"]             { display: none !important; }
-[class*="hostingBadge"]            { display: none !important; }
-[class*="hostedWith"]              { display: none !important; }
 a[href*="streamlit.io"]            { display: none !important; }
-a[href*="github.com"]              { display: none !important; }
 /* Streamlit Cloud status embed (statuspage.io iframe) */
 iframe[src*="statuspage.io"]       { display: none !important; }
 iframe[src*="streamlitstatus"]     { display: none !important; }

@@ -315,32 +315,52 @@
   }
 
   /* ════════════════════════════════════════
-   *  "Manage app" ボタンをテキスト検索で非表示
-   *  CSS セレクタが変わっても動くように JS で直接探す
+   *  "Manage app" ボタンを複数手段で非表示
+   *  Cloud が動的ハッシュ class を使うため JS テキスト検索 + setInterval
    * ════════════════════════════════════════ */
   function hideManageApp() {
     try {
       var pDoc = window.parent.document;
-      // テキスト "Manage app" を持つ要素を探す
-      var all = pDoc.querySelectorAll('a, button, [role="button"], span');
+
+      // ① 全要素の子テキストノードを検索
+      var all = pDoc.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
-        if (/^manage\s*app$/i.test((all[i].textContent || '').trim())) {
-          var anc = all[i];
-          for (var j = 0; j < 6; j++) {
+        var el = all[i];
+        var directTxt = '';
+        for (var ci = 0; ci < el.childNodes.length; ci++) {
+          if (el.childNodes[ci].nodeType === 3) directTxt += el.childNodes[ci].textContent;
+        }
+        directTxt = directTxt.trim();
+        if (/manage\s*app/i.test(directTxt) && directTxt.length < 30) {
+          var anc = el;
+          for (var j = 0; j < 8; j++) {
             if (!anc.parentElement || anc.parentElement === pDoc.body) break;
             anc = anc.parentElement;
           }
-          anc.style.cssText += ';display:none!important;visibility:hidden!important;';
-          break;
+          anc.style.setProperty('display',    'none',   'important');
+          anc.style.setProperty('visibility', 'hidden', 'important');
         }
       }
-      // クラス名ベースのフォールバック
+
+      // ② href に manage を含むリンクごと隠す
+      var links = pDoc.querySelectorAll('a[href*="manage"]');
+      for (var li = 0; li < links.length; li++) {
+        var la = links[li];
+        for (var lj = 0; lj < 6; lj++) {
+          if (!la.parentElement || la.parentElement === pDoc.body) break;
+          la = la.parentElement;
+        }
+        la.style.setProperty('display', 'none', 'important');
+      }
+
+      // ③ クラス名 / testid ベース（既知パターン）
       var bs = pDoc.querySelectorAll(
-        '[class*="viewerBadge"],[class*="ViewerBadge"],' +
-        '[data-testid="stDeployButton"],[data-testid="manage-app-button"]'
+        '[class*="viewerBadge"],[class*="ViewerBadge"],[class*="manageApp"],' +
+        '[data-testid="stDeployButton"],[data-testid="manage-app-button"],' +
+        '[data-testid="stMainMenu"],[data-testid="stActionButton"]'
       );
       for (var k = 0; k < bs.length; k++) {
-        bs[k].style.cssText += ';display:none!important;';
+        bs[k].style.setProperty('display', 'none', 'important');
       }
     } catch (e) {}
   }
@@ -523,6 +543,15 @@
   stReady();
   stSetHeight();
   setupObs();   // scan() → readConfig() → injectCameraUI() を試みる
+
+  // Manage app ボタンを起動後 30 秒間毎秒チェック（Cloud の遅延注入対応）
+  (function () {
+    var _cnt = 0;
+    var _iv = setInterval(function () {
+      hideManageApp();
+      if (++_cnt >= 30) clearInterval(_iv);
+    }, 1000);
+  })();
 
 })();
 </script>

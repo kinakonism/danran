@@ -119,12 +119,15 @@
       VIEW        = newView;
 
       if (changed) {
-        // ログアウト検出: ユーザーが消えたらヘッダー・カメラを除去
+        // ログアウト検出: ユーザーが消えたらヘッダー・カメラ・バッジを除去
         if (!ME) {
           removeHeader();
           removeCameraUI();
+          stopBadgeTimer();
           return true;
         }
+        // ログイン中はバッジタイマーを開始（多重起動防止付き）
+        if (ME_UID) startBadgeTimer();
         // ヘッダーは Python 側が st.html() でレンダリング済み → JS 注入不要
         // ボタンのクリックハンドラは scan() → attachHdrButtons() が付与する
         if (isEditView || SHOW_ROOMS) {
@@ -742,6 +745,53 @@
     } catch (e) {}
   }
 
+  /* ════════════════════════════════════════
+   *  🏠 ホームアイコンバッジ（Web Badging API）
+   *  iOS 16.4+ / Chrome PWA のみ対応。
+   *  Supabase から自分以外の未読メッセージ数を取得して badge に反映。
+   * ════════════════════════════════════════ */
+  var _badgeTimer = null;
+
+  function updateAppBadge() {
+    try {
+      var pWin = window.parent;
+      if (!('setAppBadge' in pWin.navigator) || !SB_URL || !SB_KEY || !ME_UID) return;
+
+      // ① last_read テーブルから自分の既読情報を取得
+      sbGet('last_read?user_id=eq.' + ME_UID + '&select=room_name,read_at')
+        .then(function (lastReads) {
+          var readMap = {};
+          if (Array.isArray(lastReads)) {
+            lastReads.forEach(function (r) { readMap[r.room_name] = r.read_at; });
+          }
+          // ② 自分以外が送ったメッセージを取得（直近 500 件で十分）
+          return sbGet('messages?user_id=neq.' + ME_UID + '&select=room_name,created_at&order=created_at.desc&limit=500')
+            .then(function (msgs) {
+              if (!Array.isArray(msgs)) return 0;
+              return msgs.filter(function (m) {
+                var r = readMap[m.room_name];
+                return !r || m.created_at > r;
+              }).length;
+            });
+        })
+        .then(function (count) {
+          if (count > 0) pWin.navigator.setAppBadge(count).catch(function () {});
+          else           pWin.navigator.clearAppBadge().catch(function () {});
+        })
+        .catch(function () {});
+    } catch (e) {}
+  }
+
+  function startBadgeTimer() {
+    if (_badgeTimer) return;
+    updateAppBadge();                                    // 即時実行
+    _badgeTimer = setInterval(updateAppBadge, 60000);   // 60 秒ごと
+  }
+  function stopBadgeTimer() {
+    if (_badgeTimer) { clearInterval(_badgeTimer); _badgeTimer = null; }
+    try { window.parent.navigator.clearAppBadge().catch(function () {}); } catch (e) {}
+  }
+
   // 通知許可バナー（ルーム一覧表示中・未許可のときだけ表示）
   var PUSH_PROMPT_ID = '_danran_push_prompt';
 
@@ -1058,6 +1108,11 @@
   function scan() {
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
+    // ログアウト済み（ME が空）なら即座にヘッダー・カメラを除去して終了
+    if (!ME) {
+      removeHeader();
+      removeCameraUI();
+    }
     hideManageApp();
     fixStBottom();   // stBottom の display:none を強制解除
     alignCamBtn();   // 📷 ボタンを stChatInput の垂直中央に追従させる
@@ -1097,6 +1152,7 @@
       if (pDoc._danranSwipeSetup) return;
       pDoc._danranSwipeSetup = true;
 
+      // ── 左端からの右スワイプ → 前画面に戻る ──────────────
       pDoc.addEventListener('touchstart', function (e) {
         var t = e.touches[0];
         _swipeTouchStart = (t.clientX < 40) ? { x: t.clientX, y: t.clientY } : null;
@@ -1109,14 +1165,38 @@
         var dy = Math.abs(t.clientY - _swipeTouchStart.y);
         _swipeTouchStart = null;
         if (dx > 60 && dx > dy) {
-          // 右スワイプ: 現在の画面に応じてナビゲーション
+          // passive:false なので合成クリック（戻るジェスチャー後に発生するタップ）を抑制
+          e.preventDefault();
           if (VIEW === 'profile' || VIEW === 'room_edit' || VIEW === 'notifications' || VIEW === 'room_create') {
             stSetValue({ action: 'go_back', ts: Date.now() });
           } else if (VIEW === 'chat' && !SHOW_ROOMS) {
             stSetValue({ action: 'go_rooms', ts: Date.now() });
           }
         }
-      }, { passive: true });
+      }, { passive: false });  // passive:false → e.preventDefault() で合成クリックを抑制
+
+      // ── iOS ネイティブ戻るジェスチャー対策 ────────────────
+      // iOS PWA のエッジスワイプで ?sr=1 が消えた場合、即座にルームリストに戻す
+      try {
+        var outerWin = (window.parent.parent && window.parent.parent !== window.parent)
+                         ? window.parent.parent : window.parent;
+        if (!outerWin._danranPopstateSetup) {
+          outerWin._danranPopstateSetup = true;
+          outerWin.addEventListener('popstate', function (ev) {
+            if (!SHOW_ROOMS) return;
+            // sr=1 が失われていたら URL を即座に復元（Streamlit の rerun 前に）
+            try {
+              var url = new URL(outerWin.location.href);
+              if (!url.searchParams.has('sr')) {
+                url.searchParams.set('sr', '1');
+                outerWin.history.replaceState(ev.state, '', url.toString());
+              }
+            } catch (ex) {}
+            // Python にも go_rooms を再送（セーフガード）
+            stSetValue({ action: 'go_rooms', ts: Date.now() });
+          });
+        }
+      } catch (ex) {}
     } catch (e) {}
   }
 

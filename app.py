@@ -434,7 +434,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v26",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v27",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1105,8 +1105,10 @@ def show_room_create() -> None:
 # ─────────────────────────────────────
 @st.fragment(run_every="5s")
 def render_room_list() -> None:
+    # ルーム選択中でない・未ログインならフラグメントを空にして終了
+    # （ログアウト後や画面遷移後にフラグメントが残らないようにする）
     current_user = st.session_state.get("current_user")
-    if not current_user:
+    if not current_user or st.query_params.get("sr") != "1":
         return
     _all_rooms      = fetch_rooms()
     _all_room_names = [r["name"] for r in _all_rooms]

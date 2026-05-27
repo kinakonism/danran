@@ -427,7 +427,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v22",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v23",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1163,14 +1163,22 @@ def show_chat(current_user: dict) -> None:
             '<span style="color:rgba(255,255,255,0.25);font-size:1.1rem;flex-shrink:0">›</span>',
             '</button>',  # タップ行
             '</div>',   # カード
+            # ログアウトボタン（HTML → JS → stSetValue で Python に伝達）
+            # st.button() を使わないことで遷移時のフラッシュを防ぐ
+            '<div style="padding:8px 0 24px">',
+            '<button data-logout="true" '
+            'style="width:100%;padding:12px 16px;'
+            'background:rgba(255,80,80,0.10);'
+            'border:1px solid rgba(255,80,80,0.25);border-radius:14px;'
+            'color:rgba(255,120,120,0.85);font-size:0.95rem;'
+            'cursor:pointer;-webkit-tap-highlight-color:transparent">',
+            '🔒 ログアウト',
+            '</button>',
+            '</div>',
             '</div>',   # _danran_room_list
         ])
 
         st.markdown('\n'.join(rows), unsafe_allow_html=True)
-
-        # ── ログアウトボタン（Streamlit が担当） ──
-        if st.button("🔒 ログアウト", use_container_width=True, key="room_logout"):
-            do_logout(); st.rerun()
 
         return   # ルーム選択中はメッセージ非表示
 
@@ -1498,6 +1506,10 @@ if isinstance(_lp_result, dict):
                     st.session_state["editing_room"] = _found[0]
                     st.session_state["view"] = "room_edit"
                     st.rerun()
+        elif _nav == "logout":
+            # HTML ログアウトボタン（data-logout）→ JS → stSetValue で通知
+            do_logout()
+            st.rerun()
         elif _nav == "restore_session":
             # JS コンポーネントが localStorage からセッションIDを読み取り postMessage で通知
             # sandbox の allow-top-navigation がないため location.href が使えないための代替手段
@@ -1523,23 +1535,33 @@ if isinstance(_lp_result, dict):
             if _sub_json and _sub_uid:
                 save_push_subscription(_sub_uid, _sub_json)
 
-st.session_state.setdefault(
-    "view",
-    "chat" if "current_user" in st.session_state else "select_user",
-)
+# ── Render 1 フラッシュ防止 ──────────────────────────────────────────────
+# _lp_result is None = コンポーネントがまだ stSetValue を送っていない（初回描画）。
+# このタイミングで show_user_select() を呼ぶとログインフォームが一瞬表示される。
+# JS は streamlit:render を受信したら必ず restore_session を送るので
+# ここでは空画面を出してその到着を待つ。
+_waiting_for_js = (_lp_result is None and "current_user" not in st.session_state)
+if _waiting_for_js:
+    # 何も描画しない（暗いスプラッシュ相当）
+    st.html('<div style="min-height:100vh;background:#1a1a2e"></div>')
+else:
+    st.session_state.setdefault(
+        "view",
+        "chat" if "current_user" in st.session_state else "select_user",
+    )
 
-match st.session_state["view"]:
-    case "chat" if "current_user" in st.session_state:
-        show_chat(st.session_state["current_user"])
-    case "profile" if "current_user" in st.session_state:
-        show_profile(st.session_state["current_user"])
-    case "room_edit" if "current_user" in st.session_state:
-        show_room_edit(st.session_state.get("editing_room", {}))
-    case "notifications" if "current_user" in st.session_state:
-        show_notifications(st.session_state["current_user"])
-    case "enter_password":
-        show_enter_password()
-    case "register":
-        show_register()
-    case _:
-        show_user_select()
+    match st.session_state["view"]:
+        case "chat" if "current_user" in st.session_state:
+            show_chat(st.session_state["current_user"])
+        case "profile" if "current_user" in st.session_state:
+            show_profile(st.session_state["current_user"])
+        case "room_edit" if "current_user" in st.session_state:
+            show_room_edit(st.session_state.get("editing_room", {}))
+        case "notifications" if "current_user" in st.session_state:
+            show_notifications(st.session_state["current_user"])
+        case "enter_password":
+            show_enter_password()
+        case "register":
+            show_register()
+        case _:
+            show_user_select()

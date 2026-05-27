@@ -166,16 +166,17 @@
       //    【v21 の修正】
       //    _gotRender フラグが true（=streamlit:render を受信済み）のときのみ送る。
       //    render 受信後なら Streamlit は必ず stSetValue を受け取れる。
+      // 【v23 の修正】
+      //    localStorage が空でも必ず restore_session を送る。
+      //    Python 側は session_id が空なら「復元不要」と判断しログインフォームを表示する。
+      //    これにより Render 1（_lp_result is None）を空白画面で待機させ、
+      //    Render 2 以降で正しい画面（ログイン or チャット）を表示できる。
       if (!_sessionRestoreSent && _gotRender) {
         var lsSid = localStorage.getItem(STORAGE_KEY);
         console.log('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '", _gotRender=' + _gotRender);
-        if (lsSid) {
-          _sessionRestoreSent = true;
-          console.log('[danran] → stSetValue restore_session firing with', lsSid.slice(0, 8) + '…');
-          stSetValue({ action: 'restore_session', session_id: lsSid, ts: Date.now() });
-        } else {
-          console.log('[danran] localStorage empty, no restore');
-        }
+        _sessionRestoreSent = true;
+        console.log('[danran] → stSetValue restore_session firing, sid=' + (lsSid ? lsSid.slice(0, 8) + '…' : '(empty)'));
+        stSetValue({ action: 'restore_session', session_id: lsSid || '', ts: Date.now() });
       }
     } catch (e) { console.error('[danran] handleSession error:', e); }
   }
@@ -606,6 +607,19 @@
             stSetValue({ action: 'go_profile', ts: Date.now() });
           });
         })(profBtns[i]);
+      }
+
+      // ログアウトボタン（data-logout）
+      var logoutBtns = pDoc.querySelectorAll('[data-logout]');
+      for (var i = 0; i < logoutBtns.length; i++) {
+        (function (el) {
+          if (el._danranLogout) return;
+          el._danranLogout = true;
+          el.addEventListener('click', function (e) {
+            e.stopPropagation();
+            stSetValue({ action: 'logout', ts: Date.now() });
+          });
+        })(logoutBtns[i]);
       }
     } catch (e) {}
   }

@@ -1403,7 +1403,9 @@ def _build_mobileconfig() -> bytes:
 
 def show_install_page() -> None:
     """?install=1 でアクセスしたとき表示する iOS PWA インストールページ。
-    ログイン不要・セッション不問でアクセス可能。"""
+    ログイン不要・セッション不問でアクセス可能。
+    【重要】mobileconfig (Web Clip) では通知・バッジが動かない。
+    Safari の「ホーム画面に追加」= 正式 PWA インストールが必須。"""
     st.markdown("""
 <style>
 [data-testid="stToolbar"],[data-testid="stDecoration"],[data-testid="stSidebar"],
@@ -1416,34 +1418,66 @@ def show_install_page() -> None:
         '<div style="text-align:center;padding:16px 0 8px">'
         '<div style="font-size:3rem">🏠</div>'
         '<div style="font-size:1.4rem;font-weight:700;color:#fff;margin-top:8px">danran</div>'
-        '<div style="font-size:0.85rem;color:rgba(255,255,255,0.5);margin-top:4px">家族チャット</div>'
+        '<div style="font-size:0.85rem;color:rgba(255,255,255,0.5);margin-top:4px">家族専用チャット</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── メイン: Safari からホーム画面に追加 ──────────────────────────
+    st.markdown(
+        '<div style="background:rgba(0,185,0,0.12);border:1px solid rgba(0,185,0,0.35);'
+        'border-radius:14px;padding:14px 16px;margin:8px 0 4px">'
+        '<div style="font-size:1rem;font-weight:700;color:#0f0;margin-bottom:6px">'
+        '✅ この方法で追加（通知・バッジ対応）</div>'
+        '<div style="font-size:0.85rem;color:rgba(255,255,255,0.85);line-height:1.9">'
+        '<b>1.</b> このページを <b>Safari</b> で開く<br>'
+        '<b>2.</b> 画面下の <b>シェアボタン</b>（□↑）をタップ<br>'
+        '<b>3.</b>「<b>ホーム画面に追加</b>」をタップ<br>'
+        '<b>4.</b>「<b>追加</b>」をタップ<br>'
+        '<b>5.</b> ホーム画面の danran アイコンから起動 🎉<br>'
+        '<b>6.</b> アプリ内で <b>通知を許可</b> する'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div style="font-size:0.75rem;color:rgba(255,255,255,0.4);padding:4px 4px 16px">'
+        '⚠️ Chrome・LINE ブラウザ等では「ホーム画面に追加」が表示されないか、'
+        '通知が使えません。必ず <b style="color:rgba(255,255,255,0.7)">Safari</b> をお使いください。'
         '</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown("---")
-    st.markdown("### 📲 ホーム画面に追加する方法")
-    st.markdown("""
-1. 下の **「プロファイルをダウンロード」** ボタンをタップ
-2. 「**設定**」アプリを開く
-3. 一番上に「**ダウンロード済みのプロファイル**」→ タップ
-4. 「**インストール**」→「**インストール**」
-5. ホーム画面に **danran** のアイコンが追加されます 🎉
-""")
+
+    # ── サブ: mobileconfig（通知なし・アイコンのみ）──────────────────
+    st.markdown(
+        '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);'
+        'border-radius:14px;padding:14px 16px;margin:4px 0">'
+        '<div style="font-size:0.9rem;font-weight:600;color:rgba(255,255,255,0.55);margin-bottom:6px">'
+        '⚙️ プロファイルでインストール（通知・バッジ <b style="color:#f66">非対応</b>）</div>'
+        '<div style="font-size:0.8rem;color:rgba(255,255,255,0.4);line-height:1.7;margin-bottom:10px">'
+        'アイコンをホーム画面に追加するだけの方法です。<br>'
+        '通知やバッジが不要な場合はこちらでも使えます。'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     mobileconfig_bytes = _build_mobileconfig()
     st.download_button(
-        label="📥 プロファイルをダウンロード",
+        label="📥 プロファイルをダウンロード（通知なし）",
         data=mobileconfig_bytes,
         file_name="danran.mobileconfig",
         mime="application/x-apple-aspen-config",
         use_container_width=True,
-        type="primary",
+        type="secondary",
     )
 
     st.markdown(
-        '<div style="font-size:0.75rem;color:rgba(255,255,255,0.3);text-align:center;'
-        'margin-top:16px">iOS 16 以上 / Safari 対応</div>',
+        '<div style="font-size:0.75rem;color:rgba(255,255,255,0.25);text-align:center;'
+        'margin-top:12px">iOS 16.4 以上 / Safari 推奨</div>',
         unsafe_allow_html=True,
     )
 

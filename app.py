@@ -1507,7 +1507,10 @@ if isinstance(_lp_result, dict):
                 if _user:
                     st.session_state["current_user"] = _user
                     st.session_state["session_id"]   = _sid
-                    st.session_state.setdefault("view", "chat")
+                    # ★ setdefault ではなく直接代入：
+                    #    最初の描画で view="select_user" がすでにセットされているため
+                    #    setdefault は何もせず chat に遷移できないバグを修正
+                    st.session_state["view"] = "chat"
                     st.rerun()
                 else:
                     # 復元失敗（セッション期限切れ等）→ ユーザーに再ログインを促す

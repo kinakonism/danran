@@ -28,24 +28,16 @@ st.set_page_config(
 # Streamlit のツールバー・サイドバーを非表示
 st.markdown("""
 <style>
-/* ── Streamlit chrome を全消し ── */
-header                             { display: none !important; }
-[data-testid="stHeader"]           { display: none !important; }
+/* ── Streamlit chrome を非表示 ── */
 [data-testid="stToolbar"]          { display: none !important; }
 [data-testid="stDecoration"]       { display: none !important; }
 [data-testid="stSidebar"]          { display: none !important; }
 [data-testid="collapsedControl"]   { display: none !important; }
 #MainMenu                          { display: none !important; }
-footer                             { display: none !important; }
-/* Streamlit Cloud "Manage app" バー (stBottom) */
-[data-testid="stBottom"]           { display: none !important; }
-[data-testid="stBottomBlockContainer"] { display: none !important; }
 [data-testid="stDeployButton"]     { display: none !important; }
-[data-testid="manage-app-button"]  { display: none !important; }
-[data-testid="stActionButton"]     { display: none !important; }
 [class*="viewerBadge"]             { display: none !important; }
 /* コンテンツの余白調整 */
-[data-testid="stMainBlockContainer"] { padding-top: 0.5rem !important; }
+[data-testid="stMainBlockContainer"] > div:first-child { padding-top: 0.5rem; }
 </style>
 """, unsafe_allow_html=True)
 

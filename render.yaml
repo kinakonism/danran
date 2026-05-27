@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: danran
+    runtime: python
+    repo: https://github.com/kinakonism/danran
+    branch: main
+    buildCommand: pip install uv && uv sync --frozen
+    startCommand: uv run python run.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false          # Render ダッシュボードで手動設定
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+      - key: REGISTER_KEY
+        sync: false          # 招待コード（任意）
+    healthCheckPath: /

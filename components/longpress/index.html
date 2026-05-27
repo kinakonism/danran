@@ -33,7 +33,7 @@
     if (!od.querySelector('link[rel="manifest"]')) {
       var mf = od.createElement('link');
       mf.rel  = 'manifest';
-      mf.href = '/app/static/manifest.json';
+      mf.href = '/manifest.json';
       head.appendChild(mf);
     }
 
@@ -55,7 +55,7 @@
     if (!od.querySelector('link[rel="apple-touch-icon"]')) {
       var ic = od.createElement('link');
       ic.rel  = 'apple-touch-icon';
-      ic.href = '/app/static/icons/icon-192.png';
+      ic.href = '/icons/icon-192.png';
       head.appendChild(ic);
     }
 
@@ -756,10 +756,8 @@
       if (!('serviceWorker' in pWin.navigator) || !('PushManager' in pWin)) return;
       pWin._danranSwDone = ME_UID;
 
-      // Streamlit Cloud: enableStaticServing で /app/static/sw.js を配信
-      // scope '/app/static/' は SW スクリプトのディレクトリ内なので追加ヘッダー不要
-      // push イベントは scope に関係なく届くため通知・バッジは正常動作する
-      pWin.navigator.serviceWorker.register('/app/static/sw.js', { scope: '/app/static/' })
+      // Render: run.py が /sw.js をルートスコープで配信（Service-Worker-Allowed: / ヘッダー付き）
+      pWin.navigator.serviceWorker.register('/sw.js', { scope: '/' })
         .then(function (reg) { pWin._danranSwReg = reg; console.log('[danran] SW registered', reg.scope); })
         .catch(function (err) { console.warn('[danran] SW reg failed:', err); });
 

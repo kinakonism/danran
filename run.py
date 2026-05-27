@@ -145,7 +145,7 @@ from streamlit.web import cli as _st_cli
 
 sys.argv = [
     "streamlit", "run", "app.py",
-    "--server.port",      "8501",
+    "--server.port",      os.environ.get("PORT", "8501"),
     "--server.headless",  "true",
 ]
 sys.exit(_st_cli.main())

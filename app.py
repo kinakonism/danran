@@ -71,10 +71,16 @@ JST               = timezone(timedelta(hours=9))
 # ─────────────────────────────────────
 @st.cache_resource
 def get_supabase() -> Client:
-    return create_client(
-        st.secrets["supabase"]["url"],
-        st.secrets["supabase"]["anon_key"],
+    # st.secrets（ローカル / Streamlit Cloud）→ 環境変数（Render）の順で取得
+    url = (
+        (st.secrets.get("supabase") or {}).get("url")
+        or os.environ.get("SUPABASE_URL", "")
     )
+    key = (
+        (st.secrets.get("supabase") or {}).get("anon_key")
+        or os.environ.get("SUPABASE_ANON_KEY", "")
+    )
+    return create_client(url, key)
 
 supabase = get_supabase()
 
@@ -100,11 +106,20 @@ def invalidate_rooms_cache() -> None:
 # Web Push 通知
 # ─────────────────────────────────────
 def _vapid_cfg() -> dict:
-    """secrets から VAPID 設定を返す。未設定なら空 dict。"""
+    """VAPID 設定を返す。st.secrets → 環境変数 の順でフォールバック。"""
     try:
-        return dict(st.secrets.get("push", {}))
+        cfg = dict(st.secrets.get("push", {}))
+        if cfg:
+            return cfg
     except Exception:
-        return {}
+        pass
+    # Render 等、secrets.toml がない環境では環境変数から読む
+    result = {}
+    for key in ("vapid_public_key", "vapid_private_key", "vapid_subject"):
+        val = os.environ.get(key.upper())
+        if val:
+            result[key] = val
+    return result
 
 def has_push_subscription(user_id: str) -> bool:
     """ユーザーが既に push_subscriptions を持っているか確認する。"""
@@ -448,7 +463,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v33",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v34",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -662,11 +677,14 @@ def normalize_phone(phone: str) -> str:
     return re.sub(r"[\s\-ー－]", "", phone)
 
 def _get_register_key() -> str:
-    """secrets.toml の [app] register_key を返す。未設定なら空文字（制限なし）。"""
+    """招待コードを返す。st.secrets → REGISTER_KEY 環境変数 → 空文字（制限なし）。"""
     try:
-        return st.secrets.get("app", {}).get("register_key", "")
+        val = st.secrets.get("app", {}).get("register_key", "")
+        if val:
+            return val
     except Exception:
-        return ""
+        pass
+    return os.environ.get("REGISTER_KEY", "")
 
 def show_register() -> None:
     _, col, _ = st.columns([1, 2, 1])
@@ -1355,7 +1373,8 @@ def _build_mobileconfig() -> bytes:
     import uuid as _uuid
 
     app_url = (
-        st.secrets.get("app", {}).get("url", "")
+        (st.secrets.get("app") or {}).get("url")
+        or os.environ.get("APP_URL", "")
         or "https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/"
     )
 
@@ -1556,6 +1575,9 @@ else:
 _show_rooms  = st.query_params.get("sr") == "1"
 _cur_view    = st.session_state.get("view", "")
 _vapid_pub = _vapid_cfg().get("vapid_public_key", "")
+# Supabase URL/key: st.secrets → 環境変数 の順でフォールバック（Render 対応）
+_sb_url = ((st.secrets.get("supabase") or {}).get("url") or os.environ.get("SUPABASE_URL", ""))
+_sb_key = ((st.secrets.get("supabase") or {}).get("anon_key") or os.environ.get("SUPABASE_ANON_KEY", ""))
 
 # ── ヘッダーを Python 側でレンダリング ──
 # JS 注入ではなく Python が st.html() で直接 DOM に書くことでタイミング問題を解消。
@@ -1614,8 +1636,8 @@ st.html(
     '<link rel="apple-touch-icon" href="/icons/icon-192.png">'
     # DOM config（JS が参照するデータ属性）
     f'<div id="_danran_cfg" style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none" '
-    f'data-sb-url="{_html.escape(st.secrets["supabase"]["url"])}" '
-    f'data-sb-key="{_html.escape(st.secrets["supabase"]["anon_key"])}" '
+    f'data-sb-url="{_html.escape(_sb_url)}" '
+    f'data-sb-key="{_html.escape(_sb_key)}" '
     f'data-user="{_html.escape(_cu.get("name",""))}" '
     f'data-avatar="{_html.escape(_cu.get("avatar",""))}" '
     f'data-room="{_html.escape(_active_room)}" '

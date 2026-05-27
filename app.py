@@ -427,7 +427,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v20",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v21",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1509,6 +1509,9 @@ if isinstance(_lp_result, dict):
                     st.session_state["session_id"]   = _sid
                     st.session_state.setdefault("view", "chat")
                     st.rerun()
+                else:
+                    # 復元失敗（セッション期限切れ等）→ ユーザーに再ログインを促す
+                    st.toast("セッションの有効期限が切れました。再ログインしてください。", icon="⚠️")
         elif _nav == "save_push_subscription":
             # JS からの Web Push 購読情報を DB に保存（rerun 不要）
             _sub_json = _lp_result.get("subscription", "")

@@ -31,6 +31,7 @@
   var VIEW        = '';     // 現在の画面（'chat'|'profile'|'room_edit'|...）
   var _embedFixed          = false;  // embed=true 除去リダイレクトを1回のみ実行
   var _sessionRestoreSent = false;  // restore_session postMessage を1回のみ送る
+  var _gotRender          = false;  // streamlit:render を受信済みかどうか
 
   // Web Push
   var VAPID_PUB_KEY  = '';  // data-vapid-pub から取得
@@ -155,19 +156,26 @@
 
       // ② 未ログイン: localStorage のセッションIDを postMessage で Python に送る
       //
-      //    【理由】Streamlit Cloud の iframe sandbox に allow-top-navigation がないため
-      //    outerWin.location.href への書き込みは SecurityError になる（v18 で確認済み）。
-      //    stSetValue（postMessage）は sandbox でも動作するので Python に restore_session
-      //    アクションとして通知し、Python 側で get_session_user() → st.rerun() で復元する。
+      //    【v19 の失敗原因】
+      //    コンポーネント初期化時の setupObs() → readConfig() → handleSession() が
+      //    streamlit:render 受信 *前* に stSetValue を送ってしまうことがある。
+      //    このタイミングでの stSetValue は Streamlit に無視される可能性があるが
+      //    _sessionRestoreSent = true が立ってしまい、その後 render が届いた時点では
+      //    再送されない → セッション復元が永遠に行われない。
       //
-      //    _sessionRestoreSent フラグで二重送信を防ぐ（scan() が毎秒呼ばれるため必須）。
-      if (!_sessionRestoreSent) {
+      //    【v21 の修正】
+      //    _gotRender フラグが true（=streamlit:render を受信済み）のときのみ送る。
+      //    render 受信後なら Streamlit は必ず stSetValue を受け取れる。
+      if (!_sessionRestoreSent && _gotRender) {
         var lsSid = localStorage.getItem(STORAGE_KEY);
-        console.log('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '"');
+        console.log('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '", _gotRender=' + _gotRender);
         if (lsSid) {
           _sessionRestoreSent = true;
-          console.log('[danran] → stSetValue restore_session firing');
+          console.log('[danran] → stSetValue restore_session firing with', lsSid.slice(0, 8) + '…');
+          showToast('⏳ セッション復元中...', 3000);
           stSetValue({ action: 'restore_session', session_id: lsSid, ts: Date.now() });
+        } else {
+          console.log('[danran] localStorage empty, no restore');
         }
       }
     } catch (e) { console.error('[danran] handleSession error:', e); }
@@ -1347,6 +1355,7 @@
    * ════════════════════════════════════════ */
   window.addEventListener('message', function (e) {
     if (!e.data || e.data.type !== 'streamlit:render') return;
+    _gotRender = true;  // ← これ以降の handleSession から stSetValue を送っても安全
     var a = e.data.args || {};
     handleSession(a.save_session || '', !!a.clear_session);
     setupObs();

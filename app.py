@@ -40,7 +40,10 @@ st.markdown("""
 [data-testid="collapsedControl"]   { display: none !important; }
 #MainMenu                          { display: none !important; }
 [data-testid="stDeployButton"]     { display: none !important; }
+[data-testid="stActionButton"]     { display: none !important; }
+[data-testid="stStatusWidget"]     { display: none !important; }
 [class*="viewerBadge"]             { display: none !important; }
+a[href*="streamlit.io"]            { display: none !important; }
 /* embed モードが chat input を隠す場合の保険 */
 [data-testid="stBottom"]           { display: block !important; visibility: visible !important; }
 [data-testid="stChatInput"]        { display: flex !important; visibility: visible !important; }
@@ -420,7 +423,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v12",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v13",   # 名前変更 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 

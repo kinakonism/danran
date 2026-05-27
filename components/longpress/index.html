@@ -366,35 +366,52 @@
   function hideManageApp() {
     try {
       var pDoc = window.parent.document;
+      var pWin = window.parent;
 
       // ① data-testid 直撃
-      //    ※ stBottom / stBottomBlockContainer は除外（chat input を含むため）
       var byTestId = pDoc.querySelectorAll(
         '[data-testid="stDeployButton"],[data-testid="manage-app-button"],' +
         '[data-testid="stActionButton"],[data-testid="stMainMenu"],' +
+        '[data-testid="stStatusWidget"],' +
         '[class*="viewerBadge"],[class*="ViewerBadge"]'
       );
       for (var t = 0; t < byTestId.length; t++) {
         byTestId[t].style.setProperty('display', 'none', 'important');
       }
 
-      // ② textContent に "Manage app" を含む全要素を検索し
-      //    fixed/sticky ポジションの祖先を探して隠す
+      // ② Streamlit へのリンクを含む fixed 祖先を隠す
+      //    （ブランドバッジ "Made with Streamlit" などを対象）
+      var stLinks = pDoc.querySelectorAll('a[href*="streamlit"]');
+      for (var sl = 0; sl < stLinks.length; sl++) {
+        var sla = stLinks[sl];
+        for (var slj = 0; slj < 10; slj++) {
+          var slcs = pWin.getComputedStyle(sla);
+          if (slcs.position === 'fixed' || slcs.position === 'sticky') {
+            sla.style.setProperty('display', 'none', 'important');
+            break;
+          }
+          if (!sla.parentElement || sla.parentElement === pDoc.body) {
+            sla.style.setProperty('display', 'none', 'important');
+            break;
+          }
+          sla = sla.parentElement;
+        }
+      }
+
+      // ③ textContent に "Manage app" を含む fixed 祖先を隠す
       var all = pDoc.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
         var txt = (el.textContent || '').trim();
         if (/manage\s*app/i.test(txt) && txt.length < 60) {
-          // fixed/sticky な祖先を探す
           var anc = el;
           for (var j = 0; j < 12; j++) {
-            var cs = window.getComputedStyle(anc);
+            var cs = pWin.getComputedStyle(anc);
             if (cs.position === 'fixed' || cs.position === 'sticky') {
               anc.style.setProperty('display', 'none', 'important');
               break;
             }
             if (!anc.parentElement || anc.parentElement === pDoc.body) {
-              // fixed 祖先が見つからなければ現在位置で隠す
               anc.style.setProperty('display', 'none', 'important');
               break;
             }
@@ -403,12 +420,12 @@
         }
       }
 
-      // ③ href に manage を含むリンクの fixed 祖先を隠す
-      var links = pDoc.querySelectorAll('a[href*="manage"]');
-      for (var li = 0; li < links.length; li++) {
-        var la = links[li];
+      // ④ href に manage を含むリンクの fixed 祖先を隠す
+      var mLinks = pDoc.querySelectorAll('a[href*="manage"]');
+      for (var li = 0; li < mLinks.length; li++) {
+        var la = mLinks[li];
         for (var lj = 0; lj < 10; lj++) {
-          var lcs = window.getComputedStyle(la);
+          var lcs = pWin.getComputedStyle(la);
           if (lcs.position === 'fixed' || lcs.position === 'sticky') {
             la.style.setProperty('display', 'none', 'important');
             break;
@@ -420,6 +437,31 @@
           la = la.parentElement;
         }
       }
+
+      // ⑤ 位置ベース: 右下エリアにある固定要素を隠す
+      //    testid が変わっても確実に消えるよう、座標で判定する。
+      //    除外: カメラボタン(左下)・stBottom/stChatInput(チャット入力)・自前ヘッダー
+      try {
+        var W = pWin.innerWidth;
+        var H = pWin.innerHeight;
+        var fixed = pDoc.querySelectorAll('*');
+        for (var fi = 0; fi < fixed.length; fi++) {
+          var fe = fixed[fi];
+          if (fe.id === CAM_BTN_ID || fe.id === HDR_ID) continue;
+          var tid = fe.getAttribute('data-testid') || '';
+          if (tid === 'stBottom' || tid === 'stChatInput' ||
+              tid === 'stBottomBlockContainer' || tid === 'stMainBlockContainer') continue;
+          var fcs = pWin.getComputedStyle(fe);
+          if (fcs.position !== 'fixed') continue;
+          var rect = fe.getBoundingClientRect();
+          // 右半分・下半分・かつ十分なサイズがある固定要素
+          if (rect.left > W * 0.35 && rect.top > H * 0.5 &&
+              rect.width > 8 && rect.height > 8 &&
+              rect.width < W * 0.7) {  // 幅が広すぎるものは stBottom なので除外
+            fe.style.setProperty('display', 'none', 'important');
+          }
+        }
+      } catch (e) {}
     } catch (e) {}
   }
 

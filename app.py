@@ -59,6 +59,12 @@ iframe[title*="Streamlit Cloud"]   { display: none !important; }
   from { transform: translateX(-32px); opacity: 0.3; }
   to   { transform: translateX(0);     opacity: 1;   }
 }
+/* ── ボタン押下フィードバック（タップ即応感）── */
+#_danran_hdr button:active { background: rgba(255,255,255,0.14) !important; border-radius: 10px; }
+#_danran_room_list button[data-room-gear]:active,
+#_danran_room_list button[data-room-create]:active { background: rgba(255,255,255,0.12) !important; }
+#_danran_hdr button:active,
+#_danran_room_list button:active { transform: scale(0.94); transition: transform 0.06s; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -444,18 +450,43 @@ def toggle_reaction(msg_id: str, uname: str, emoji: str) -> None:
 def get_unread_counts(user_id: str, room_names: list[str] | None = None) -> dict[str, int]:
     if room_names is None:
         room_names = [r["name"] for r in fetch_rooms()]
+
+    def _parse_ts(ts: str | None):
+        """timestamptz 文字列を tz-aware datetime に。失敗時 None。"""
+        try:
+            return datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
+        except Exception:
+            return None
+
     try:
-        last_reads = {
-            r["room_name"]: r["read_at"]
-            for r in supabase.table("last_read").select("room_name, read_at").eq("user_id", user_id).execute().data or []
-        }
-        counts = {}
-        for rname in room_names:
-            lr = last_reads.get(rname)
-            q  = supabase.table("messages").select("id", count="exact").eq("room_name", rname)
-            if lr:
-                q = q.gt("created_at", lr)
-            counts[rname] = q.execute().count or 0
+        # ① last_read を取得（1クエリ）→ room_name ごとの既読時刻を datetime で保持
+        lr_rows = supabase.table("last_read")\
+            .select("room_name, read_at").eq("user_id", user_id).execute().data or []
+        last_reads = {}
+        for r in lr_rows:
+            dt = _parse_ts(r.get("read_at"))
+            if dt is not None:
+                last_reads[r["room_name"]] = dt
+
+        # ② 全メッセージの room_name + created_at を 1クエリで取得しクライアント集計
+        #    （旧実装はルーム数ぶん count クエリを投げて N+1 だった → 常に2クエリに）
+        #    タイムゾーン差（+09:00 と +00:00）で誤判定しないよう datetime 比較する。
+        msg_rows = supabase.table("messages")\
+            .select("room_name, created_at").execute().data or []
+
+        room_set = set(room_names)
+        counts = {rname: 0 for rname in room_names}
+        for m in msg_rows:
+            rn = m.get("room_name")
+            if rn not in room_set:
+                continue
+            lr = last_reads.get(rn)
+            if lr is None:
+                counts[rn] += 1                      # 既読基準なし＝全件未読（旧挙動と一致）
+            else:
+                cdt = _parse_ts(m.get("created_at"))
+                if cdt is not None and cdt > lr:
+                    counts[rn] += 1
         return counts
     except Exception:
         return {r: 0 for r in room_names}
@@ -539,6 +570,10 @@ def render_messages() -> None:
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
 
+    # メッセージごとに st.markdown を呼ぶと 2 秒ポーリングのたびに N 個の Streamlit
+    # 要素を生成・差分計算してもっさり/ちらつきの原因になる。
+    # バブル HTML をリストに溜めてループ後に 1 回だけ描画する。
+    _bubbles: list[str] = []
     for msg in messages:
         msg_id   = msg.get("id",          "")
         sender   = msg.get("user_name",  "不明")
@@ -647,7 +682,10 @@ def render_messages() -> None:
                 f'</div>'
             )
 
-        st.markdown(bubble, unsafe_allow_html=True)
+        _bubbles.append(bubble)
+
+    # 全バブルを 1 回の st.markdown でまとめて描画（要素数を N→1 に削減）
+    st.markdown('\n'.join(_bubbles), unsafe_allow_html=True)
 
 # ─────────────────────────────────────
 # 画面① ログイン（名前 + パスワード）
@@ -916,7 +954,7 @@ def show_profile(current_user: dict) -> None:
                     st.session_state["current_user"]["phone"]  = new_phone
                     _reset_profile_widgets()   # 次回オープン時に再初期化
                     st.success("✅ プロフィールを更新しました！")
-                    _time.sleep(0.8)
+                    _time.sleep(0.3)
                     st.session_state["view"] = "chat"
                     st.session_state["_show_rooms"] = True
                     st.rerun()
@@ -1059,7 +1097,7 @@ def show_room_edit(room: dict) -> None:
                         st.session_state["active_room"] = new_name
 
                     st.success("✅ ルームを更新しました！")
-                    _time.sleep(0.8)
+                    _time.sleep(0.3)
                     _reset_room_edit_widgets()
                     st.session_state["view"] = "chat"
                     st.session_state["_show_rooms"] = True
@@ -1185,7 +1223,7 @@ def show_room_create() -> None:
                     with st.spinner("作成中…"):
                         new_room = create_room(new_name, new_icon)
                     st.success(f"✅ 「{new_name}」を作成しました！")
-                    _time.sleep(0.6)
+                    _time.sleep(0.3)
                     # 作成したルームをアクティブにしてチャットへ
                     st.session_state["active_room"] = new_name
                     _reset_room_create_widgets()

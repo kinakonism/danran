@@ -1339,6 +1339,7 @@
     setupInstallPrompt();   // Android: beforeinstallprompt キャプチャ（iOS は不可）
     try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
     reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
+    sweepToast();           // 期限切れトーストの掃除（死んだ iframe タイマー対策）
     // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
     // （通常は Python が st.html() でレンダリングするため実行されない）
     try {
@@ -1831,12 +1832,25 @@
         (pDoc.head || pDoc.body).appendChild(ks);
       }
       t.textContent = msg;
+      // ★ 親 body に置くが削除タイマーは iframe 内。iframe が再生成されると
+      //   タイマーが死んでトーストが残るため、期限を要素に持たせ scan() でも掃除する。
+      t.setAttribute('data-toast-expire', String(Date.now() + duration));
       pDoc.body.appendChild(t);
       setTimeout(function () {
         t.style.transition = 'opacity 0.35s';
         t.style.opacity    = '0';
         setTimeout(function () { if (t.parentNode) t.remove(); }, 380);
       }, duration);
+    } catch (e) {}
+  }
+
+  // scan() から呼ぶ: 期限切れトーストの掃除（死んだ iframe のタイマー対策）
+  function sweepToast() {
+    try {
+      var t = window.parent.document.getElementById('_danran_toast');
+      if (!t) return;
+      var exp = parseInt(t.getAttribute('data-toast-expire') || '0', 10);
+      if (exp && Date.now() > exp + 500) { t.remove(); }
     } catch (e) {}
   }
 
@@ -1937,27 +1951,36 @@
         ov.style.background    = 'rgba(0,0,0,0)';
         setTimeout(function () { try { if (ov.parentNode) ov.remove(); } catch (e) {} }, 230);
       }
-      // 画像送り（dir=-1 古い / +1 新しい）。境界では弾く
+      // 画像送り（dir=-1 古い / +1 新しい）。境界では弾く。
+      // クロスフェード＋ロード完了待ち＋多重防止で「表示されない」を防ぐ。
+      var animating = false;
       function navigate(dir) {
+        if (animating) { resetImg(false); return; }
         var ni = idx + dir;
         if (ni < 0 || ni >= list.length) { resetImg(true); return; }
-        // 現在画像を横にスライドアウト → 差し替え → 反対側からスライドイン
-        var w = pWin.innerWidth || 400;
+        animating = true;
+        idx = ni;
+        // ドラッグ位置から中央へ戻しつつフェードアウト
         img.style.transition = 'transform 0.13s ease, opacity 0.13s ease';
-        img.style.transform  = 'translateX(' + (dir > 0 ? -w : w) + 'px)';
+        img.style.transform  = 'translate(0,0)';
         img.style.opacity     = '0';
+        ov.style.background    = 'rgba(0,0,0,0.93)';
         setTimeout(function () {
-          idx = ni;
-          img.src = list[idx];
-          img.style.transition = 'none';
-          img.style.transform  = 'translateX(' + (dir > 0 ? w : -w) + 'px)';
-          // 次フレームで中央へ
-          pWin.requestAnimationFrame(function () {
-            img.style.transition = 'transform 0.16s ease, opacity 0.16s ease';
+          var done = false;
+          function showLoaded() {
+            if (done) return; done = true;
+            img.onload = img.onerror = null;
+            img.style.transition = 'opacity 0.16s ease';
             img.style.transform  = 'translate(0,0)';
             img.style.opacity     = '1';
-          });
-        }, 130);
+            animating = false;
+          }
+          img.onload = showLoaded;
+          img.onerror = showLoaded;
+          img.src = list[idx];
+          if (img.complete) showLoaded();   // キャッシュ済みで onload が来ない場合の保険
+          setTimeout(showLoaded, 1500);      // ロード失敗時のフォールバック
+        }, 140);
       }
 
       close.addEventListener('click', function (e) { e.stopPropagation(); closeViewer(); });

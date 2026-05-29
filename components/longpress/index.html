@@ -756,19 +756,30 @@
   /* ブラウザの古い push 購読を強制削除して新しい VAPID キーで再登録する。
    * Python の data-push-resub="true" を検知したときに呼ぶ。
    * unsubscribe() しないと同じ古い endpoint が pushManager.getSubscription() で返り続ける。
+   * _pushResubInProgress フラグで二重呼び出しを防ぐ（scan() ポーリングとの race condition 対策）。
    */
+  var _pushResubInProgress = false;
+
   function forcePushResubscribe() {
+    if (_pushResubInProgress) {
+      console.log('[danran] forcePushResubscribe: already in progress, skip');
+      return;
+    }
+    _pushResubInProgress = true;
     try {
       var pWin = window.parent;
-      if (!('serviceWorker' in pWin.navigator) || !('PushManager' in pWin)) return;
+      if (!('serviceWorker' in pWin.navigator) || !('PushManager' in pWin)) {
+        _pushResubInProgress = false;
+        return;
+      }
       var _vapidKey = VAPID_PUB_KEY;
       var _uid = ME_UID;
       console.log('[danran] forcePushResubscribe start, vapid=', _vapidKey.slice(0, 10) + '...');
       pWin.navigator.serviceWorker.ready.then(function(reg) {
-        // 既存の購読を取得
+        // 既存の購読を全て取得して unsubscribe
         return reg.pushManager.getSubscription().then(function(existing) {
           if (existing) {
-            console.log('[danran] unsubscribing old push endpoint');
+            console.log('[danran] unsubscribing old push endpoint:', existing.endpoint.slice(-20));
             return existing.unsubscribe();
           }
           return true;
@@ -779,19 +790,25 @@
           var raw = atob(b64);
           var u8  = new Uint8Array(raw.length);
           for (var i = 0; i < raw.length; i++) u8[i] = raw.charCodeAt(i);
+          console.log('[danran] subscribing with new VAPID key');
           return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: u8 });
         }).then(function(sub) {
           var subJson = JSON.stringify(sub.toJSON());
-          console.log('[danran] forcePushResubscribe success, new endpoint=', sub.endpoint.slice(-30));
-          // _danranSwDone をリセットして次回 injectSwSetup が再実行できるようにする
+          console.log('[danran] forcePushResubscribe OK, endpoint=...', sub.endpoint.slice(-30));
+          // _danranSwDone をリセットして次回 injectSwSetup が正しい購読を参照できるようにする
           try { pWin._danranSwDone = null; } catch(e) {}
           stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: _uid, ts: Date.now() });
+        }).catch(function(err) {
+          console.error('[danran] forcePushResubscribe failed:', err);
+          _pushResubInProgress = false;
         });
       }).catch(function(err) {
-        console.error('[danran] forcePushResubscribe failed:', err);
+        console.error('[danran] forcePushResubscribe SW ready failed:', err);
+        _pushResubInProgress = false;
       });
     } catch (e) {
       console.error('[danran] forcePushResubscribe error:', e);
+      _pushResubInProgress = false;
     }
   }
 

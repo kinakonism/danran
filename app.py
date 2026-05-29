@@ -158,23 +158,18 @@ def save_push_subscription(user_id: str, subscription_json: str) -> None:
     except Exception:
         pass
 
-def _total_unread(user_id: str) -> int:
-    """プッシュペイロード用: 特定ユーザーの全ルーム未読数合計"""
-    try:
-        rooms = fetch_rooms()
-        counts = get_unread_counts(user_id, [r["name"] for r in rooms])
-        return sum(counts.values())
-    except Exception:
-        return 1
-
 def send_push(room: str, sender_uid: str, sender_name: str,
-              content: str, has_image: bool = False) -> None:
+              content: str, has_image: bool = False,
+              priv: str = "", subj: str = "",
+              room_names: list[str] | None = None) -> None:
     """送信者以外の全購読者に Web Push 通知を送る。
-    ペイロードに unread_count を含めることで sw.js が即座にバッジを更新できる。"""
+    ペイロードに unread_count を含めることで sw.js が即座にバッジを更新できる。
+
+    ★ バックグラウンドスレッドから呼ばれるため、st.secrets / @st.cache_data 等の
+      Streamlit コンテキスト依存 API は呼ばない。VAPID 鍵(priv/subj)とルーム名一覧
+      (room_names)は呼び出し元（メインスレッド）が取得して渡すこと。
+      supabase クライアントは素の HTTP クライアントなのでスレッドから呼んで問題ない。"""
     try:
-        cfg = _vapid_cfg()
-        priv = cfg.get("vapid_private_key", "")
-        subj = cfg.get("vapid_subject", "")
         if not (priv and subj):
             return
 
@@ -192,7 +187,12 @@ def send_push(room: str, sender_uid: str, sender_name: str,
         for row in rows:
             # 受信者ごとに未読数を計算してペイロードに乗せる（sw.js がバッジに使う）
             recipient_uid = row.get("user_id", "")
-            unread = _total_unread(recipient_uid) if recipient_uid else 1
+            # room_names はメインスレッドで取得済みのものを使う（fetch_rooms を呼ばない）
+            try:
+                unread = sum(get_unread_counts(recipient_uid, room_names).values()) \
+                    if (recipient_uid and room_names) else 1
+            except Exception:
+                unread = 1
             payload = json.dumps({
                 "title":        f"danran 🏠 {room}",
                 "body":         body,
@@ -381,12 +381,21 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
             "room_name": room, "user_id": uid, "user_name": uname,
             "user_avatar": uavatar, "content": content, "image_url": image_url,
         }).execute()
-        # プッシュ通知はバックグラウンドスレッドで送信（UI をブロックしない）
-        # Apple/Google APNs への HTTP リクエストが完了するまで待たずに即座に return する
+        # ── プッシュ通知はバックグラウンドスレッドで送信（UI をブロックしない）──
+        # Streamlit コンテキスト依存の値（VAPID 鍵・ルーム名）はメインスレッドで取得し、
+        # スレッドには値として渡す（スレッド内で st.secrets / st.cache_data を呼ぶと
+        # ScriptRunContext 不在で失敗し、プッシュが静かに飛ばなくなるため）。
+        _cfg = _vapid_cfg()
+        _priv = _cfg.get("vapid_private_key", "")
+        _subj = _cfg.get("vapid_subject", "")
+        _room_names = [r["name"] for r in fetch_rooms()]
         threading.Thread(
             target=send_push,
             args=(room, uid, uname, content),
-            kwargs={"has_image": bool(image_url)},
+            kwargs={
+                "has_image": bool(image_url),
+                "priv": _priv, "subj": _subj, "room_names": _room_names,
+            },
             daemon=True,
         ).start()
         return True

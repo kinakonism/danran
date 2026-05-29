@@ -493,7 +493,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v49",   # 完了時の戻りアニメ廃止 + ルームタップの選択ハイライト
+    "danran_lp_v50",   # クリーンアップ: DEBUGフラグでログ抑制 + 孤立ハンドラ/logout分岐削除
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1878,10 +1878,6 @@ if isinstance(_lp_result, dict):
             # ルームリストの + ボタン → ルーム作成画面
             _reset_room_create_widgets()
             st.session_state["view"] = "room_create"
-            st.rerun()
-        elif _nav == "logout":
-            # HTML ログアウトボタン（data-logout）→ JS → stSetValue で通知
-            do_logout()
             st.rerun()
         elif _nav == "restore_session":
             # JS コンポーネントが localStorage からセッションIDを読み取り postMessage で通知

@@ -77,6 +77,12 @@
 (function () {
   'use strict';
 
+  // 診断ログ（本番は false）。問題調査時のみ true にすると詳細ログが出る。
+  // 本番でセッションID/VAPID鍵の先頭等を出さないため、log/warn はこれ経由にする。
+  var DEBUG = false;
+  function dlog()  { if (DEBUG) { try { console.log.apply(console, arguments); }  catch (e) {} } }
+  function dwarn() { if (DEBUG) { try { console.warn.apply(console, arguments); } catch (e) {} } }
+
   var LP_MS           = 500;
   var STORAGE_KEY     = 'danran_session';
   var CHAT_IMG_BUCKET = 'chat-images';
@@ -232,7 +238,7 @@
       //    saveSession="" で呼ばれたら「セッションリセット」と判断し
       //    _sessionRestoreSent フラグをクリアして restore を再試行できるようにする。
       if (ME && !saveSession && !clearSession) {
-        console.log('[danran] session reset detected (ME was:', ME, ') → resetting restore flag');
+        dlog('[danran] session reset detected (ME was:', ME, ') → resetting restore flag');
         _sessionRestoreSent = false;
       }
 
@@ -246,7 +252,7 @@
         //    Python 側は session_id 空なら「復元不要」と判断し show_user_select() を出す。
         if (!_sessionRestoreSent) {
           _sessionRestoreSent = true;
-          console.log('[danran] clearSession → firing restore_session(empty) to unblock Python');
+          dlog('[danran] clearSession → firing restore_session(empty) to unblock Python');
           stSetValue({ action: 'restore_session', session_id: '', ts: Date.now() });
         }
         return;
@@ -256,7 +262,7 @@
         // ログイン後は _sessionRestoreSent をリセットし、次回ログアウト時も
         // clearSession → restore_session を送れる状態にしておく
         _sessionRestoreSent = false;
-        console.log('[danran] session saved to localStorage:', saveSession.slice(0, 8) + '…');
+        dlog('[danran] session saved to localStorage:', saveSession.slice(0, 8) + '…');
         return;
       }
 
@@ -279,9 +285,9 @@
       //    Render 2 以降で正しい画面（ログイン or チャット）を表示できる。
       if (!_sessionRestoreSent && _gotRender) {
         var lsSid = localStorage.getItem(STORAGE_KEY);
-        console.log('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '", _gotRender=' + _gotRender);
+        dlog('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '", _gotRender=' + _gotRender);
         _sessionRestoreSent = true;
-        console.log('[danran] → stSetValue restore_session firing, sid=' + (lsSid ? lsSid.slice(0, 8) + '…' : '(empty)'));
+        dlog('[danran] → stSetValue restore_session firing, sid=' + (lsSid ? lsSid.slice(0, 8) + '…' : '(empty)'));
         stSetValue({ action: 'restore_session', session_id: lsSid || '', ts: Date.now() });
       }
     } catch (e) { console.error('[danran] handleSession error:', e); }
@@ -669,9 +675,9 @@
    * ════════════════════════════════════════ */
   /* ════════════════════════════════════════
    *  ルームリスト（カスタム HTML）のクリックハンドラ
-   *  [data-room-nav]    → go_room（ルームに遷移）
+   *  [data-room-nav]    → go_room（ルームに遷移・即 .dr-selected 付与）
    *  [data-room-gear]   → go_room_edit（ルーム編集画面へ）
-   *  [data-profile-nav] → go_profile（プロフィール編集へ）
+   *  [data-room-create] → go_room_create（新規ルーム作成へ）
    * ════════════════════════════════════════ */
   function attachRoomHandlers() {
     try {
@@ -712,19 +718,6 @@
         })(gearBtns[i]);
       }
 
-      // プロフィールカード
-      var profBtns = pDoc.querySelectorAll('[data-profile-nav]');
-      for (var i = 0; i < profBtns.length; i++) {
-        (function (el) {
-          if (el._danranProfileNav) return;
-          el._danranProfileNav = true;
-          el.addEventListener('click', function (e) {
-            e.stopPropagation();
-            stSetValue({ action: 'go_profile', ts: Date.now() });
-          });
-        })(profBtns[i]);
-      }
-
       // 新規ルーム作成ボタン（data-room-create）
       var createBtns = pDoc.querySelectorAll('[data-room-create]');
       for (var i = 0; i < createBtns.length; i++) {
@@ -738,18 +731,6 @@
         })(createBtns[i]);
       }
 
-      // ログアウトボタン（data-logout）
-      var logoutBtns = pDoc.querySelectorAll('[data-logout]');
-      for (var i = 0; i < logoutBtns.length; i++) {
-        (function (el) {
-          if (el._danranLogout) return;
-          el._danranLogout = true;
-          el.addEventListener('click', function (e) {
-            e.stopPropagation();
-            stSetValue({ action: 'logout', ts: Date.now() });
-          });
-        })(logoutBtns[i]);
-      }
     } catch (e) {}
   }
 
@@ -789,7 +770,7 @@
 
   function forcePushResubscribe() {
     if (_pushResubInProgress) {
-      console.log('[danran] forcePushResubscribe: already in progress, skip');
+      dlog('[danran] forcePushResubscribe: already in progress, skip');
       return;
     }
     _pushResubInProgress = true;
@@ -801,12 +782,12 @@
       }
       var _vapidKey = VAPID_PUB_KEY;
       var _uid = ME_UID;
-      console.log('[danran] forcePushResubscribe start, vapid=', _vapidKey.slice(0, 10) + '...');
+      dlog('[danran] forcePushResubscribe start, vapid=', _vapidKey.slice(0, 10) + '...');
       pWin.navigator.serviceWorker.ready.then(function(reg) {
         // 既存の購読を全て取得して unsubscribe
         return reg.pushManager.getSubscription().then(function(existing) {
           if (existing) {
-            console.log('[danran] unsubscribing old push endpoint:', existing.endpoint.slice(-20));
+            dlog('[danran] unsubscribing old push endpoint:', existing.endpoint.slice(-20));
             return existing.unsubscribe();
           }
           return true;
@@ -817,11 +798,11 @@
           var raw = atob(b64);
           var u8  = new Uint8Array(raw.length);
           for (var i = 0; i < raw.length; i++) u8[i] = raw.charCodeAt(i);
-          console.log('[danran] subscribing with new VAPID key');
+          dlog('[danran] subscribing with new VAPID key');
           return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: u8 });
         }).then(function(sub) {
           var subJson = JSON.stringify(sub.toJSON());
-          console.log('[danran] forcePushResubscribe OK, endpoint=...', sub.endpoint.slice(-30));
+          dlog('[danran] forcePushResubscribe OK, endpoint=...', sub.endpoint.slice(-30));
           // _danranSwDone をリセットして次回 injectSwSetup が正しい購読を参照できるようにする
           try { pWin._danranSwDone = null; } catch(e) {}
           stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: _uid, ts: Date.now() });
@@ -850,8 +831,8 @@
 
       // Cloudflare Worker が /sw.js をルートスコープで配信（Service-Worker-Allowed: /）
       pWin.navigator.serviceWorker.register('/sw.js', { scope: '/' })
-        .then(function (reg) { pWin._danranSwReg = reg; console.log('[danran] SW registered', reg.scope); })
-        .catch(function (err) { console.warn('[danran] SW reg failed:', err); });
+        .then(function (reg) { pWin._danranSwReg = reg; dlog('[danran] SW registered', reg.scope); })
+        .catch(function (err) { dwarn('[danran] SW reg failed:', err); });
 
       // 購読ヘルパー（user gesture の応答として呼ぶ想定）
       var _vapidKey = VAPID_PUB_KEY;
@@ -872,7 +853,7 @@
             });
           }).then(function (sub) {
             onSub(JSON.stringify(sub.toJSON()), uid);
-          }).catch(function (err) { console.warn('[danran] push subscribe failed:', err); });
+          }).catch(function (err) { dwarn('[danran] push subscribe failed:', err); });
         });
       };
 
@@ -911,13 +892,13 @@
    * ════════════════════════════════════════ */
   function danranSetBadge(n) {
     var count = (typeof n === 'number' && n > 0) ? n : 0;
-    console.log('[danran] danranSetBadge(' + count + ')');
+    dlog('[danran] danranSetBadge(' + count + ')');
 
     // 手段 1: コンポーネント自身の navigator（同一オリジン iframe — 動く可能性あり）
     try {
       if ('setAppBadge' in navigator) {
         (count > 0 ? navigator.setAppBadge(count) : navigator.clearAppBadge())
-          .catch(function (e) { console.warn('[danran] badge m1 reject:', e && e.message); });
+          .catch(function (e) { dwarn('[danran] badge m1 reject:', e && e.message); });
       }
     } catch (e) {}
 
@@ -932,7 +913,7 @@
       var topNav = window.top.navigator;
       if (topNav && 'setAppBadge' in topNav) {
         (count > 0 ? topNav.setAppBadge(count) : topNav.clearAppBadge())
-          .catch(function (e) { console.warn('[danran] badge m3 reject:', e && e.message); });
+          .catch(function (e) { dwarn('[danran] badge m3 reject:', e && e.message); });
       }
     } catch (e) {}
 
@@ -946,7 +927,7 @@
         swNav.ready.then(function (reg) {
           if (reg && reg.active) {
             reg.active.postMessage({ type: 'danran-set-badge', count: count });
-            console.log('[danran] badge m4 SW postMessage sent, count=' + count);
+            dlog('[danran] badge m4 SW postMessage sent, count=' + count);
           }
         }).catch(function () {});
       }
@@ -973,12 +954,12 @@
             var cnt = msgs.filter(function (m) {
               var r = readMap[m.room_name]; return !r || m.created_at > r;
             }).length;
-            console.log('[danran] updateAppBadge unread=' + cnt + ' uid=' + ME_UID.slice(0, 8));
+            dlog('[danran] updateAppBadge unread=' + cnt + ' uid=' + ME_UID.slice(0, 8));
             return cnt;
           });
         })
         .then(function (count) { danranSetBadge(count); })
-        .catch(function (e) { console.warn('[danran] updateAppBadge err:', e); });
+        .catch(function (e) { dwarn('[danran] updateAppBadge err:', e); });
     } catch (e) {}
   }
 

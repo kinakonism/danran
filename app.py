@@ -144,18 +144,13 @@ def save_push_subscription(user_id: str, subscription_json: str) -> None:
         p256dh   = keys.get("p256dh", "")
         auth     = keys.get("auth", "")
         if not (endpoint and p256dh and auth):
-            print(f"[push-sub] SKIP: missing fields endpoint={bool(endpoint)} p256dh={bool(p256dh)} auth={bool(auth)}")
             return
-        ep_short = endpoint[-40:] if endpoint else "?"
         supabase.table("push_subscriptions").upsert(
             {"user_id": user_id, "endpoint": endpoint, "p256dh": p256dh, "auth": auth},
             on_conflict="user_id,endpoint",
         ).execute()
-        print(f"[push-sub] saved user_id={user_id} endpoint=...{ep_short}")
-    except Exception as ex:
-        import traceback as _tb
-        print(f"[push-sub] error: {ex}")
-        print(_tb.format_exc())
+    except Exception:
+        pass
 
 def _total_unread(user_id: str) -> int:
     """プッシュペイロード用: 特定ユーザーの全ルーム未読数合計"""
@@ -170,26 +165,22 @@ def send_push(room: str, sender_uid: str, sender_name: str,
               content: str, has_image: bool = False) -> None:
     """送信者以外の全購読者に Web Push 通知を送る。
     ペイロードに unread_count を含めることで sw.js が即座にバッジを更新できる。"""
-    import traceback as _tb
     try:
         cfg = _vapid_cfg()
         priv = cfg.get("vapid_private_key", "")
         subj = cfg.get("vapid_subject", "")
         if not (priv and subj):
-            print(f"[push] SKIP: vapid_private_key={bool(priv)} vapid_subject={bool(subj)}")
             return
 
         from pywebpush import webpush, WebPushException
 
         body = f"{sender_name}: {'📷 写真' if has_image and not content else content[:80]}"
 
-        # 送信者以外の購読情報を user_id ごとに取得
+        # 送信者以外の購読情報を取得
         rows = supabase.table("push_subscriptions")\
             .select("endpoint, p256dh, auth, user_id")\
             .neq("user_id", sender_uid)\
             .execute().data or []
-
-        print(f"[push] room={room} sender={sender_name} subscriptions={len(rows)}")
 
         expired: list[str] = []
         for row in rows:
@@ -203,7 +194,6 @@ def send_push(room: str, sender_uid: str, sender_name: str,
                 "url":          "/",
                 "unread_count": unread,
             }, ensure_ascii=False)
-            ep_short = row["endpoint"][-40:] if row.get("endpoint") else "?"
             try:
                 webpush(
                     subscription_info={
@@ -214,26 +204,21 @@ def send_push(room: str, sender_uid: str, sender_name: str,
                     vapid_private_key=priv,
                     vapid_claims={"sub": subj},
                 )
-                print(f"[push] OK endpoint=...{ep_short}")
             except WebPushException as ex:
-                print(f"[push] WebPushException endpoint=...{ep_short} err={ex}")
                 # 410 Gone = 購読期限切れ → あとで削除
                 if "410" in str(ex):
                     expired.append(row["endpoint"])
-            except Exception as ex:
-                print(f"[push] Exception endpoint=...{ep_short} err={ex}")
-                print(_tb.format_exc())
+            except Exception:
+                pass
 
         # 期限切れ購読を削除
         for ep in expired:
             try:
                 supabase.table("push_subscriptions").delete().eq("endpoint", ep).execute()
-                print(f"[push] deleted expired endpoint=...{ep[-40:]}")
             except Exception:
                 pass
-    except Exception as ex:
-        print(f"[push] outer exception: {ex}")
-        print(_tb.format_exc())
+    except Exception:
+        pass
 
 # ─────────────────────────────────────
 # パスワード

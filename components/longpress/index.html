@@ -1343,17 +1343,18 @@
   /* ════════════════════════════════════════
    *  右スワイプで戻る（エッジスワイプジェスチャー）
    *
-   *  タッチベース（capture フェーズ）のみ:
-   *    - { capture: true, passive: false } → React 合成イベントより前に発火
-   *    - touchend で e.preventDefault() → 合成クリックを抑制
-   *    - capture フェーズ click 抑制器 → 二重対策でクリックを 600ms 遮断
+   *  touchstart/touchend を passive:true で監視（スクロール・タップに無干渉）。
+   *  画面左 60% 以内から右へ 80px 以上のスワイプで前画面に戻る。
    *
-   *  ★ pDoc._danranSwipeV30 フラグで二重登録防止。
-   *    ハンドラは pDoc._danranView / pDoc._danranSR を参照して最新状態を読む。
+   *  ★ 状態は pDoc._danranView / pDoc._danranSR から読む（最新を参照）。
    *
-   *  ★ history 方式 (pushState/popstate) は Streamlit の URL 管理と競合して
-   *    チャット画面に戻るバグを引き起こすため完全廃止。
-   *    代わりに popstate 監視で ?sr=1 が消えた場合のみ即座に復元する。
+   *  ★ 最重要: nav 送信は pDoc._danranNav 経由（scan() が毎回ライブ iframe の
+   *    stSetValue を登録する）。スワイプハンドラ自体は古い iframe が所有して
+   *    いる可能性があり、その window から postMessage すると Streamlit に
+   *    event.source 不一致で無視されるため。
+   *
+   *  ★ show_rooms は Python 側で st.session_state 管理（URL を変えない）。
+   *    URL を変えると iOS Safari のネイティブ戻るジェスチャーと競合するため。
    * ════════════════════════════════════════ */
   var _swipeSX = null, _swipeSY = null, _swipeST = null;
   var _swipeLastFire = 0;   // pDoc 共有ではなくこの iframe だけのデバウンス
@@ -1374,33 +1375,15 @@
     if (pDoc._danranSwipeV43) return;
     pDoc._danranSwipeV43 = true;
 
-    // ── readConfig デバッグ（問題特定後削除）──────────────────────
-    // readConfig() が ME を更新するたびに右上に表示
-    var _dbgMeShown = '';
-    function _dbgCfg() {
-      try {
-        var cfg = pDoc.getElementById('_danran_cfg');
-        var val = cfg ? (cfg.getAttribute('data-user') || '(empty)') : '(no cfg)';
-        var uid = cfg ? (cfg.getAttribute('data-uid')  || '(no uid)') : '';
-        if (val !== _dbgMeShown) {
-          _dbgMeShown = val;
-          _dbg('#a0f', 'ME=' + val + ' uid=' + uid.slice(0, 6));
-        }
-      } catch (_) {}
-    }
-
     // ── スワイプ実行 ──────────────────────────────────────────────
     function execSwipe() {
-      _dbgCfg();   // 現在の data-user / data-uid を表示
       var now = Date.now();
-      if (now - _swipeLastFire < 800) { _dbg('#888', 'SKIP:debounce'); return; }
+      if (now - _swipeLastFire < 800) return;   // 800ms デバウンス
       _swipeLastFire = now;
 
       var view      = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
       var showRooms = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
-      _dbg('#00f', 'v=' + view + ' sr=' + showRooms + ' ME=' + (ME || '∅'));
 
-      // ★ ME チェックを廃止し view で判定（ME が空でも chat 中なら動く）
       var action = null;
       if (view === 'profile' || view === 'room_edit' ||
           view === 'notifications' || view === 'room_create') {
@@ -1408,49 +1391,32 @@
       } else if (view === 'chat' || view === '') {
         action = showRooms ? 'go_chat' : 'go_rooms';
       }
+      if (!action) return;
 
-      if (action) {
-        // ★ 自分（古い iframe かもしれない）の stSetValue ではなく、
-        //   scan() が毎回更新する「生きた iframe」の nav 関数経由で送る。
-        if (pDoc._danranNav) {
-          _dbg('#0af', 'FIRE(live):' + action);
-          pDoc._danranNav(action, now);
-        } else {
-          _dbg('#0af', 'FIRE(self):' + action);
-          stSetValue({ action: action, ts: now });
-        }
+      // ★ 重要: 自分（古い iframe かもしれない）の stSetValue ではなく、
+      //   scan() が毎回更新する「生きた iframe」の nav 関数経由で送る。
+      //   古い iframe から postMessage すると event.source 不一致で
+      //   Streamlit に無視される（このバグで長らく動かなかった）。
+      if (pDoc._danranNav) {
+        pDoc._danranNav(action, now);
       } else {
-        _dbg('#f00', 'NO ACT v=' + view);
+        stSetValue({ action: action, ts: now });
       }
     }
 
-    // ── デバッグ表示（問題特定後に削除） ──────────────────────────
-    function _dbg(color, msg) {
-      try {
-        var d = pDoc.createElement('div');
-        d.style.cssText =
-          'position:fixed;top:56px;right:6px;z-index:2147483647;' +
-          'background:' + color + ';color:#fff;padding:3px 8px;' +
-          'border-radius:6px;font-size:11px;font-weight:bold;pointer-events:none;';
-        d.textContent = msg;
-        pDoc.body.appendChild(d);
-        setTimeout(function () { try { d.remove(); } catch (_) {} }, 2500);
-      } catch (_) {}
-    }
-
-    // ── touchstart / touchend（両方 passive:true）────────────────
-    var _swipeAt = 0;  // スワイプ確定時刻（クリック抑制に使う）
+    // ── touchstart / touchend（両方 passive:true でスクロール・タップに無干渉）──
+    var _swipeAt = 0;  // スワイプ確定時刻（直後の合成クリック抑制に使う）
 
     try {
       pDoc.addEventListener('touchstart', function (e) {
         if (e.touches.length !== 1) { _swipeSX = null; return; }
         var t = e.touches[0];
         var screenW = outerWin.innerWidth || pDoc.documentElement.clientWidth || 375;
+        // 画面左 60% 以内で開始したタッチのみ追跡
         if (t.clientX > screenW * 0.6) { _swipeSX = null; return; }
         _swipeSX = t.clientX;
         _swipeSY = t.clientY;
         _swipeST = Date.now();
-        _dbg('#f90', '▶ x=' + Math.round(t.clientX));
       }, { passive: true });
 
       pDoc.addEventListener('touchend', function (e) {
@@ -1461,35 +1427,25 @@
         var dy = Math.abs(t.clientY - _swipeSY);
         var dt = Date.now() - _swipeST;
         _swipeSX = null;
-        var ok = dx > 80 && dy < dx * 0.6 && dt < 700;
-        _dbg(ok ? '#090' : '#c00',
-             (ok ? '✓' : '✗') +
-             ' dx=' + Math.round(dx) + ' dy=' + Math.round(dy) + ' dt=' + dt);
-        if (ok) {
+        // 右へ 80px 以上 + 縦ブレ < 横移動の 60% + 700ms 以内
+        if (dx > 80 && dy < dx * 0.6 && dt < 700) {
           _swipeAt = Date.now();
           execSwipe();
         }
       }, { passive: true });
 
-      // ── スワイプ後 700ms 以内の synthesized click を遮断 ──────────
-      // iOS は touchend の後に click イベントを合成する。
-      // スワイプ終点にルームボタンがある場合 go_room が即発火して
-      // _show_rooms が消え「一瞬だけ表示されてすぐ閉じる」バグを防ぐ。
+      // ── スワイプ後 700ms 以内の合成クリックを遮断 ──────────────────
+      // iOS は touchend の後に click を合成する。ルーム選択を閉じる方向に
+      // スワイプした際、終点がルームボタンに重なると go_room が誤発火して
+      // 意図しないルームに飛ぶのを防ぐ。
       pDoc.addEventListener('click', function (e) {
         if (Date.now() - _swipeAt < 700) {
-          var tgt = e.target;
-          var label = tgt && tgt.getAttribute
-            ? (tgt.getAttribute('data-room-name') ||
-               tgt.getAttribute('data-hdr-nav') !== null && 'hdr-nav' ||
-               tgt.tagName)
-            : '?';
-          _dbg('#e60', 'CLICK BLOCK:' + label);   // 抑制したクリックの対象を表示
           e.stopImmediatePropagation();
           e.preventDefault();
         }
       }, { capture: true });
 
-    } catch (e) { _dbg('#c00', 'ERR:' + e); }
+    } catch (e) {}
 
     // ── アプリ復帰時にバッジをクリア ─────────────────────────────
     try {

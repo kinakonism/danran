@@ -1338,7 +1338,6 @@
     attachPushBannerClick(); // Python 描画バナーのクリックイベント付与
     setupInstallPrompt();   // Android: beforeinstallprompt キャプチャ（iOS は不可）
     try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
-    try { setupImageViewer(window.parent.document); } catch (e) {}    // 画像全画面ビューアのフックを1回張る
     reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
     // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
     // （通常は Python が st.html() でレンダリングするため実行されない）
@@ -1352,6 +1351,21 @@
       var els = window.parent.document.querySelectorAll('[data-lp-msg]');
       for (var i = 0; i < els.length; i++) {
         if (!els[i]._danranLp) attach(els[i], els[i].getAttribute('data-lp-msg'));
+      }
+    } catch (e) {}
+    // チャット画像に直接タップハンドラを付与（デリゲーションより iOS で確実）
+    try {
+      var imgs = window.parent.document.querySelectorAll('[data-lp-image]');
+      for (var j = 0; j < imgs.length; j++) {
+        (function (im) {
+          if (im._danranImgHooked) return;
+          im._danranImgHooked = true;
+          im.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openImageViewer(im.getAttribute('data-lp-image') || im.getAttribute('src'));
+          });
+        })(imgs[j]);
       }
     } catch (e) {}
   }
@@ -1903,19 +1917,6 @@
       ov.appendChild(close);
       pDoc.body.appendChild(ov);
     } catch (e) {}
-  }
-
-  function setupImageViewer(pDoc) {
-    if (pDoc._danranImgViewerHook) return;
-    pDoc._danranImgViewerHook = true;
-    pDoc.addEventListener('click', function (e) {
-      var t = e.target;
-      var img = (t && t.closest) ? t.closest('[data-lp-image]') : null;
-      if (!img) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openImageViewer(img.getAttribute('data-lp-image') || img.getAttribute('src'));
-    }, true);   // capture: メッセージ長押し等より先に処理
   }
 
   /* ════════════════════════════════════════

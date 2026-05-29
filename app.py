@@ -479,7 +479,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v44g",  # 右スワイプ: synthesized click 抑制+抑制ログ
+    "danran_lp_v44h",  # 右スワイプ: Python側状態バッジ追加
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1686,6 +1686,15 @@ else:
     _active_room = ""
 _show_rooms  = st.session_state.get("_show_rooms", False)
 _cur_view    = st.session_state.get("view", "")
+# ── Python 側デバッグバッジ（問題特定後に削除）──
+_dbg_navts = st.session_state.get("_last_nav_ts", 0)
+_dbg_hascu = "current_user" in st.session_state
+st.html(
+    f'<div style="position:fixed;top:56px;left:6px;z-index:2147483647;'
+    f'background:#404;color:#fff;padding:3px 8px;border-radius:6px;'
+    f'font-size:11px;font-weight:bold;pointer-events:none">'
+    f'PY sr={_show_rooms} v={_cur_view} cu={_dbg_hascu} ts={str(_dbg_navts)[-5:]}</div>'
+)
 _vapid_pub = _vapid_cfg().get("vapid_public_key", "")
 # Supabase URL/key: st.secrets → 環境変数 の順でフォールバック（Render 対応）
 _sb_url = ((st.secrets.get("supabase") or {}).get("url") or os.environ.get("SUPABASE_URL", ""))

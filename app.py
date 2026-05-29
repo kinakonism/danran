@@ -54,6 +54,11 @@ iframe[title*="Streamlit Cloud"]   { display: none !important; }
 [data-testid="stChatInput"]        { display: flex !important; visibility: visible !important; }
 /* コンテンツの余白調整 */
 [data-testid="stMainBlockContainer"] > div:first-child { padding-top: 0.5rem; }
+/* ── スワイプ戻りのスライドイン演出 ── */
+@keyframes danranSlideInLeft {
+  from { transform: translateX(-32px); opacity: 0.3; }
+  to   { transform: translateX(0);     opacity: 1;   }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1221,9 +1226,13 @@ def render_room_list() -> None:
         and not has_push_subscription(current_user["id"])
     )
 
+    # ナビゲーション時のみスライドイン演出（fragment の定期更新では再生しない）
+    _anim = st.session_state.pop("_nav_anim", "")
+    _anim_css = "animation:danranSlideInLeft 0.22s ease-out;" if _anim == "left" else ""
+
     # ═══ Section 1: チャットルーム ═══
     rows: list[str] = [
-        '<div id="_danran_room_list" style="padding-bottom:20px">',
+        f'<div id="_danran_room_list" style="padding-bottom:20px;{_anim_css}">',
     ]
 
     if _show_push_banner:
@@ -1804,6 +1813,7 @@ if isinstance(_lp_result, dict):
         st.session_state["_last_nav_ts"] = _nav_ts
         if _nav == "go_rooms":
             st.session_state["_show_rooms"] = True
+            st.session_state["_nav_anim"] = "left"   # ルーム選択を左からスライドイン
             st.rerun()
         elif _nav == "go_chat":
             st.session_state.pop("_show_rooms", None)
@@ -1821,6 +1831,7 @@ if isinstance(_lp_result, dict):
                 _reset_room_edit_widgets()
             st.session_state["view"] = "chat"
             st.session_state["_show_rooms"] = True
+            st.session_state["_nav_anim"] = "left"
             st.rerun()
         elif _nav == "go_notifications":
             st.session_state["view"] = "notifications"

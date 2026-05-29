@@ -1386,19 +1386,31 @@
       }
     }
 
+    // ── デバッグ表示（問題特定後に削除） ──────────────────────────
+    function _dbg(color, msg) {
+      try {
+        var d = pDoc.createElement('div');
+        d.style.cssText =
+          'position:fixed;top:56px;right:6px;z-index:2147483647;' +
+          'background:' + color + ';color:#fff;padding:3px 8px;' +
+          'border-radius:6px;font-size:11px;font-weight:bold;pointer-events:none;';
+        d.textContent = msg;
+        pDoc.body.appendChild(d);
+        setTimeout(function () { try { d.remove(); } catch (_) {} }, 2500);
+      } catch (_) {}
+    }
+
     // ── touchstart / touchend（両方 passive:true）────────────────
-    // _show_rooms が session_state 管理になり URL が変わらなくなったため、
-    // iOS Safari の「戻るジェスチャー」が発火しても URL に sr=1 がなく
-    // Streamlit は room 選択を閉じない。touchmove での preventDefault は不要。
     try {
       pDoc.addEventListener('touchstart', function (e) {
         if (e.touches.length !== 1) { _swipeSX = null; return; }
         var t = e.touches[0];
         var screenW = outerWin.innerWidth || pDoc.documentElement.clientWidth || 375;
-        if (t.clientX > screenW * 0.35) { _swipeSX = null; return; }
+        if (t.clientX > screenW * 0.6) { _swipeSX = null; return; }  // 60% に緩和
         _swipeSX = t.clientX;
         _swipeSY = t.clientY;
         _swipeST = Date.now();
+        _dbg('#f90', '▶ x=' + Math.round(t.clientX));  // 開始位置を表示
       }, { passive: true });
 
       pDoc.addEventListener('touchend', function (e) {
@@ -1409,12 +1421,14 @@
         var dy = Math.abs(t.clientY - _swipeSY);
         var dt = Date.now() - _swipeST;
         _swipeSX = null;
-        // 右へ 80px 以上 + 縦ブレ < 水平の 50% + 500ms 以内
-        if (dx > 80 && dy < dx * 0.5 && dt < 500) {
-          execSwipe();
-        }
+        // 判定結果を常に表示（OK/NG の両方）
+        var ok = dx > 80 && dy < dx * 0.6 && dt < 700;
+        _dbg(ok ? '#090' : '#c00',
+             (ok ? '✓' : '✗') +
+             ' dx=' + Math.round(dx) + ' dy=' + Math.round(dy) + ' dt=' + dt);
+        if (ok) { execSwipe(); }
       }, { passive: true });
-    } catch (e) {}
+    } catch (e) { _dbg('#c00', 'ERR:' + e); }
 
     // ── アプリ復帰時にバッジをクリア ─────────────────────────────
     try {

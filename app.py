@@ -479,7 +479,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v43",   # 右スワイプ: ローカルデバウンスで旧リスナーとの競合を解消
+    "danran_lp_v44d",  # 右スワイプ: デバッグ表示付き（問題特定用）
     path=_LP_COMPONENT_DIR,
 )
 

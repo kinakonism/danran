@@ -72,14 +72,20 @@ JST               = timezone(timedelta(hours=9))
 @st.cache_resource
 def get_supabase() -> Client:
     # st.secrets（ローカル / Streamlit Cloud）→ 環境変数（Render）の順で取得
-    url = (
-        (st.secrets.get("supabase") or {}).get("url")
-        or os.environ.get("SUPABASE_URL", "")
-    )
-    key = (
-        (st.secrets.get("supabase") or {}).get("anon_key")
-        or os.environ.get("SUPABASE_ANON_KEY", "")
-    )
+    try:
+        url = (
+            (st.secrets.get("supabase") or {}).get("url")
+            or os.environ.get("SUPABASE_URL", "")
+        )
+        key = (
+            (st.secrets.get("supabase") or {}).get("anon_key")
+            or os.environ.get("SUPABASE_ANON_KEY", "")
+        )
+    except Exception:
+        url, key = "", ""
+    if not url or not key:
+        st.error("⚠️ Supabase の設定が見つかりません。Streamlit Cloud の Secrets に [supabase] url と anon_key を設定してください。")
+        st.stop()
     return create_client(url, key)
 
 supabase = get_supabase()

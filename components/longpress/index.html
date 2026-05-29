@@ -1293,6 +1293,14 @@
           stSetValue({ action: 'go_back', ts: Date.now() });
         });
       }
+      // ルーム選択ヘッダー右上のアバター → プロフィール画面
+      var profBtn = pDoc.querySelector('[data-hdr-profile]');
+      if (profBtn && !profBtn._danranHdrProfile) {
+        profBtn._danranHdrProfile = true;
+        profBtn.addEventListener('click', function () {
+          stSetValue({ action: 'go_profile', ts: Date.now() });
+        });
+      }
     } catch (e) {}
   }
 

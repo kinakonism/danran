@@ -479,7 +479,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v45",   # 右スワイプ戻り 完成（デバッグ除去・本番版）
+    "danran_lp_v46",   # ルーム選択からアカウント分離（ヘッダーアバター→プロフィール）+ログアウト確認
     path=_LP_COMPONENT_DIR,
 )
 
@@ -785,6 +785,7 @@ def _reset_profile_widgets() -> None:
     これにより radio・テキスト・ファイルアップローダーが現在値を初期値として表示する。"""
     for k in _PROFILE_WIDGET_KEYS:
         st.session_state.pop(k, None)
+    st.session_state.pop("_logout_confirm", None)   # ログアウト確認状態もリセット
 
 def show_profile(current_user: dict) -> None:
     import time as _time
@@ -909,6 +910,26 @@ def show_profile(current_user: dict) -> None:
         if st.button("🔔 通知設定", use_container_width=True, key="profile_to_notif"):
             st.session_state["view"] = "notifications"
             st.rerun()
+
+        # ── ログアウト（2 段階確認） ──
+        st.divider()
+        if st.session_state.get("_logout_confirm"):
+            st.warning("本当にログアウトしますか？")
+            lc1, lc2 = st.columns(2)
+            with lc1:
+                if st.button("いいえ", use_container_width=True, key="logout_no"):
+                    st.session_state.pop("_logout_confirm", None)
+                    st.rerun()
+            with lc2:
+                if st.button("はい、ログアウト", type="primary",
+                             use_container_width=True, key="logout_yes"):
+                    st.session_state.pop("_logout_confirm", None)
+                    do_logout()
+                    st.rerun()
+        else:
+            if st.button("🔒 ログアウト", use_container_width=True, key="logout_start"):
+                st.session_state["_logout_confirm"] = True
+                st.rerun()
 
 # ─────────────────────────────────────
 # 画面⑤ ルーム編集
@@ -1297,61 +1318,9 @@ def render_room_list() -> None:
 
     rows.append('</div>')  # グループカード閉じ
 
-    # ═══ Section 2: アカウント ═══
-    av    = current_user["avatar"]
-    uname = current_user["name"]
-
-    if av.startswith("http"):
-        avatar_html = (
-            f'<img src="{_html.escape(av)}" '
-            f'style="width:48px;height:48px;border-radius:50%;'
-            f'object-fit:cover;flex-shrink:0">'
-        )
-    else:
-        avatar_html = (
-            f'<div style="width:48px;height:48px;border-radius:50%;'
-            f'background:rgba(255,255,255,0.12);'
-            f'display:flex;align-items:center;justify-content:center;'
-            f'font-size:1.8rem;flex-shrink:0">{av}</div>'
-        )
-
-    rows.extend([
-        f'<span style="{_sec_label}">アカウント</span>',
-        # プロフィールカード（タップでプロフィール編集へ）
-        '<div style="background:rgba(255,255,255,0.06);'
-        'border:1px solid rgba(255,255,255,0.1);'
-        'border-radius:14px;overflow:hidden;margin-bottom:10px">',
-        # タップ可能な行
-        '<button data-profile-nav="true" '
-        'style="width:100%;display:flex;align-items:center;gap:13px;'
-        'padding:14px 16px;background:none;border:none;cursor:pointer;'
-        '-webkit-tap-highlight-color:transparent;text-align:left">',
-        avatar_html,
-        '<div style="flex:1;min-width:0">',
-        f'<div style="font-size:1rem;font-weight:600;color:#fff;'
-        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
-        f'{_html.escape(uname)}</div>',
-        '<div style="font-size:0.76rem;color:rgba(255,255,255,0.4);margin-top:3px">'
-        'プロフィールを編集</div>',
-        '</div>',   # info
-        # 右矢印
-        '<span style="color:rgba(255,255,255,0.25);font-size:1.1rem;flex-shrink:0">›</span>',
-        '</button>',  # タップ行
-        '</div>',   # カード
-        # ログアウトボタン（HTML → JS → stSetValue で Python に伝達）
-        # st.button() を使わないことで遷移時のフラッシュを防ぐ
-        '<div style="padding:8px 0 24px">',
-        '<button data-logout="true" '
-        'style="width:100%;padding:12px 16px;'
-        'background:rgba(255,80,80,0.10);'
-        'border:1px solid rgba(255,80,80,0.25);border-radius:14px;'
-        'color:rgba(255,120,120,0.85);font-size:0.95rem;'
-        'cursor:pointer;-webkit-tap-highlight-color:transparent">',
-        '🔒 ログアウト',
-        '</button>',
-        '</div>',
-        '</div>',   # _danran_room_list
-    ])
+    # アカウント編集・ログアウトはヘッダー右上のアバター → プロフィール画面に集約
+    # （ルーム選択画面にアカウント操作を置かない＝LINE 風 UX）
+    rows.append('</div>')   # _danran_room_list
 
     st.markdown('\n'.join(rows), unsafe_allow_html=True)
 
@@ -1731,11 +1700,36 @@ if "current_user" in st.session_state:
     elif _active_room:
         _hdr_btn_text  = "＜"
         _hdr_title_text = "ルーム選択" if _show_rooms else _active_room
+        # ルーム選択画面では右上にアバターボタンを置きプロフィール画面へ誘導（LINE 風）
+        if _show_rooms:
+            _hdr_av = _cu.get("avatar", "") or "🙂"
+            if _hdr_av.startswith("http"):
+                _hdr_av_inner = (
+                    f'<img src="{_html.escape(_hdr_av)}" '
+                    f'style="width:32px;height:32px;border-radius:50%;'
+                    f'object-fit:cover;display:block">'
+                )
+            else:
+                _hdr_av_inner = (
+                    f'<span style="width:32px;height:32px;border-radius:50%;'
+                    f'background:rgba(255,255,255,0.12);display:flex;'
+                    f'align-items:center;justify-content:center;font-size:1.2rem">'
+                    f'{_html.escape(_hdr_av)}</span>'
+                )
+            _hdr_right = (
+                f'<button data-hdr-profile style="background:none;border:none;'
+                f'padding:6px;cursor:pointer;flex-shrink:0;min-width:44px;'
+                f'display:flex;align-items:center;justify-content:center;'
+                f'-webkit-tap-highlight-color:transparent">'
+                f'{_hdr_av_inner}</button>'
+            )
+        else:
+            _hdr_right = '<div style="flex-shrink:0;min-width:44px;"></div>'
         _hdr_html = (
             f'<div id="_danran_hdr" style="{_HDR_DIV_STYLE}">'
             f'<button data-hdr-nav style="{_HDR_BTN_STYLE}">{_html.escape(_hdr_btn_text)}</button>'
             f'<div style="{_HDR_TITLE_STYLE}">{_html.escape(_hdr_title_text)}</div>'
-            f'<div style="flex-shrink:0;min-width:44px;"></div>'
+            f'{_hdr_right}'
             f'</div>'
         )
 

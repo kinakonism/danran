@@ -1366,23 +1366,29 @@
     pDoc._danranSwipeV43 = true;
 
     // ── スワイプ実行 ──────────────────────────────────────────────
-    // ★ デバウンスは pDoc._danranLastSwipe ではなくローカル変数を使う。
-    //   旧バージョン（v30 等）のリスナーが pDoc._danranLastSwipe を書き換えても
-    //   このバージョンの発火がブロックされないようにするため。
     function execSwipe() {
-      if (!ME) return;
+      if (!ME) { _dbg('#888', 'SKIP:noME'); return; }
       var now = Date.now();
-      if (now - _swipeLastFire < 800) return;
+      if (now - _swipeLastFire < 800) { _dbg('#888', 'SKIP:debounce'); return; }
       _swipeLastFire = now;
 
       var view      = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
       var showRooms = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
+      _dbg('#00f', 'v=' + view + ' sr=' + showRooms);
 
+      var action = null;
       if (view === 'profile' || view === 'room_edit' ||
           view === 'notifications' || view === 'room_create') {
-        stSetValue({ action: 'go_back', ts: now });
+        action = 'go_back';
       } else if (view === 'chat' || view === '') {
-        stSetValue({ action: showRooms ? 'go_chat' : 'go_rooms', ts: now });
+        action = showRooms ? 'go_chat' : 'go_rooms';
+      }
+
+      if (action) {
+        _dbg('#0af', 'FIRE:' + action);
+        stSetValue({ action: action, ts: now });
+      } else {
+        _dbg('#f00', 'NO ACT v=' + view);
       }
     }
 

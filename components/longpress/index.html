@@ -1863,7 +1863,9 @@
       }
       var imageUrl = SB_URL + '/storage/v1/object/public/' + CHAT_IMG_BUCKET + '/' + objName;
       var insertResp = await sbPost('messages', {
-        room_name: room, user_name: ME, user_avatar: avatar, content: '', image_url: imageUrl,
+        // ★ user_id を必ず入れる（削除は user_id 認可のため、無いと画像が消せない）
+        room_name: room, user_id: ME_UID, user_name: ME, user_avatar: avatar,
+        content: '', image_url: imageUrl,
       });
       if (!insertResp.ok) throw new Error('Insert ' + insertResp.status);
 
@@ -1880,39 +1882,130 @@
   }
 
   /* ════════════════════════════════════════
-   *  画像の全画面ビューア（ライトボックス・LINE 風）
-   *  チャットの画像([data-lp-image])タップ → 全画面表示、左上 ✕ で閉じる
+   *  画像の全画面ビューア（ライトボックス・LINE 風ギャラリー）
+   *  - 画像([data-lp-image])タップ → 全画面表示、左上 ✕ で閉じる
+   *  - 下スワイプ → 閉じてチャットへ（指追従・滑らか）
+   *  - 右スワイプ → 前にアップした画像（古い方）/ 左スワイプ → 新しい方
    * ════════════════════════════════════════ */
   var IMG_VIEWER_ID = '_danran_img_viewer';
   function openImageViewer(src) {
     try {
       if (!src) return;
-      var pDoc = window.parent.document;
+      var pDoc = window.parent.document, pWin = window.parent;
       if (pDoc.getElementById(IMG_VIEWER_ID)) return;   // 二重表示防止
+
+      // 現在チャットにある全画像（DOM順＝古い→新しい）を集めてギャラリー化
+      var nodes = pDoc.querySelectorAll('[data-lp-image]');
+      var list = [];
+      for (var i = 0; i < nodes.length; i++) {
+        list.push(nodes[i].getAttribute('data-lp-image') || nodes[i].src);
+      }
+      var idx = list.indexOf(src);
+      if (idx < 0) { list = [src]; idx = 0; }
+
       var ov = pDoc.createElement('div');
       ov.id = IMG_VIEWER_ID;
       ov.style.cssText =
         'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.93);' +
-        'display:flex;align-items:center;justify-content:center;' +
+        'display:flex;align-items:center;justify-content:center;overflow:hidden;' +
         '-webkit-tap-highlight-color:transparent;animation:_danranFadeIn 0.18s ease;';
       var img = pDoc.createElement('img');
-      img.src = src;
-      img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;display:block;';
+      img.src = list[idx];
+      img.style.cssText =
+        'max-width:100%;max-height:100%;object-fit:contain;display:block;will-change:transform;';
       var close = pDoc.createElement('button');
       close.textContent = '✕';
       close.style.cssText =
         'position:fixed;top:calc(env(safe-area-inset-top, 0px) + 12px);left:14px;' +
         'width:40px;height:40px;border-radius:50%;border:none;' +
         'background:rgba(0,0,0,0.55);color:#fff;font-size:1.2rem;cursor:pointer;' +
-        'display:flex;align-items:center;justify-content:center;' +
+        'display:flex;align-items:center;justify-content:center;z-index:2;' +
         '-webkit-tap-highlight-color:transparent;';
-      function closeViewer() { try { if (ov.parentNode) ov.remove(); } catch (e) {} }
+
+      function resetImg(anim) {
+        img.style.transition = anim ? 'transform 0.2s ease, opacity 0.2s ease' : 'none';
+        img.style.transform  = 'translate(0,0)';
+        img.style.opacity     = '1';
+        ov.style.background    = 'rgba(0,0,0,0.93)';
+      }
+      function closeViewer() {
+        var h = pWin.innerHeight || 800;
+        img.style.transition = 'transform 0.22s ease, opacity 0.22s ease';
+        img.style.transform  = 'translateY(' + h + 'px)';
+        img.style.opacity     = '0';
+        ov.style.transition   = 'background 0.22s ease';
+        ov.style.background    = 'rgba(0,0,0,0)';
+        setTimeout(function () { try { if (ov.parentNode) ov.remove(); } catch (e) {} }, 230);
+      }
+      // 画像送り（dir=-1 古い / +1 新しい）。境界では弾く
+      function navigate(dir) {
+        var ni = idx + dir;
+        if (ni < 0 || ni >= list.length) { resetImg(true); return; }
+        // 現在画像を横にスライドアウト → 差し替え → 反対側からスライドイン
+        var w = pWin.innerWidth || 400;
+        img.style.transition = 'transform 0.13s ease, opacity 0.13s ease';
+        img.style.transform  = 'translateX(' + (dir > 0 ? -w : w) + 'px)';
+        img.style.opacity     = '0';
+        setTimeout(function () {
+          idx = ni;
+          img.src = list[idx];
+          img.style.transition = 'none';
+          img.style.transform  = 'translateX(' + (dir > 0 ? w : -w) + 'px)';
+          // 次フレームで中央へ
+          pWin.requestAnimationFrame(function () {
+            img.style.transition = 'transform 0.16s ease, opacity 0.16s ease';
+            img.style.transform  = 'translate(0,0)';
+            img.style.opacity     = '1';
+          });
+        }, 130);
+      }
+
       close.addEventListener('click', function (e) { e.stopPropagation(); closeViewer(); });
-      // 背景タップで閉じる（画像自体のタップは閉じない）
       ov.addEventListener('click', function (e) { if (e.target === ov) closeViewer(); });
-      // touchend が swipe-back に拾われないよう内部で止める
-      ov.addEventListener('touchstart', function (e) { e.stopPropagation(); }, true);
-      ov.addEventListener('touchend',   function (e) { e.stopPropagation(); }, true);
+
+      // ── ジェスチャー（下＝閉じる / 左右＝画像送り、指追従）──
+      var sx = 0, sy = 0, dragging = false, axis = null;
+      ov.addEventListener('touchstart', function (e) {
+        if (e.touches.length !== 1) { dragging = false; return; }
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+        dragging = true; axis = null;
+        img.style.transition = 'none';
+        e.stopPropagation();
+      }, { passive: true, capture: true });
+      ov.addEventListener('touchmove', function (e) {
+        if (!dragging) return;
+        var dx = e.touches[0].clientX - sx;
+        var dy = e.touches[0].clientY - sy;
+        if (!axis) {
+          if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) axis = 'x';
+          else if (Math.abs(dy) > 8) axis = 'y';
+        }
+        if (axis === 'y') {
+          img.style.transform = 'translateY(' + dy + 'px)';
+          ov.style.background  = 'rgba(0,0,0,' + Math.max(0.93 - Math.abs(dy) / 600, 0.15) + ')';
+        } else if (axis === 'x') {
+          img.style.transform = 'translateX(' + dx + 'px)';
+        }
+        if (e.cancelable) e.preventDefault();   // 背面スクロール抑止
+        e.stopPropagation();
+      }, { passive: false, capture: true });
+      ov.addEventListener('touchend', function (e) {
+        if (!dragging) return;
+        dragging = false;
+        var t = e.changedTouches[0];
+        var dx = t.clientX - sx, dy = t.clientY - sy;
+        if (axis === 'y' && dy > 90) {            // 下スワイプ → 閉じる
+          closeViewer();
+        } else if (axis === 'x' && dx > 55) {     // 右スワイプ → 古い方
+          navigate(-1);
+        } else if (axis === 'x' && dx < -55) {    // 左スワイプ → 新しい方
+          navigate(1);
+        } else {
+          resetImg(true);                          // 戻す
+        }
+        e.stopPropagation();
+      }, { passive: true, capture: true });
+
       ov.appendChild(img);
       ov.appendChild(close);
       pDoc.body.appendChild(ov);

@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v56",   # 画像ビューア: デリゲーション→各画像へ直接click添付（iOSで確実に発火）
+    "danran_lp_v57",   # 画像ビューア: 下=閉じる/左右=画像送り + 画像insertにuser_id（削除修正）
     path=_LP_COMPONENT_DIR,
 )
 

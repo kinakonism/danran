@@ -1338,6 +1338,7 @@
     attachPushBannerClick(); // Python 描画バナーのクリックイベント付与
     setupInstallPrompt();   // Android: beforeinstallprompt キャプチャ（iOS は不可）
     try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
+    try { setupImageViewer(window.parent.document); } catch (e) {}    // 画像全画面ビューアのフックを1回張る
     reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
     // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
     // （通常は Python が st.html() でレンダリングするため実行されない）
@@ -1432,6 +1433,7 @@
     pDoc.addEventListener('touchstart', function (e) {
       _swipeSX = null; _dragging = false; _canDrag = false; _dragEl = null;
       if (e.touches.length !== 1) return;
+      if (pDoc.getElementById(IMG_VIEWER_ID)) return;   // 画像ビューア表示中はスワイプ戻り無効
       var t = e.touches[0];
       if (t.clientX > screenWidth() * 0.5) return;   // 左 50% 以内で開始
       _swipeSX = t.clientX; _swipeSY = t.clientY; _swipeST = Date.now();
@@ -1861,6 +1863,59 @@
       if (btn) { btn.textContent = '📷'; btn.style.pointerEvents = ''; }
       showToast('❌ 送信失敗: ' + err.message.slice(0, 40));
     }
+  }
+
+  /* ════════════════════════════════════════
+   *  画像の全画面ビューア（ライトボックス・LINE 風）
+   *  チャットの画像([data-lp-image])タップ → 全画面表示、左上 ✕ で閉じる
+   * ════════════════════════════════════════ */
+  var IMG_VIEWER_ID = '_danran_img_viewer';
+  function openImageViewer(src) {
+    try {
+      if (!src) return;
+      var pDoc = window.parent.document;
+      if (pDoc.getElementById(IMG_VIEWER_ID)) return;   // 二重表示防止
+      var ov = pDoc.createElement('div');
+      ov.id = IMG_VIEWER_ID;
+      ov.style.cssText =
+        'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.93);' +
+        'display:flex;align-items:center;justify-content:center;' +
+        '-webkit-tap-highlight-color:transparent;animation:_danranFadeIn 0.18s ease;';
+      var img = pDoc.createElement('img');
+      img.src = src;
+      img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;display:block;';
+      var close = pDoc.createElement('button');
+      close.textContent = '✕';
+      close.style.cssText =
+        'position:fixed;top:calc(env(safe-area-inset-top, 0px) + 12px);left:14px;' +
+        'width:40px;height:40px;border-radius:50%;border:none;' +
+        'background:rgba(0,0,0,0.55);color:#fff;font-size:1.2rem;cursor:pointer;' +
+        'display:flex;align-items:center;justify-content:center;' +
+        '-webkit-tap-highlight-color:transparent;';
+      function closeViewer() { try { if (ov.parentNode) ov.remove(); } catch (e) {} }
+      close.addEventListener('click', function (e) { e.stopPropagation(); closeViewer(); });
+      // 背景タップで閉じる（画像自体のタップは閉じない）
+      ov.addEventListener('click', function (e) { if (e.target === ov) closeViewer(); });
+      // touchend が swipe-back に拾われないよう内部で止める
+      ov.addEventListener('touchstart', function (e) { e.stopPropagation(); }, true);
+      ov.addEventListener('touchend',   function (e) { e.stopPropagation(); }, true);
+      ov.appendChild(img);
+      ov.appendChild(close);
+      pDoc.body.appendChild(ov);
+    } catch (e) {}
+  }
+
+  function setupImageViewer(pDoc) {
+    if (pDoc._danranImgViewerHook) return;
+    pDoc._danranImgViewerHook = true;
+    pDoc.addEventListener('click', function (e) {
+      var t = e.target;
+      var img = (t && t.closest) ? t.closest('[data-lp-image]') : null;
+      if (!img) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openImageViewer(img.getAttribute('data-lp-image') || img.getAttribute('src'));
+    }, true);   // capture: メッセージ長押し等より先に処理
   }
 
   /* ════════════════════════════════════════

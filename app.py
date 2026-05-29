@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v54",   # チャットヘッダーに👥メンバー管理ボタン（→ルーム編集へ）
+    "danran_lp_v55",   # 画像タップで全画面ビューア（左上✕で閉じる・LINE風）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -665,7 +665,9 @@ def render_messages() -> None:
                         .replace(">", "&gt;").replace("\n", "<br>"))
         is_img_only = bool(img_url) and not body.strip()  # 画像のみ（テキスト無し）
         img_piece = (
-            f'<img src="{img_url}" style="max-width:200px;border-radius:10px;'
+            # data-lp-image: タップで全画面ビューア（JS）を開く
+            f'<img src="{img_url}" data-lp-image="{_html.escape(img_url)}" '
+            f'style="max-width:200px;border-radius:10px;cursor:pointer;'
             f'display:block;{"margin-bottom:6px" if body else ""}">'
         ) if img_url else ""
         content = img_piece + body_esc

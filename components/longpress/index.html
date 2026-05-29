@@ -1347,7 +1347,7 @@
    *    代わりに popstate 監視で ?sr=1 が消えた場合のみ即座に復元する。
    * ════════════════════════════════════════ */
   var _swipeSX = null, _swipeSY = null, _swipeST = null;
-  var _swipeActive = false;   // touchmove で水平方向と確定したら true
+  var _swipeLastFire = 0;   // pDoc 共有ではなくこの iframe だけのデバウンス
   var _swipeSetupDone = false;
 
   function setupSwipeBack() {
@@ -1361,16 +1361,19 @@
                  ? window.parent.parent : window.parent;
     } catch (e) { return; }
 
-    // バージョン付きフラグで二重登録防止
-    if (pDoc._danranSwipeV42) return;
-    pDoc._danranSwipeV42 = true;
+    // バージョン付きフラグで二重登録防止（旧バージョンのフラグとは別）
+    if (pDoc._danranSwipeV43) return;
+    pDoc._danranSwipeV43 = true;
 
     // ── スワイプ実行 ──────────────────────────────────────────────
+    // ★ デバウンスは pDoc._danranLastSwipe ではなくローカル変数を使う。
+    //   旧バージョン（v30 等）のリスナーが pDoc._danranLastSwipe を書き換えても
+    //   このバージョンの発火がブロックされないようにするため。
     function execSwipe() {
       if (!ME) return;
       var now = Date.now();
-      if (now - (pDoc._danranLastSwipe || 0) < 800) return;
-      pDoc._danranLastSwipe = now;
+      if (now - _swipeLastFire < 800) return;
+      _swipeLastFire = now;
 
       var view      = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
       var showRooms = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
@@ -1383,57 +1386,31 @@
       }
     }
 
-    // ── touchstart: 開始点を記録（passive:true でスクロール・タップに干渉しない）──
+    // ── touchstart / touchend（両方 passive:true）────────────────
+    // _show_rooms が session_state 管理になり URL が変わらなくなったため、
+    // iOS Safari の「戻るジェスチャー」が発火しても URL に sr=1 がなく
+    // Streamlit は room 選択を閉じない。touchmove での preventDefault は不要。
     try {
       pDoc.addEventListener('touchstart', function (e) {
-        _swipeActive = false;
         if (e.touches.length !== 1) { _swipeSX = null; return; }
         var t = e.touches[0];
         var screenW = outerWin.innerWidth || pDoc.documentElement.clientWidth || 375;
-        // 画面左 35% 以内のタッチのみ追跡
         if (t.clientX > screenW * 0.35) { _swipeSX = null; return; }
         _swipeSX = t.clientX;
         _swipeSY = t.clientY;
         _swipeST = Date.now();
       }, { passive: true });
 
-      // ── touchmove: 方向を判定し、水平スワイプ確定後に iOS back gesture を阻止 ──
-      // passive:false が必須（e.preventDefault() を呼ぶため）。
-      // 縦方向が先に確定した場合はキャンセルしスクロールを妨げない。
-      // iOS Safari（Web Clip 含む）は touchmove の preventDefault で
-      // ネイティブ back gesture を阻止できる。
-      pDoc.addEventListener('touchmove', function (e) {
-        if (_swipeSX === null) return;
-        if (e.touches.length !== 1) { _swipeSX = null; _swipeActive = false; return; }
-        var t  = e.touches[0];
-        var dx = t.clientX - _swipeSX;
-        var dy = Math.abs(t.clientY - _swipeSY);
-        if (!_swipeActive) {
-          if (dy > 8) {
-            // 縦スクロール → スワイプキャンセル（スクロールを通常通り許可）
-            _swipeSX = null; return;
-          }
-          if (dx > 8) {
-            // 水平スワイプ確定 → iOS back gesture を阻止
-            _swipeActive = true;
-          }
-        }
-        if (_swipeActive && e.cancelable) {
-          e.preventDefault();   // iOS Safari の「戻るジェスチャー」を阻止
-        }
-      }, { passive: false });   // preventDefault を使うため passive:false が必須
-
-      // ── touchend: 閾値を超えていたらナビゲーション実行 ──
       pDoc.addEventListener('touchend', function (e) {
-        if (_swipeSX === null || !_swipeActive) { _swipeSX = null; _swipeActive = false; return; }
-        if (e.changedTouches.length !== 1) { _swipeSX = null; _swipeActive = false; return; }
+        if (_swipeSX === null) return;
+        if (e.changedTouches.length !== 1) { _swipeSX = null; return; }
         var t  = e.changedTouches[0];
         var dx = t.clientX - _swipeSX;
         var dy = Math.abs(t.clientY - _swipeSY);
         var dt = Date.now() - _swipeST;
-        _swipeSX = null; _swipeActive = false;
-        // 右へ 80px 以上 + 縦ブレ < 50% + 600ms 以内
-        if (dx > 80 && dy < dx * 0.5 && dt < 600) {
+        _swipeSX = null;
+        // 右へ 80px 以上 + 縦ブレ < 水平の 50% + 500ms 以内
+        if (dx > 80 && dy < dx * 0.5 && dt < 500) {
           execSwipe();
         }
       }, { passive: true });

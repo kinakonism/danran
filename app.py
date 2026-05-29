@@ -479,7 +479,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v42",   # 右スワイプ: touchmove 方向判定 + show_rooms を session_state 化
+    "danran_lp_v43",   # 右スワイプ: ローカルデバウンスで旧リスナーとの競合を解消
     path=_LP_COMPONENT_DIR,
 )
 

@@ -42,26 +42,41 @@
 ```
 select_user（ログイン）
     ↓ do_login()
-chat（チャット）← → room_edit（既存ルーム編集）
-    │               room_create（新規ルーム作成）← ルーム選択画面の + ボタン
-    ↓ go_profile
-profile（プロフィール編集）
-notifications（通知設定）
+chat（チャット）⇄ ルーム選択（_show_rooms=True で同一 view 内トグル）
+    │   │           ├ room_edit（既存ルーム編集）← ルーム行の ⚙️
+    │   │           └ room_create（新規ルーム作成）← ルーム選択の + ボタン
+    │   ↓ go_profile（ルーム選択ヘッダー右上アバター）
+    │ profile（プロフィール編集 ＋ 通知設定ボタン ＋ ログアウト[2段階確認]）
+    │   ↓
+    └ notifications（通知設定）
 ```
 
-`st.session_state["view"]` で管理。`match` 文でルーティング。
+`st.session_state["view"]` で管理。`match` 文でルーティング。  
+ルーム選択⇄チャットは view を変えず `_show_rooms` フラグで切替（[セッション管理](#ルーム選択--チャットの状態管理_show_rooms)参照）。  
+**アカウント編集・ログアウトはルーム選択画面に置かず、ヘッダー右上アバター→プロフィール画面に集約**（LINE 風 UX）。
 
 ### セッション管理
 
 - ログイン時: `sessions` テーブルに INSERT → `?s=SESSION_ID` をURLにセット
 - ブラウザ復元: JS が localStorage → stSetValue(restore_session) → Python が `get_session_user()` で復元
-- ログアウト: `sessions` レコード削除 + localStorage クリア
+- ログアウト: `sessions` レコード削除 + localStorage クリア。**プロフィール画面下部のボタンから「本当にログアウトしますか？→ いいえ/はい」の2段階確認**（`_logout_confirm` session_state）。誤操作防止のためルーム選択画面には置かない。
+- **セッション TTL**: pg_cron `danran-session-cleanup`（毎朝4時）で30日以上前の `sessions` を削除。
 - **Render 1 フラッシュ防止**: `_lp_result is None` かつ未ログイン時は空白画面を表示しログインフォームを出さない。JS が必ず restore_session を送るので Render 2 以降で正しい画面に遷移。
+- **ログアウト後の blank screen 防止**: JS `handleSession(clearSession=true)` 時に `_sessionRestoreSent=false` なら `restore_session(session_id='')` を送って Python の `_waiting_for_js` デッドロックを解除する。
+
+### ルーム選択 ⇄ チャットの状態管理（`_show_rooms`）
+
+- **`st.session_state["_show_rooms"]` で管理**（旧 `?sr=1` URL パラメータは廃止）。
+  - 理由: URL を変えると iOS Safari / Web Clip のネイティブ戻るジェスチャーが履歴を巻き戻し、「一瞬戻ってすぐ閉じる」バグになる。session_state なら URL 不変。
+- `go_rooms` で `True`、`go_chat` / `go_room` で `pop`。
+- ルーム選択はトップ画面。ヘッダーに `＜` を出さず、右上のアバター（`data-hdr-profile`）→ プロフィール画面へ。
 
 ### リアルタイム更新
 
 - `@st.fragment(run_every="2s")` の `render_messages()` が2秒ごとにメッセージをポーリング
-- フラグメントはページ全体を rerun しない（メッセージエリアのみ更新）
+- `@st.fragment(run_every="5s")` の `render_room_list()` がルーム選択中の未読バッジを更新
+- フラグメントはページ全体を rerun しない
+- **両フラグメントとも冒頭にガードが必須**（`_show_rooms` / `current_user` / `view` を確認して早期 return）。`run_every` フラグメントはナビゲーション後も独立してタイマー発火するため、ガードがないと遷移直後に旧画面が一瞬再描画されてちらつく。
 
 ---
 
@@ -83,18 +98,22 @@ window.parent.postMessage(
 ```javascript
 stSetValue({ action: 'go_rooms',       ts: Date.now() });
 stSetValue({ action: 'go_chat',        ts: Date.now() });
-stSetValue({ action: 'go_profile',     ts: Date.now() });
+stSetValue({ action: 'go_profile',     ts: Date.now() });   // ルーム選択ヘッダー右上アバター(data-hdr-profile)から
 stSetValue({ action: 'go_back',        ts: Date.now() });
 stSetValue({ action: 'go_notifications', ts: Date.now() });
 stSetValue({ action: 'go_room',        room_name: '...', ts: Date.now() });
 stSetValue({ action: 'go_room_edit',   room_id: '...', ts: Date.now() });
-stSetValue({ action: 'go_room_create', ts: Date.now() });   // ← NEW: ルーム作成
-stSetValue({ action: 'logout',         ts: Date.now() });
+stSetValue({ action: 'go_room_create', ts: Date.now() });
 stSetValue({ action: 'restore_session', session_id: '...', ts: Date.now() });
 stSetValue({ action: 'save_push_subscription', subscription: '...', user_id: '...', ts: Date.now() });
+// 注: 'logout' アクションは廃止。ログアウトはプロフィール画面の Streamlit ボタン（2段階確認）に移動。
+//     旧 data-logout / data-profile-nav ハンドラは index.html に残るが対象要素が無く不発（無害）。
 ```
 
 **必ず `ts: Date.now()` を付ける**。Python 側は `_last_nav_ts` で重複処理を防いでいる。`ts` がないと古いキャッシュ値が再発火して無限ループになる。
+
+**★ 最重要: スワイプ等「一度だけ登録するハンドラ」からの nav 送信は `pDoc._danranNav` 経由**。  
+`scan()` が毎回ライブ iframe の `stSetValue` を `window.parent.document._danranNav` に上書き登録する。スワイプハンドラ自体は古い iframe が所有していることがあり、その死んだ window から `postMessage` すると Streamlit に `event.source` 不一致で無視される（→ [[swipe-back-live-iframe]] メモリ参照）。
 
 ### DOM config パターン
 
@@ -125,10 +144,17 @@ var room = cfg.getAttribute('data-room');
 | `data-room` | アクティブルーム名 |
 | `data-sess` | 保存すべきセッションID |
 | `data-clear` | `"true"` でlocalStorageを消す |
-| `data-show-rooms` | `"true"` でルーム選択中 |
+| `data-show-rooms` | `"true"` でルーム選択中（`st.session_state["_show_rooms"]` 由来） |
 | `data-view` | 現在の view 名 |
 | `data-vapid-pub` | VAPID 公開鍵 |
-| `data-users-json` | ★NEW: 全ユーザーの名前・電話番号 JSON（FaceTime 用） |
+| `data-users-json` | 全ユーザーの名前・電話番号 JSON（FaceTime 用） |
+
+#### ヘッダーの構成（Python が `st.html` で描画）
+
+- ログイン中は `#_danran_hdr`（`position:fixed`）を Python 側がレンダリング。クリックハンドラのみ JS（`attachHdrButtons`）が `data-hdr-nav` / `data-hdr-back` / `data-hdr-profile` に付与。
+- **チャット画面**: 左 `＜`（`data-hdr-nav`→`go_rooms`）｜中央ルーム名｜右スペーサー
+- **ルーム選択画面（トップ）**: 左スペーサー（`＜` を出さない）｜中央「ルーム選択」｜右アバター（`data-hdr-profile`→`go_profile`）
+- **編集画面**: 左 `＜`（`data-hdr-back`→`go_back`）｜中央タイトル｜右スペーサー
 
 #### `data-users-json` の形式（FaceTime 機能追加後）
 
@@ -170,10 +196,30 @@ JS コンポーネントをブラウザにキャッシュさせないため、�
 
 ```python
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v23",   # ← v23, v24, v25... と上げる（現在 v23）
+    "danran_lp_v49",   # ← v49, v50... と上げる（現在 v49）
     path=_LP_COMPONENT_DIR,
 )
 ```
+
+> JS（index.html）を変更したら必ずインクリメント。Python のみの変更（CSS 文字列等）なら据え置きで可。
+
+### 右スワイプで戻る（指追従ドラッグ）
+
+チャット画面で右にドラッグすると `.stApp` を `translateX` で指追従させ、離したら戻る/進むを判定する。
+
+- **対象**: `view==='chat' && !_show_rooms` のときのみドラッグ有効。ルーム選択（トップ）・編集画面では指追従しない。
+- **touchstart** `passive:true`（左50%以内で開始） / **touchmove** `passive:false`（横ロック後に `preventDefault` で縦スクロール・iOS戻りを抑止） / **touchend** `passive:true`。
+- **完了判定**: `dx > 画面幅*0.32` または `dx>60 && 速度>0.5px/ms`。
+- **完了時**: `clearDrag(el, false)` で**アニメなし瞬時**に `translateX(0)`（「戻る」動きを見せない）→ `go_rooms`。ルーム選択は CSS `danranSlideInLeft` でスライドイン。
+- **キャンセル時**: `clearDrag(el, true)` でバネ戻し。
+- **`touchcancel`** でも必ず `clearDrag`（通話・通知での中断対策）。
+- **★ 画面外へ投げ飛ばさない**: 旧実装は `.stApp` を画面外へ throw → `go_rooms` 後に戻す設計だったが、サーバー往復ラグで戻せず**真っ暗固着**した。完了時も必ず `translateX(0)` に戻すこと。
+- nav 送信は `pDoc._danranNav` 経由（古い iframe 問題、上記参照）。
+
+### スライドイン演出 / 選択フィードバック
+
+- `_nav_anim="left"`（`go_rooms`/編集からの戻り時にセット）→ `render_room_list` が `#_danran_room_list` に `danranSlideInLeft` を1回だけ適用。`pop` で消費するのでフラグメントの定期更新では再生しない。
+- ルームタップ時: `button.dr-room` に `:active` 押下ハイライト＋JS が即 `.dr-selected`（緑）を付与し、サーバー往復中も選択状態が見える。
 
 ---
 
@@ -452,7 +498,7 @@ def fetch_all_users() -> list[dict]:
 
 ## ルーム作成機能
 
-### 概要（未実装・計画段階）
+### 概要（実装済み）
 
 ルーム選択画面の「チャットルーム」セクションラベル横に `+` ボタンを配置。  
 タップするとルーム作成画面（`show_room_create()`）に遷移する。
@@ -534,6 +580,30 @@ profile 画面から戻るたびにまた profile に飛ぶ無限ループにな
 Android・PC 環境では何も起きないか、ブラウザがエラーを出す。  
 ポップアップ上に「iPhone でのみ動作します」等の注意書きを入れることを検討。
 
+### スワイプ等の nav が「ボタンは効くのにスワイプだけ効かない」
+
+一度だけ登録するハンドラ（スワイプ等）が**古い iframe に取り残され**、その死んだ window から `postMessage` → Streamlit が `event.source` 不一致で無視するのが原因。  
+→ nav 送信は必ず `scan()` がライブ iframe で毎回上書きする `pDoc._danranNav` 経由にする。ボタンは `scan()` が毎回ハンドラを付け直すので影響を受けない。詳細は [[swipe-back-live-iframe]] メモリ。
+
+### iOS でスワイプ遷移が「一瞬戻ってすぐ閉じる」
+
+`?sr=1` など **URL を変える**と iOS のネイティブ戻るジェスチャーが履歴を巻き戻して競合する。  
+→ ルーム選択状態は `st.session_state["_show_rooms"]`（URL 不変）で管理する。
+
+### 指追従ドラッグで画面を「投げ飛ばさない」
+
+`.stApp` を画面外へ `translateX` で飛ばして遷移後に戻す設計は、サーバー往復ラグで戻せず**真っ暗固着**する。  
+→ 完了時も必ず `translateX(0)` に戻す（瞬時クリア）。遷移演出は CSS スライドインに任せる。
+
+### run_every フラグメントは遷移後もタイマー発火する
+
+`render_messages`（2s）/`render_room_list`（5s）はナビゲーション後も独立して再実行されるため、  
+冒頭ガード（`_show_rooms`/`current_user`/`view`）がないと遷移直後に旧画面が一瞬ちらつく。両方に必須。
+
+### メッセージ削除は user_id で認可
+
+`delete_message` は `user_name`（変更可能）ではなく `user_id`（UUID）で認可する。JS の `deleteMsg` も `ME_UID` を使う。名前を他人に合わせて他人のメッセージを消せてしまう穴を防ぐため。
+
 ---
 
 ## 開発時のデバッグ
@@ -546,5 +616,10 @@ uv run python run.py
 # → MCP ツール: mcp__supabase__get_logs
 
 # コンポーネントキャッシュが怪しいとき
-# → "danran_lp_v23" の数字をインクリメント（現在 v23）
+# → "danran_lp_v49" の数字をインクリメント（現在 v49）
+
+# iOS PWA など画面にログを出せない環境のデバッグ
+# → JS 側: 色付きの fixed div を一定時間表示する _dbg(color,msg) 方式、
+#    Python 側: st.html の状態バッジ、を併用すると JS→Python のどこで
+#    切れているか切り分けやすい（過去のスワイプ不具合はこれで特定）
 ```

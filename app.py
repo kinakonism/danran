@@ -479,7 +479,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v44f",  # 右スワイプ: MEガード廃止+cfg値デバッグ
+    "danran_lp_v44g",  # 右スワイプ: synthesized click 抑制+抑制ログ
     path=_LP_COMPONENT_DIR,
 )
 

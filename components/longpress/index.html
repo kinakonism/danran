@@ -1423,16 +1423,18 @@
     }
 
     // ── touchstart / touchend（両方 passive:true）────────────────
+    var _swipeAt = 0;  // スワイプ確定時刻（クリック抑制に使う）
+
     try {
       pDoc.addEventListener('touchstart', function (e) {
         if (e.touches.length !== 1) { _swipeSX = null; return; }
         var t = e.touches[0];
         var screenW = outerWin.innerWidth || pDoc.documentElement.clientWidth || 375;
-        if (t.clientX > screenW * 0.6) { _swipeSX = null; return; }  // 60% に緩和
+        if (t.clientX > screenW * 0.6) { _swipeSX = null; return; }
         _swipeSX = t.clientX;
         _swipeSY = t.clientY;
         _swipeST = Date.now();
-        _dbg('#f90', '▶ x=' + Math.round(t.clientX));  // 開始位置を表示
+        _dbg('#f90', '▶ x=' + Math.round(t.clientX));
       }, { passive: true });
 
       pDoc.addEventListener('touchend', function (e) {
@@ -1443,13 +1445,34 @@
         var dy = Math.abs(t.clientY - _swipeSY);
         var dt = Date.now() - _swipeST;
         _swipeSX = null;
-        // 判定結果を常に表示（OK/NG の両方）
         var ok = dx > 80 && dy < dx * 0.6 && dt < 700;
         _dbg(ok ? '#090' : '#c00',
              (ok ? '✓' : '✗') +
              ' dx=' + Math.round(dx) + ' dy=' + Math.round(dy) + ' dt=' + dt);
-        if (ok) { execSwipe(); }
+        if (ok) {
+          _swipeAt = Date.now();
+          execSwipe();
+        }
       }, { passive: true });
+
+      // ── スワイプ後 700ms 以内の synthesized click を遮断 ──────────
+      // iOS は touchend の後に click イベントを合成する。
+      // スワイプ終点にルームボタンがある場合 go_room が即発火して
+      // _show_rooms が消え「一瞬だけ表示されてすぐ閉じる」バグを防ぐ。
+      pDoc.addEventListener('click', function (e) {
+        if (Date.now() - _swipeAt < 700) {
+          var tgt = e.target;
+          var label = tgt && tgt.getAttribute
+            ? (tgt.getAttribute('data-room-name') ||
+               tgt.getAttribute('data-hdr-nav') !== null && 'hdr-nav' ||
+               tgt.tagName)
+            : '?';
+          _dbg('#e60', 'CLICK BLOCK:' + label);   // 抑制したクリックの対象を表示
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      }, { capture: true });
+
     } catch (e) { _dbg('#c00', 'ERR:' + e); }
 
     // ── アプリ復帰時にバッジをクリア ─────────────────────────────

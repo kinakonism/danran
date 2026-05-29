@@ -1951,8 +1951,19 @@ if isinstance(_lp_result, dict):
 # ここでは空画面を出してその到着を待つ。
 _waiting_for_js = (_lp_result is None and "current_user" not in st.session_state)
 if _waiting_for_js:
-    # 何も描画しない（暗いスプラッシュ相当）
-    st.html('<div style="min-height:100vh;background:#1a1a2e"></div>')
+    # セッション復元待ちの間、意図的なスプラッシュを全画面で表示する。
+    # （旧実装は #1a1a2e のベタ塗り div が全画面を覆えず「黒地に紺の四角」が
+    #   浮いて壊れて見えた。fixed:inset:0 で全画面・地色に馴染ませ・ロゴをパルス）
+    st.html(
+        '<style>@keyframes danranSplash{'
+        '0%,100%{opacity:0.45;transform:scale(0.96)}50%{opacity:1;transform:scale(1)}}</style>'
+        '<div style="position:fixed;inset:0;z-index:2147483646;background:#0e1117;'
+        'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">'
+        '<div style="font-size:3.4rem;animation:danranSplash 1.4s ease-in-out infinite">🏠</div>'
+        '<div style="color:rgba(255,255,255,0.45);font-size:0.9rem;font-weight:700;'
+        'letter-spacing:0.12em">danran</div>'
+        '</div>'
+    )
 else:
     st.session_state.setdefault(
         "view",

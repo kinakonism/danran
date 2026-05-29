@@ -479,7 +479,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v44h",  # 右スワイプ: Python側状態バッジ追加
+    "danran_lp_v44i",  # 右スワイプ: nav を親の生きたiframe経由に変更（核心修正）
     path=_LP_COMPONENT_DIR,
 )
 

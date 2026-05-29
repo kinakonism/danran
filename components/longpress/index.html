@@ -1299,6 +1299,15 @@
   function scan() {
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
+    // ── スワイプ用 nav 関数を親ドキュメントに登録（毎 scan で上書き）──
+    //   スワイプハンドラは古い iframe が所有している可能性があるため、
+    //   この「生きている iframe」の stSetValue を親に常に最新登録しておく。
+    //   死んだ iframe の setInterval は停止するので、最後に勝つのは必ずライブ iframe。
+    try {
+      window.parent.document._danranNav = function (action, ts) {
+        stSetValue({ action: action, ts: ts });
+      };
+    } catch (e) {}
     // ログアウト済み（ME が空）なら即座にヘッダー・カメラを除去して終了
     if (!ME) {
       removeHeader();
@@ -1401,8 +1410,15 @@
       }
 
       if (action) {
-        _dbg('#0af', 'FIRE:' + action);
-        stSetValue({ action: action, ts: now });
+        // ★ 自分（古い iframe かもしれない）の stSetValue ではなく、
+        //   scan() が毎回更新する「生きた iframe」の nav 関数経由で送る。
+        if (pDoc._danranNav) {
+          _dbg('#0af', 'FIRE(live):' + action);
+          pDoc._danranNav(action, now);
+        } else {
+          _dbg('#0af', 'FIRE(self):' + action);
+          stSetValue({ action: action, ts: now });
+        }
       } else {
         _dbg('#f00', 'NO ACT v=' + view);
       }

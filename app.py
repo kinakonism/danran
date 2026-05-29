@@ -484,7 +484,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v46",   # ルーム選択からアカウント分離（ヘッダーアバター→プロフィール）+ログアウト確認
+    "danran_lp_v47",   # 指追従スワイプドラッグ + ルーム選択の＜削除・スワイプ無効化
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1740,11 +1740,17 @@ if "current_user" in st.session_state:
                 f'-webkit-tap-highlight-color:transparent">'
                 f'{_hdr_av_inner}</button>'
             )
+            # ルーム選択はトップ画面なので戻る（＜）ボタンは出さない
+            _hdr_left = '<div style="flex-shrink:0;min-width:44px;"></div>'
         else:
             _hdr_right = '<div style="flex-shrink:0;min-width:44px;"></div>'
+            _hdr_left = (
+                f'<button data-hdr-nav style="{_HDR_BTN_STYLE}">'
+                f'{_html.escape(_hdr_btn_text)}</button>'
+            )
         _hdr_html = (
             f'<div id="_danran_hdr" style="{_HDR_DIV_STYLE}">'
-            f'<button data-hdr-nav style="{_HDR_BTN_STYLE}">{_html.escape(_hdr_btn_text)}</button>'
+            f'{_hdr_left}'
             f'<div style="{_HDR_TITLE_STYLE}">{_html.escape(_hdr_title_text)}</div>'
             f'{_hdr_right}'
             f'</div>'

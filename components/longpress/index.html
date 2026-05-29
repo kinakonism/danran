@@ -1316,6 +1316,17 @@
         stSetValue({ action: action, ts: ts });
       };
     } catch (e) {}
+    // ── 指追従ドラッグ完了後、ルーム選択が出たら .stApp の transform をリセット ──
+    //   readConfig() 直後なので SHOW_ROOMS は最新。投げ飛ばした .stApp を元に戻し、
+    //   ルーム選択は自前の CSS スライドイン(danranSlideInLeft)で入る。
+    try {
+      var _pd = window.parent.document;
+      if (_pd._danranDragReset && SHOW_ROOMS) {
+        _pd._danranDragReset = false;
+        var _appEl = _pd.querySelector('[data-testid="stApp"]') || _pd.querySelector('.stApp');
+        if (_appEl) { _appEl.style.transition = 'none'; _appEl.style.transform = ''; _appEl.style.boxShadow = ''; }
+      }
+    } catch (e) {}
     // ログアウト済み（ME が空）なら即座にヘッダー・カメラを除去して終了
     if (!ME) {
       removeHeader();
@@ -1380,87 +1391,149 @@
     } catch (e) { return; }
 
     // バージョン付きフラグで二重登録防止（旧バージョンのフラグとは別）
-    if (pDoc._danranSwipeV43) return;
-    pDoc._danranSwipeV43 = true;
+    if (pDoc._danranSwipeV47) return;
+    pDoc._danranSwipeV47 = true;
 
-    // ── スワイプ実行 ──────────────────────────────────────────────
-    function execSwipe() {
+    function screenWidth() {
+      return outerWin.innerWidth || pDoc.documentElement.clientWidth || 375;
+    }
+    function getAppEl() {
+      return pDoc.querySelector('[data-testid="stApp"]') || pDoc.querySelector('.stApp');
+    }
+
+    // nav 送信（生きた iframe 経由・800ms デバウンス）
+    function fireNav(action) {
       var now = Date.now();
-      if (now - _swipeLastFire < 800) return;   // 800ms デバウンス
+      if (now - _swipeLastFire < 800) return;
       _swipeLastFire = now;
+      if (pDoc._danranNav) { pDoc._danranNav(action, now); }
+      else { stSetValue({ action: action, ts: now }); }
+    }
 
-      var view      = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
-      var showRooms = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
-
-      var action = null;
-      if (view === 'profile' || view === 'room_edit' ||
-          view === 'notifications' || view === 'room_create') {
-        action = 'go_back';
-      } else if (view === 'chat' || view === '') {
-        action = showRooms ? 'go_chat' : 'go_rooms';
-      }
-      if (!action) return;
-
-      // ★ 重要: 自分（古い iframe かもしれない）の stSetValue ではなく、
-      //   scan() が毎回更新する「生きた iframe」の nav 関数経由で送る。
-      //   古い iframe から postMessage すると event.source 不一致で
-      //   Streamlit に無視される（このバグで長らく動かなかった）。
-      if (pDoc._danranNav) {
-        pDoc._danranNav(action, now);
+    // ドラッグ transform をクリア（withTransition=true でバネ戻し）
+    function clearDrag(el, withTransition) {
+      if (!el) return;
+      if (withTransition) {
+        el.style.transition = 'transform 0.2s ease-out';
+        el.style.transform  = 'translateX(0)';
+        el.style.boxShadow  = '';
+        setTimeout(function () {
+          try { el.style.transition = ''; el.style.transform = ''; } catch (e) {}
+        }, 240);
       } else {
-        stSetValue({ action: action, ts: now });
+        el.style.transition = 'none';
+        el.style.transform  = '';
+        el.style.boxShadow  = '';
       }
     }
 
-    // ── touchstart / touchend（両方 passive:true でスクロール・タップに無干渉）──
-    var _swipeAt = 0;  // スワイプ確定時刻（直後の合成クリック抑制に使う）
+    var _swipeAt  = 0;       // 合成クリック抑制用
+    var _dragEl   = null;    // ドラッグ中の .stApp
+    var _dragging = false;   // 横ドラッグ確定
+    var _canDrag  = false;   // チャット画面（ルーム選択でない）で開始したか
 
-    try {
-      pDoc.addEventListener('touchstart', function (e) {
-        if (e.touches.length !== 1) { _swipeSX = null; return; }
-        var t = e.touches[0];
-        var screenW = outerWin.innerWidth || pDoc.documentElement.clientWidth || 375;
-        // 画面左 60% 以内で開始したタッチのみ追跡
-        if (t.clientX > screenW * 0.6) { _swipeSX = null; return; }
-        _swipeSX = t.clientX;
-        _swipeSY = t.clientY;
-        _swipeST = Date.now();
-      }, { passive: true });
+    // ── touchstart: 開始点記録 + ドラッグ可否判定 ──
+    pDoc.addEventListener('touchstart', function (e) {
+      _swipeSX = null; _dragging = false; _canDrag = false; _dragEl = null;
+      if (e.touches.length !== 1) return;
+      var t = e.touches[0];
+      if (t.clientX > screenWidth() * 0.5) return;   // 左 50% 以内で開始
+      _swipeSX = t.clientX; _swipeSY = t.clientY; _swipeST = Date.now();
+      var view = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
+      var sr   = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
+      // 指追従ドラッグはチャット画面のみ（ルーム選択＝トップ画面では無効）
+      _canDrag = (view === 'chat' || view === '') && !sr;
+    }, { passive: true });
 
-      pDoc.addEventListener('touchend', function (e) {
-        if (_swipeSX === null) return;
-        if (e.changedTouches.length !== 1) { _swipeSX = null; return; }
-        var t  = e.changedTouches[0];
-        var dx = t.clientX - _swipeSX;
-        var dy = Math.abs(t.clientY - _swipeSY);
-        var dt = Date.now() - _swipeST;
-        _swipeSX = null;
-        // 右へ 80px 以上 + 縦ブレ < 横移動の 60% + 700ms 以内
-        if (dx > 80 && dy < dx * 0.6 && dt < 700) {
+    // ── touchmove: 横ドラッグ確定後に .stApp を指追従 ──
+    pDoc.addEventListener('touchmove', function (e) {
+      if (_swipeSX === null) return;
+      if (e.touches.length !== 1) return;
+      var t  = e.touches[0];
+      var dx = t.clientX - _swipeSX;
+      var dy = t.clientY - _swipeSY;
+      if (!_dragging) {
+        if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { _swipeSX = null; return; } // 縦スクロール
+        if (dx > 12) {
+          _dragging = true;
+          if (_canDrag) {
+            _dragEl = getAppEl();
+            if (_dragEl) _dragEl.style.transition = 'none';
+          }
+        } else { return; }
+      }
+      if (_canDrag && _dragEl) {
+        if (e.cancelable) e.preventDefault();          // 縦スクロール・iOS戻りを抑止
+        var x = dx < 0 ? 0 : dx;                        // 右方向のみ
+        _dragEl.style.transform = 'translateX(' + x + 'px)';
+        _dragEl.style.boxShadow = '-14px 0 28px rgba(0,0,0,0.45)';
+      }
+    }, { passive: false });   // preventDefault するため passive:false 必須
+
+    // ── touchend: 完了/キャンセル判定 ──
+    pDoc.addEventListener('touchend', function (e) {
+      if (_swipeSX === null) { _dragging = false; return; }
+      if (e.changedTouches.length !== 1) { _swipeSX = null; _dragging = false; return; }
+      var t  = e.changedTouches[0];
+      var dx = t.clientX - _swipeSX;
+      var dy = Math.abs(t.clientY - _swipeSY);
+      var dt = Date.now() - _swipeST;
+      _swipeSX = null;
+      var sw = screenWidth();
+
+      // 指追従ドラッグ（チャット → ルーム選択）
+      if (_dragging && _canDrag && _dragEl) {
+        var vel = dx / Math.max(dt, 1);                 // px/ms
+        var complete = (dx > sw * 0.32) || (dx > 60 && vel > 0.5);
+        if (complete) {
           _swipeAt = Date.now();
-          execSwipe();
+          _dragEl.style.transition = 'transform 0.16s ease-out';
+          _dragEl.style.transform  = 'translateX(' + sw + 'px)';   // 残りを右へ投げる
+          pDoc._danranDragReset = true;                  // ルーム選択出現時に scan() がリセット
+          var elRef = _dragEl;
+          setTimeout(function () { fireNav('go_rooms'); }, 110);
+          setTimeout(function () {                        // 安全策: 1.5s で強制リセット
+            if (pDoc._danranDragReset) { pDoc._danranDragReset = false; clearDrag(elRef, false); }
+          }, 1500);
+        } else {
+          clearDrag(_dragEl, true);                       // バネで戻す
         }
-      }, { passive: true });
+        _dragging = false; _dragEl = null;
+        return;
+      }
+      _dragging = false;
 
-      // ── スワイプ後 700ms 以内の合成クリックを遮断 ──────────────────
-      // iOS は touchend の後に click を合成する。ルーム選択を閉じる方向に
-      // スワイプした際、終点がルームボタンに重なると go_room が誤発火して
-      // 意図しないルームに飛ぶのを防ぐ。
-      pDoc.addEventListener('click', function (e) {
-        if (Date.now() - _swipeAt < 700) {
-          e.stopImmediatePropagation();
-          e.preventDefault();
-        }
-      }, { capture: true });
+      // 非ドラッグ: 編集画面の戻る等（しきい値判定）
+      if (dx > 80 && dy < dx * 0.6 && dt < 700) {
+        _swipeAt = Date.now();
+        execSwipeFallback();
+      }
+    }, { passive: true });
 
-    } catch (e) {}
+    function execSwipeFallback() {
+      var view = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
+      var sr   = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
+      if (view === 'profile' || view === 'room_edit' ||
+          view === 'notifications' || view === 'room_create') {
+        fireNav('go_back');
+      } else if ((view === 'chat' || view === '') && !sr) {
+        fireNav('go_rooms');                              // ドラッグが効かなかった場合の保険
+      }
+      // ルーム選択中(sr=true)はトップ画面のため何もしない
+    }
 
-    // ── アプリ復帰時にバッジをクリア ─────────────────────────────
-    try {
-      pDoc.addEventListener('visibilitychange', function () {
-        if (!pDoc.hidden && ME) { danranClearBadge(); }
-      });
-    } catch (e) {}
+    // 合成クリック抑制（スワイプ後 700ms）
+    pDoc.addEventListener('click', function (e) {
+      if (Date.now() - _swipeAt < 700) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+      }
+    }, { capture: true });
+
+    // アプリ復帰時にバッジをクリア
+    pDoc.addEventListener('visibilitychange', function () {
+      if (!pDoc.hidden && ME) { danranClearBadge(); }
+    });
   }
 
   function setupObs() {
@@ -1582,21 +1655,24 @@
       var hdr = pDoc.createElement('div');
       hdr.id  = HDR_ID;
 
-      // ＜ / ✕ ボタン
-      var backBtn = pDoc.createElement('button');
-      backBtn.textContent = showRooms ? '✕' : '＜';
-      backBtn.style.cssText =
-        'background:none;border:none;color:#e0e0e0;font-size:1.25rem;' +
-        'cursor:pointer;height:52px;padding:0 16px;border-radius:10px;line-height:1;' +
-        'flex-shrink:0;min-width:44px;text-align:center;box-sizing:border-box;' +
-        '-webkit-tap-highlight-color:transparent;';
-      backBtn.addEventListener('click', function () {
-        // window.parent.location.href は iframe sandbox でブロックされるため
-        // Streamlit の setComponentValue 経由で Python にナビゲーション指示を送る
-        // ts: で一意タイムスタンプを付与し Python 側が同じ action を二重処理しないようにする
-        stSetValue({ action: showRooms ? 'go_chat' : 'go_rooms', ts: Date.now() });
-      });
-      hdr.appendChild(backBtn);
+      // 左側: チャット画面では ＜ ボタン。ルーム選択（トップ画面）では空スペーサー
+      if (showRooms) {
+        var leftSpacer = pDoc.createElement('div');
+        leftSpacer.style.cssText = 'flex-shrink:0;min-width:44px;';
+        hdr.appendChild(leftSpacer);
+      } else {
+        var backBtn = pDoc.createElement('button');
+        backBtn.textContent = '＜';
+        backBtn.style.cssText =
+          'background:none;border:none;color:#e0e0e0;font-size:1.25rem;' +
+          'cursor:pointer;height:52px;padding:0 16px;border-radius:10px;line-height:1;' +
+          'flex-shrink:0;min-width:44px;text-align:center;box-sizing:border-box;' +
+          '-webkit-tap-highlight-color:transparent;';
+        backBtn.addEventListener('click', function () {
+          stSetValue({ action: 'go_rooms', ts: Date.now() });
+        });
+        hdr.appendChild(backBtn);
+      }
 
       // タイトル（中央寄せ）
       var title = pDoc.createElement('div');

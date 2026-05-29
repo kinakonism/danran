@@ -983,6 +983,13 @@
       if (!SHOW_ROOMS || !VAPID_PUB_KEY || !ME_UID) return;
       if (!('Notification' in pWin)) return;
       if (pWin.Notification.permission !== 'default') return; // 既に許可/拒否済み
+      // ★ Python 側が既にバナーを描画している場合は二重表示を防ぐ（JS はフォールバック）。
+      //   過去に注入された JS バナーが残っていれば除去してから return。
+      if (pDoc.getElementById('_danran_push_banner')) {
+        var dup = pDoc.getElementById(PUSH_PROMPT_ID);
+        if (dup) dup.remove();
+        return;
+      }
       if (pDoc.getElementById(PUSH_PROMPT_ID)) return;        // 既に表示済み
 
       var roomList = pDoc.getElementById('_danran_room_list');

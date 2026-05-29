@@ -524,7 +524,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v52",   # あたたかダークテーマ（琥珀×ウォームチャコール）
+    "danran_lp_v53",   # 通知バナー二重表示の修正（JSフォールバックがPython版と重複）
     path=_LP_COMPONENT_DIR,
 )
 

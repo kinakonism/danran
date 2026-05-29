@@ -144,13 +144,18 @@ def save_push_subscription(user_id: str, subscription_json: str) -> None:
         p256dh   = keys.get("p256dh", "")
         auth     = keys.get("auth", "")
         if not (endpoint and p256dh and auth):
+            print(f"[push-sub] SKIP: missing fields endpoint={bool(endpoint)} p256dh={bool(p256dh)} auth={bool(auth)}")
             return
+        ep_short = endpoint[-40:] if endpoint else "?"
         supabase.table("push_subscriptions").upsert(
             {"user_id": user_id, "endpoint": endpoint, "p256dh": p256dh, "auth": auth},
             on_conflict="user_id,endpoint",
         ).execute()
-    except Exception:
-        pass
+        print(f"[push-sub] saved user_id={user_id} endpoint=...{ep_short}")
+    except Exception as ex:
+        import traceback as _tb
+        print(f"[push-sub] error: {ex}")
+        print(_tb.format_exc())
 
 def _total_unread(user_id: str) -> int:
     """プッシュペイロード用: 特定ユーザーの全ルーム未読数合計"""

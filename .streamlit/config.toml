@@ -5,4 +5,13 @@ toolbarMode = "minimal"
 [browser]
 gatherUsageStats = false
 
+# ── テーマ: あたたかダーク（団欒）──
+# 灯りのような暖色。青黒ではなく茶寄りの黒＋琥珀アクセント。
+[theme]
+base = "dark"
+primaryColor = "#f0a868"
+backgroundColor = "#1a1614"
+secondaryBackgroundColor = "#241f1c"
+textColor = "#f0e8e0"
+
 

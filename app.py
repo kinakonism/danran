@@ -524,7 +524,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v51",   # 楽観的UI: 送信中バブル（🕐→緑）+ IME安全な送信検知
+    "danran_lp_v52",   # あたたかダークテーマ（琥珀×ウォームチャコール）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -612,8 +612,8 @@ def render_messages() -> None:
             users = msg_reactions.get(emoji, [])
             if users:
                 my  = uname in users
-                bg  = "rgba(0,185,0,0.3)"  if my else "rgba(255,255,255,0.08)"
-                bdr = "rgba(0,185,0,0.85)" if my else "rgba(255,255,255,0.2)"
+                bg  = "rgba(232,145,91,0.32)" if my else "rgba(255,255,255,0.08)"
+                bdr = "rgba(240,168,104,0.9)" if my else "rgba(255,255,255,0.2)"
                 pills += (
                     f'<span style="display:inline-flex;align-items:center;gap:2px;'
                     f'background:{bg};border:1px solid {bdr};border-radius:20px;'
@@ -643,7 +643,7 @@ def render_messages() -> None:
             _mine_bstyle = (
                 'background:transparent;padding:0;border-radius:0'
                 if is_img_only else
-                'background:#00b900;color:#fff;border-radius:18px 18px 4px 18px;padding:10px 14px'
+                'background:#e8915b;color:#fff;border-radius:18px 18px 4px 18px;padding:10px 14px'
             )
             bubble = (
                 # data-lp-body: 楽観的バブルとの照合用に生テキストを保持
@@ -666,7 +666,7 @@ def render_messages() -> None:
             _other_bstyle = (
                 'background:transparent;padding:0;border-radius:0'
                 if is_img_only else
-                'background:#2c2c2e;color:#fff;border-radius:18px 18px 18px 4px;padding:10px 14px'
+                'background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:10px 14px'
             )
             bubble = (
                 f'<div data-lp-msg="{msg_id}" style="'
@@ -1285,7 +1285,7 @@ def render_room_list() -> None:
         '<style>'
         '#_danran_room_list button.dr-room{transition:background 0.12s;}'
         '#_danran_room_list button.dr-room:active{background:rgba(255,255,255,0.10)!important;}'
-        '#_danran_room_list button.dr-room.dr-selected{background:rgba(52,199,89,0.20)!important;}'
+        '#_danran_room_list button.dr-room.dr-selected{background:rgba(240,168,104,0.22)!important;}'
         '</style>'
         f'<div id="_danran_room_list" style="padding-bottom:20px;{_anim_css}">',
     ]
@@ -1294,8 +1294,8 @@ def render_room_list() -> None:
         rows.append(
             '<div id="_danran_push_banner" style="'
             'display:flex;align-items:center;gap:10px;'
-            'background:rgba(52,199,89,0.1);'
-            'border:1px solid rgba(52,199,89,0.28);'
+            'background:rgba(240,168,104,0.12);'
+            'border:1px solid rgba(240,168,104,0.30);'
             'border-radius:12px;padding:12px 14px;margin-bottom:12px;'
             'cursor:pointer;-webkit-tap-highlight-color:transparent;">'
             '<span style="font-size:1.4rem;flex-shrink:0">🔔</span>'
@@ -1335,7 +1335,7 @@ def render_room_list() -> None:
         is_active = (rname == selected_room)
 
         badge = (
-            f'<span style="background:#e03438;color:#fff;border-radius:20px;'
+            f'<span style="background:#e0654f;color:#fff;border-radius:20px;'
             f'padding:1px 8px;font-size:0.68rem;font-weight:700;flex-shrink:0">'
             f'+{count}</span>'
         ) if count > 0 else ""
@@ -1343,7 +1343,7 @@ def render_room_list() -> None:
         # アクティブインジケーター（緑の点）
         active_dot = (
             '<span style="width:7px;height:7px;border-radius:50%;'
-            'background:#34c759;flex-shrink:0"></span>'
+            'background:#f0a868;flex-shrink:0"></span>'
         ) if is_active else ""
 
         if ricon.startswith("http"):
@@ -1533,11 +1533,11 @@ def show_install_page() -> None:
             f'<div style="display:flex;align-items:flex-start;gap:14px;'
             f'background:rgba(255,255,255,0.06);border-radius:14px;padding:14px 16px">'
             f'<div style="flex-shrink:0;width:42px;height:42px;border-radius:50%;'
-            f'background:rgba(0,185,0,0.2);border:2px solid rgba(0,185,0,0.5);'
+            f'background:rgba(240,168,104,0.22);border:2px solid rgba(240,168,104,0.55);'
             f'display:flex;align-items:center;justify-content:center;'
             f'font-size:1.25rem;line-height:1">{icon}</div>'
             f'<div>'
-            f'<div style="font-size:0.72rem;color:rgba(0,185,0,0.8);font-weight:700;'
+            f'<div style="font-size:0.72rem;color:rgba(240,168,104,0.85);font-weight:700;'
             f'letter-spacing:.06em;margin-bottom:2px">STEP {num}</div>'
             f'<div style="font-size:0.95rem;font-weight:700;color:#fff;margin-bottom:4px">{title}</div>'
             f'<div style="font-size:0.82rem;color:rgba(255,255,255,0.65);line-height:1.6">{desc}</div>'
@@ -1737,7 +1737,7 @@ _sb_key = ((st.secrets.get("supabase") or {}).get("anon_key") or os.environ.get(
 # クリックハンドラだけは JS コンポーネント(attachHdrButtons)が付与する。
 _HDR_DIV_STYLE = (
     'position:fixed;top:0;left:0;right:0;height:52px;z-index:2147483647;'
-    'background:rgba(28,28,30,0.97);border-bottom:1px solid rgba(255,255,255,0.1);'
+    'background:rgba(36,31,28,0.97);border-bottom:1px solid rgba(255,255,255,0.08);'
     'display:flex;align-items:center;padding:0 4px;gap:0;'
     'box-shadow:0 1px 10px rgba(0,0,0,0.5);'
     'backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);'
@@ -1957,7 +1957,7 @@ if _waiting_for_js:
     st.html(
         '<style>@keyframes danranSplash{'
         '0%,100%{opacity:0.45;transform:scale(0.96)}50%{opacity:1;transform:scale(1)}}</style>'
-        '<div style="position:fixed;inset:0;z-index:2147483646;background:#0e1117;'
+        '<div style="position:fixed;inset:0;z-index:2147483646;background:#1a1614;'
         'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">'
         '<div style="font-size:3.4rem;animation:danranSplash 1.4s ease-in-out infinite">🏠</div>'
         '<div style="color:rgba(255,255,255,0.45);font-size:0.9rem;font-weight:700;'

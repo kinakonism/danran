@@ -356,8 +356,8 @@
         var users = reactMap[emoji] || [];
         if (!users.length) return;
         var my  = users.indexOf(ME) >= 0;
-        var bg  = my ? 'rgba(0,185,0,0.3)'  : 'rgba(255,255,255,0.08)';
-        var bdr = my ? 'rgba(0,185,0,0.85)' : 'rgba(255,255,255,0.2)';
+        var bg  = my ? 'rgba(232,145,91,0.32)' : 'rgba(255,255,255,0.08)';
+        var bdr = my ? 'rgba(240,168,104,0.9)' : 'rgba(255,255,255,0.2)';
         html +=
           '<span style="display:inline-flex;align-items:center;gap:2px;' +
           'background:' + bg + ';border:1px solid ' + bdr + ';border-radius:20px;' +
@@ -398,7 +398,7 @@
       pop.id = POPUP_ID;
       pop.style.cssText =
         'position:fixed;z-index:2147483647;top:' + topPx + 'px;left:50%;transform:translateX(-50%);' +
-        'background:#1c1c1e;border:1px solid rgba(255,255,255,0.13);border-radius:18px;' +
+        'background:#241f1c;border:1px solid rgba(255,255,255,0.13);border-radius:18px;' +
         'padding:8px 10px;display:flex;align-items:center;gap:5px;' +
         'box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;white-space:nowrap;';
 
@@ -652,7 +652,7 @@
         'left: 0 !important; ' +
         'right: 0 !important; ' +
         'z-index: 100 !important; ' +
-        'background: #0e1117 !important;'
+        'background: #1a1614 !important;'
       );
 
       // stBottom 自身の style 変更を監視（Streamlit / hideManageApp が書き戻したら即修正）
@@ -992,8 +992,8 @@
       banner.id = PUSH_PROMPT_ID;
       banner.style.cssText =
         'display:flex;align-items:center;gap:10px;' +
-        'background:rgba(52,199,89,0.1);' +
-        'border:1px solid rgba(52,199,89,0.28);' +
+        'background:rgba(240,168,104,0.12);' +
+        'border:1px solid rgba(240,168,104,0.30);' +
         'border-radius:12px;padding:12px 14px;margin-bottom:12px;' +
         'cursor:pointer;-webkit-tap-highlight-color:transparent;';
       banner.innerHTML =
@@ -1029,7 +1029,7 @@
         'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:99999;' +
         'display:flex;flex-direction:column;align-items:center;justify-content:flex-end;';
       sheet.innerHTML =
-        '<div style="background:#1c1c1e;border-radius:20px 20px 0 0;width:100%;max-width:440px;' +
+        '<div style="background:#241f1c;border-radius:20px 20px 0 0;width:100%;max-width:440px;' +
         'padding:22px 20px 36px;color:#fff">' +
           '<div style="font-size:1.05rem;font-weight:700;text-align:center;margin-bottom:6px">' +
             '📲 ホーム画面に追加して通知を有効化' +
@@ -1125,7 +1125,7 @@
         bar.id = '_danran_android_install';
         bar.style.cssText =
           'position:fixed;bottom:env(safe-area-inset-bottom,0);left:0;right:0;' +
-          'background:#1c1c1e;border-top:1px solid rgba(255,255,255,0.1);' +
+          'background:#241f1c;border-top:1px solid rgba(255,255,255,0.1);' +
           'display:flex;align-items:center;gap:10px;padding:12px 16px;z-index:9998;';
         bar.innerHTML =
           '<span style="font-size:1.4rem">🏠</span>' +
@@ -1173,9 +1173,9 @@
       if (perm === 'granted') {
         // ── 許可済み ──
         html =
-          '<div style="background:rgba(52,199,89,0.12);border:1px solid rgba(52,199,89,0.3);' +
+          '<div style="background:rgba(240,168,104,0.14);border:1px solid rgba(240,168,104,0.32);' +
           'border-radius:14px;padding:16px;margin-bottom:16px">' +
-            '<div style="font-size:1.1rem;font-weight:700;color:#34c759;margin-bottom:4px">✅ 通知が有効です</div>' +
+            '<div style="font-size:1.1rem;font-weight:700;color:#f0a868;margin-bottom:4px">✅ 通知が有効です</div>' +
             '<div style="font-size:0.82rem;color:rgba(255,255,255,0.6)">新着メッセージが届いたときに通知が送られます。</div>' +
           '</div>';
 
@@ -1196,7 +1196,7 @@
               'ボタンを押すと iOS の通知許可ダイアログが表示されます。' +
             '</div>' +
             '<button data-notif-enable="true" ' +
-            'style="width:100%;padding:12px;background:#34c759;border:none;border-radius:10px;' +
+            'style="width:100%;padding:12px;background:#e8915b;border:none;border-radius:10px;' +
             'color:#fff;font-size:1rem;font-weight:700;cursor:pointer;' +
             '-webkit-tap-highlight-color:transparent">🔔 通知を有効にする</button>' +
           '</div>';
@@ -1556,7 +1556,7 @@
       css.textContent =
         '#' + HDR_ID + '{' +
           'position:fixed;top:0;left:0;right:0;height:52px;z-index:2147483647;' +
-          'background:rgba(28,28,30,0.97);' +
+          'background:rgba(36,31,28,0.97);' +
           'border-bottom:1px solid rgba(255,255,255,0.1);' +
           'display:flex;align-items:center;padding:0 4px;gap:0;' +
           'box-shadow:0 1px 10px rgba(0,0,0,0.5);' +
@@ -1625,7 +1625,7 @@
       css.textContent =
         '#' + HDR_ID + '{' +
           'position:fixed;top:0;left:0;right:0;height:52px;z-index:2147483647;' +
-          'background:rgba(28,28,30,0.97);' +
+          'background:rgba(36,31,28,0.97);' +
           'border-bottom:1px solid rgba(255,255,255,0.1);' +
           'display:flex;align-items:center;padding:0 4px;gap:0;' +
           'box-shadow:0 1px 10px rgba(0,0,0,0.5);' +
@@ -1786,7 +1786,7 @@
       t.id = '_danran_toast';
       t.style.cssText =
         'position:fixed;bottom:72px;left:50%;transform:translateX(-50%) translateY(0);' +
-        'background:rgba(0,185,0,0.94);color:#fff;padding:10px 22px;border-radius:22px;' +
+        'background:rgba(232,145,91,0.96);color:#fff;padding:10px 22px;border-radius:22px;' +
         'font-size:0.9rem;font-weight:600;z-index:9999;pointer-events:none;' +
         'box-shadow:0 4px 18px rgba(0,0,0,0.45);white-space:nowrap;' +
         'animation:_danranFadeIn 0.25s ease;';
@@ -1889,7 +1889,7 @@
       wrap.innerHTML =
         '<div style="text-align:right">' +
           '<div class="_optstatus" style="font-size:0.7rem;color:#999;margin-bottom:3px">🕐 送信中…</div>' +
-          '<div class="_optbubble" style="background:#00b900;opacity:0.5;color:#fff;border-radius:18px 18px 4px 18px;' +
+          '<div class="_optbubble" style="background:#e8915b;opacity:0.5;color:#fff;border-radius:18px 18px 4px 18px;' +
           'padding:10px 14px;display:inline-block;max-width:100%;text-align:left;word-break:break-word;font-size:0.93rem">' +
           safe + '</div>' +
         '</div>' + avHtml;

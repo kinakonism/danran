@@ -1557,6 +1557,79 @@ def show_notifications(current_user: dict) -> None:
 </div>
 """, unsafe_allow_html=True)
 
+    # ── デバッグパネル ──────────────────────────────────────────────────
+    with st.expander("🔧 デバッグ情報", expanded=True):
+        uid = current_user.get("id", "")
+        uname = current_user.get("name", "")
+
+        # VAPID 設定チェック
+        vcfg = _vapid_cfg()
+        has_priv = bool(vcfg.get("vapid_private_key"))
+        has_pub  = bool(vcfg.get("vapid_public_key"))
+        has_subj = bool(vcfg.get("vapid_subject"))
+        st.markdown(f"**VAPID 設定**: 秘密鍵={has_priv} 公開鍵={has_pub} subject={has_subj}")
+
+        # 購読状況チェック
+        try:
+            all_subs = supabase.table("push_subscriptions")\
+                .select("user_id, endpoint")\
+                .execute().data or []
+            my_subs = [s for s in all_subs if s.get("user_id") == uid]
+            st.markdown(f"**購読数（全体）**: {len(all_subs)} 件")
+            st.markdown(f"**購読数（自分）**: {len(my_subs)} 件")
+            if my_subs:
+                for s in my_subs:
+                    ep = s.get("endpoint", "")
+                    st.code(f"endpoint: ...{ep[-50:]}" if ep else "(空)", language=None)
+            else:
+                st.warning("⚠️ あなたの購読がDBに登録されていません")
+        except Exception as e:
+            st.error(f"購読取得エラー: {e}")
+
+        # テスト通知送信
+        st.markdown("---")
+        st.markdown("**自分宛にテスト通知を送る**")
+        if st.button("📤 テスト通知を送信", key="push_test_btn"):
+            try:
+                from pywebpush import webpush, WebPushException
+                priv = vcfg.get("vapid_private_key", "")
+                subj = vcfg.get("vapid_subject", "")
+                test_rows = supabase.table("push_subscriptions")\
+                    .select("endpoint, p256dh, auth")\
+                    .eq("user_id", uid)\
+                    .execute().data or []
+                if not test_rows:
+                    st.error("❌ 購読がありません。まず通知を許可してください。")
+                elif not (priv and subj):
+                    st.error("❌ VAPIDキーが設定されていません。")
+                else:
+                    ok_cnt = 0
+                    for row in test_rows:
+                        try:
+                            import json as _j
+                            webpush(
+                                subscription_info={
+                                    "endpoint": row["endpoint"],
+                                    "keys": {"p256dh": row["p256dh"], "auth": row["auth"]},
+                                },
+                                data=_j.dumps({
+                                    "title": "danran テスト通知",
+                                    "body": f"{uname} さん、通知は正常に動作しています！",
+                                    "url": "/",
+                                }, ensure_ascii=False),
+                                vapid_private_key=priv,
+                                vapid_claims={"sub": subj},
+                            )
+                            ok_cnt += 1
+                        except WebPushException as ex:
+                            st.error(f"❌ WebPushException: {ex}")
+                        except Exception as ex:
+                            st.error(f"❌ 送信エラー: {ex}")
+                    if ok_cnt:
+                        st.success(f"✅ {ok_cnt} 件送信しました！通知が届くか確認してください。")
+            except Exception as e:
+                st.error(f"❌ 予期しないエラー: {e}")
+
 # ─────────────────────────────────────
 # エントリーポイント
 # ─────────────────────────────────────

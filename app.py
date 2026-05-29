@@ -264,6 +264,7 @@ def do_login(user: dict) -> None:
 def do_logout() -> None:
     delete_session(st.session_state.pop("session_id", "") or "")
     st.session_state.pop("current_user", None)
+    st.session_state.pop("_show_rooms", None)
     st.session_state["view"]            = "select_user"
     st.session_state["_clear_session"]  = True   # localStorage もクリア
     st.query_params.clear()
@@ -478,7 +479,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v41",   # 右スワイプ戻り: passive リスナーに刷新（スクロール・タップ破壊を修正）
+    "danran_lp_v42",   # 右スワイプ: touchmove 方向判定 + show_rooms を session_state 化
     path=_LP_COMPONENT_DIR,
 )
 
@@ -894,14 +895,14 @@ def show_profile(current_user: dict) -> None:
                     st.success("✅ プロフィールを更新しました！")
                     _time.sleep(0.8)
                     st.session_state["view"] = "chat"
-                    st.query_params["sr"] = "1"
+                    st.session_state["_show_rooms"] = True
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 保存に失敗しました: {e}")
         with c2:
             if st.button("← 戻る", use_container_width=True, key="profile_back"):
                 st.session_state["view"] = "chat"
-                st.query_params["sr"] = "1"
+                st.session_state["_show_rooms"] = True
                 st.rerun()
 
         st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
@@ -928,7 +929,7 @@ def show_room_edit(room: dict) -> None:
 
     if not room or not room.get("id"):
         st.session_state["view"] = "chat"
-        st.query_params["sr"] = "1"
+        st.session_state["_show_rooms"] = True
         st.rerun()
         return
 
@@ -1018,7 +1019,7 @@ def show_room_edit(room: dict) -> None:
                     _time.sleep(0.8)
                     _reset_room_edit_widgets()
                     st.session_state["view"] = "chat"
-                    st.query_params["sr"] = "1"
+                    st.session_state["_show_rooms"] = True
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 保存に失敗しました: {e}")
@@ -1026,7 +1027,7 @@ def show_room_edit(room: dict) -> None:
             if st.button("← 戻る", use_container_width=True, key="room_edit_back"):
                 _reset_room_edit_widgets()
                 st.session_state["view"] = "chat"
-                st.query_params["sr"] = "1"
+                st.session_state["_show_rooms"] = True
                 st.rerun()
 
         # ── ルーム削除（2 段階確認） ──
@@ -1055,7 +1056,7 @@ def show_room_edit(room: dict) -> None:
                         st.session_state.pop(delete_confirm_key, None)
                         _reset_room_edit_widgets()
                         st.session_state["view"] = "chat"
-                        st.query_params["sr"] = "1"
+                        st.session_state["_show_rooms"] = True
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ 削除に失敗しました: {e}")
@@ -1146,8 +1147,7 @@ def show_room_create() -> None:
                     st.session_state["active_room"] = new_name
                     _reset_room_create_widgets()
                     st.session_state["view"] = "chat"
-                    if "sr" in st.query_params:
-                        del st.query_params["sr"]
+                    st.session_state.pop("_show_rooms", None)
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 作成に失敗しました: {e}")
@@ -1155,7 +1155,7 @@ def show_room_create() -> None:
             if st.button("← 戻る", use_container_width=True, key="room_create_back"):
                 _reset_room_create_widgets()
                 st.session_state["view"] = "chat"
-                st.query_params["sr"] = "1"
+                st.session_state["_show_rooms"] = True
                 st.rerun()
 
 # ─────────────────────────────────────
@@ -1167,7 +1167,7 @@ def render_room_list() -> None:
     # ルーム選択中でない・未ログインならフラグメントを空にして終了
     # （ログアウト後や画面遷移後にフラグメントが残らないようにする）
     current_user = st.session_state.get("current_user")
-    if not current_user or st.query_params.get("sr") != "1":
+    if not current_user or not st.session_state.get("_show_rooms", False):
         return
     _all_rooms      = fetch_rooms()
     _all_room_names = [r["name"] for r in _all_rooms]
@@ -1362,8 +1362,6 @@ def render_room_list() -> None:
 def show_chat(current_user: dict) -> None:
 
     # ── ルーム状態 ──
-    # ヘッダー（＜/✕ + ルーム名）は JS が fixed 位置に注入する
-    # show_rooms は URL パラメータ ?sr=1 を正として参照する
     _all_rooms      = fetch_rooms()
     _all_room_names = [r["name"] for r in _all_rooms]
     _default_room   = _all_room_names[0] if _all_room_names else ""
@@ -1371,7 +1369,7 @@ def show_chat(current_user: dict) -> None:
     if "active_room" not in st.session_state or st.session_state["active_room"] not in _all_room_names:
         st.session_state["active_room"] = _default_room
     selected_room = st.session_state["active_room"]
-    show_rooms    = st.query_params.get("sr") == "1"
+    show_rooms    = st.session_state.get("_show_rooms", False)
 
     # ── ＜ を押したときのルーム選択パネル（フラグメント：5秒ごとに未読バッジを更新）──
     if show_rooms:
@@ -1686,7 +1684,7 @@ if "current_user" in st.session_state and not _is_profile:
     )
 else:
     _active_room = ""
-_show_rooms  = st.query_params.get("sr") == "1"
+_show_rooms  = st.session_state.get("_show_rooms", False)
 _cur_view    = st.session_state.get("view", "")
 _vapid_pub = _vapid_cfg().get("vapid_public_key", "")
 # Supabase URL/key: st.secrets → 環境変数 の順でフォールバック（Render 対応）
@@ -1803,11 +1801,10 @@ if isinstance(_lp_result, dict):
     if _nav and _nav_ts and _nav_ts != _last_ts:
         st.session_state["_last_nav_ts"] = _nav_ts
         if _nav == "go_rooms":
-            st.query_params["sr"] = "1"
+            st.session_state["_show_rooms"] = True
             st.rerun()
         elif _nav == "go_chat":
-            if "sr" in st.query_params:
-                del st.query_params["sr"]
+            st.session_state.pop("_show_rooms", None)
             st.rerun()
         elif _nav == "go_profile":
             _reset_profile_widgets()
@@ -1821,7 +1818,7 @@ if isinstance(_lp_result, dict):
             elif cur == "room_edit":
                 _reset_room_edit_widgets()
             st.session_state["view"] = "chat"
-            st.query_params["sr"] = "1"
+            st.session_state["_show_rooms"] = True
             st.rerun()
         elif _nav == "go_notifications":
             st.session_state["view"] = "notifications"
@@ -1831,8 +1828,7 @@ if isinstance(_lp_result, dict):
             _room_name = _lp_result.get("room_name", "")
             if _room_name:
                 st.session_state["active_room"] = _room_name
-                if "sr" in st.query_params:
-                    del st.query_params["sr"]
+                st.session_state.pop("_show_rooms", None)
                 st.rerun()
         elif _nav == "go_room_edit":
             # JS ルームリストの ⚙️ クリック → ルーム編集画面
@@ -1866,7 +1862,7 @@ if isinstance(_lp_result, dict):
                     #    最初の描画で view="select_user" がすでにセットされているため
                     #    setdefault は何もせず chat に遷移できないバグを修正
                     st.session_state["view"] = "chat"
-                    st.query_params["sr"] = "1"   # 復元後はルーム選択画面から再開
+                    st.session_state["_show_rooms"] = True   # 復元後はルーム選択画面から再開
                     st.rerun()
                 else:
                     # 復元失敗（セッション期限切れ等）→ ユーザーに再ログインを促す

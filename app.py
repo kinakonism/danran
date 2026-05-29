@@ -479,7 +479,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v44e",  # 右スワイプ: execSwipe 内部デバッグ追加
+    "danran_lp_v44f",  # 右スワイプ: MEガード廃止+cfg値デバッグ
     path=_LP_COMPONENT_DIR,
 )
 

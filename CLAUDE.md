@@ -102,12 +102,12 @@ stSetValue({ action: 'go_profile',     ts: Date.now() });   // ルーム選択�
 stSetValue({ action: 'go_back',        ts: Date.now() });
 stSetValue({ action: 'go_notifications', ts: Date.now() });
 stSetValue({ action: 'go_room',        room_name: '...', ts: Date.now() });
-stSetValue({ action: 'go_room_edit',   room_id: '...', ts: Date.now() });
+stSetValue({ action: 'go_room_edit',   room_id: '...', ts: Date.now() });   // 歯車 or チャットヘッダー右上 👥(data-hdr-roomedit) から
 stSetValue({ action: 'go_room_create', ts: Date.now() });
 stSetValue({ action: 'restore_session', session_id: '...', ts: Date.now() });
 stSetValue({ action: 'save_push_subscription', subscription: '...', user_id: '...', ts: Date.now() });
 // 注: 'logout' アクションは廃止。ログアウトはプロフィール画面の Streamlit ボタン（2段階確認）に移動。
-//     旧 data-logout / data-profile-nav ハンドラは index.html に残るが対象要素が無く不発（無害）。
+//     旧 data-logout / data-profile-nav ハンドラは削除済み。
 ```
 
 **必ず `ts: Date.now()` を付ける**。Python 側は `_last_nav_ts` で重複処理を防いでいる。`ts` がないと古いキャッシュ値が再発火して無限ループになる。
@@ -151,10 +151,11 @@ var room = cfg.getAttribute('data-room');
 
 #### ヘッダーの構成（Python が `st.html` で描画）
 
-- ログイン中は `#_danran_hdr`（`position:fixed`）を Python 側がレンダリング。クリックハンドラのみ JS（`attachHdrButtons`）が `data-hdr-nav` / `data-hdr-back` / `data-hdr-profile` に付与。
-- **チャット画面**: 左 `＜`（`data-hdr-nav`→`go_rooms`）｜中央ルーム名｜右スペーサー
+- ログイン中は `#_danran_hdr`（`position:fixed`）を Python 側がレンダリング。クリックハンドラのみ JS（`attachHdrButtons`）が `data-hdr-nav` / `data-hdr-back` / `data-hdr-profile` / `data-hdr-roomedit` に付与。
+- **チャット画面**: 左 `＜`（`data-hdr-nav`→`go_rooms`）｜中央ルーム名｜右 `👥`（`data-hdr-roomedit="{room_id}"`→`go_room_edit`＝メンバー管理）
 - **ルーム選択画面（トップ）**: 左スペーサー（`＜` を出さない）｜中央「ルーム選択」｜右アバター（`data-hdr-profile`→`go_profile`）
 - **編集画面**: 左 `＜`（`data-hdr-back`→`go_back`）｜中央タイトル｜右スペーサー
+- `_active_room_id` をヘッダー計算時に参加ルームから引いて `data-hdr-roomedit` に埋め込む。
 
 #### `data-users-json` の形式（FaceTime 機能追加後）
 
@@ -196,12 +197,13 @@ JS コンポーネントをブラウザにキャッシュさせないため、�
 
 ```python
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v49",   # ← v49, v50... と上げる（現在 v49）
+    "danran_lp_v57",   # ← v57, v58... と上げる（現在 v57）
     path=_LP_COMPONENT_DIR,
 )
 ```
 
 > JS（index.html）を変更したら必ずインクリメント。Python のみの変更（CSS 文字列等）なら据え置きで可。
+> index.html 冒頭に `var DEBUG=false` があり、`true` にすると `dlog/dwarn` 経由の診断ログが出る（本番はセッションID/VAPID先頭を出さないよう false）。
 
 ### 右スワイプで戻る（指追従ドラッグ）
 
@@ -219,7 +221,29 @@ _lp_detector = st.components.v1.declare_component(
 ### スライドイン演出 / 選択フィードバック
 
 - `_nav_anim="left"`（`go_rooms`/編集からの戻り時にセット）→ `render_room_list` が `#_danran_room_list` に `danranSlideInLeft` を1回だけ適用。`pop` で消費するのでフラグメントの定期更新では再生しない。
-- ルームタップ時: `button.dr-room` に `:active` 押下ハイライト＋JS が即 `.dr-selected`（緑）を付与し、サーバー往復中も選択状態が見える。
+- ルームタップ時: `button.dr-room` に `:active` 押下ハイライト＋JS が即 `.dr-selected`（琥珀）を付与し、サーバー往復中も選択状態が見える。
+
+### 送信メッセージの楽観的 UI（送信中→送信完了）
+
+送信経路は Streamlit のまま（insert＋push 維持）。JS が「送信中」バブルを重ねて即時フィードバックする。
+
+- 送信検知は `setupChatSendHook`（document 委譲・Enter と送信ボタン両方）。**IME 変換中の Enter は `e.isComposing`/`keyCode===229` で除外**（日本語入力対策）。
+- `addOptimisticBubble`: グレー＋半透明テラコッタの「🕐送信中…」を即表示。
+- 照合: mine バブルへ `data-lp-body`（生テキスト）を付与。`reconcileOptimistic`（scan 毎）が同一テキストの本物 mine が増えたら楽観バブルを削除＝送信完了。9秒来なければ「⚠️送信できませんでした」(赤)。
+
+### 画像の全画面ビューア（ライトボックス）
+
+チャット画像に `data-lp-image`（生 URL）を付与。`scan()` が各画像へ直接 `click` を添付（`_danranImgHooked`／デリゲーションは iOS で発火しないため直接添付）。
+
+- `openImageViewer(src)`: 全画像を DOM 順（古い→新しい）で集めギャラリー化。
+- **左上 ✕ / 背景タップ** → 閉じる。**下スワイプ(dy>90)** → 指追従で閉じる。
+- **右スワイプ → 古い画像 / 左スワイプ → 新しい画像**（`navigate(±1)`）。
+- 表示中は `IMG_VIEWER_ID` 存在チェックで**右スワイプ戻りを無効化**。
+
+### テーマ（あたたかダーク）
+
+`.streamlit/config.toml` の `[theme]` で全体テーマを設定（base=dark / primaryColor=`#f0a868` 琥珀 / backgroundColor=`#1a1614` / secondaryBackgroundColor=`#241f1c` / textColor=`#f0e8e0`）。  
+ハードコード色も暖色基調: 自分の吹き出し `#e8915b`（テラコッタ）/ 相手 `#2e2926` / アクセント・選択・通知バナー = 琥珀 / 未読バッジ `#e0654f`。色を足すときはこの系統に合わせる。
 
 ---
 
@@ -290,7 +314,28 @@ UNIQUE(user_id, room_name) で upsert。
 | created_at | timestamptz | 作成順 |
 
 - ルーム名を変更すると `messages.room_name` と `last_read.room_name` も連動更新
-- ルーム削除時は reactions → messages → last_read → rooms の順で削除
+- ルーム削除時は reactions → messages → last_read → **room_members** → rooms の順で削除
+- **ルーム名はグローバルに一意**（messages が room_name キーのため）。作成時の重複チェックは `fetch_rooms()`（user_id なし＝全ルーム）で行う
+
+### `room_members`（招待制ルーム）
+
+| カラム    | 型      | 説明             |
+|---------|---------|-----------------|
+| id      | uuid PK | |
+| room_id | uuid    | rooms.id |
+| user_id | uuid    | users.id |
+| joined_at | timestamptz | |
+
+`UNIQUE(room_id, user_id)`。RLS は他テーブル同様 全許可（家族アプリ・**制御はアプリ層**）。
+
+- `fetch_rooms(user_id)` が `room_members` で「参加ルームのみ」に絞る（`user_id=""` は全ルーム＝管理用途）。`@st.cache_data` なので user_id ごとにキャッシュ。変更時は `invalidate_rooms_cache()`。
+- `create_room(name, icon, creator_id)` が作成者を自動でメンバー化。`delete_room` は room_members も削除。
+- メンバー操作: `fetch_room_members(room_id)` / `add_room_member` / `remove_room_member`。
+- UI: ルーム編集画面の「👥 メンバー」セクション（一覧 + ✕で外す + multiselect で招待）。チャットヘッダー右上 `👥` から遷移。
+- 参加ルーム0のユーザー（招待待ち）には案内表示。`_show_rooms` 時は0ルームでもヘッダーを出しプロフィール/ログアウト導線を確保。
+- **プッシュ**: `send_push` は受信者ごとに `_member_room_names(uid)`（スレッド安全な素クエリ）で参加ルームを取得して未読集計。
+- 既存導入時は `rooms × users` を全 backfill して「全員が全ルーム」を維持（新規ルームのみ招待制）。
+- **注意**: anon key + RLS全許可のため「ソフトな制限」。完全秘匿はマルチテナント＋RLS強制が必要。
 
 ### Supabase Storage バケット
 
@@ -299,14 +344,17 @@ UNIQUE(user_id, room_name) で upsert。
 | avatars     | ユーザーアイコン写真（`{user_id}.jpg`）、ルームアイコン写真（`room_{room_id}.jpg`） |
 | chat-images | チャット添付画像（JS が直接アップロード）   |
 
-### pg_cron（無料枠停止防止）
+### pg_cron
 
 ```sql
+-- 無料枠停止防止: 3日ごと午前9時に実行
 SELECT cron.schedule('danran-keep-alive', '0 9 */3 * *',
   'SELECT count(*) FROM public.messages');
-```
 
-3日ごと午前9時に実行してデータベースの自動一時停止を防ぐ。
+-- セッション TTL: 毎朝4時に30日以上前の sessions を削除
+SELECT cron.schedule('danran-session-cleanup', '0 4 * * *',
+  $$DELETE FROM public.sessions WHERE created_at < now() - interval '30 days'$$);
+```
 
 ---
 
@@ -604,6 +652,8 @@ Android・PC 環境では何も起きないか、ブラウザがエラーを出�
 
 `delete_message` は `user_name`（変更可能）ではなく `user_id`（UUID）で認可する。JS の `deleteMsg` も `ME_UID` を使う。名前を他人に合わせて他人のメッセージを消せてしまう穴を防ぐため。
 
+**★ JS から messages を insert する箇所（`handleImageUpload` の画像送信）は必ず `user_id: ME_UID` を含める**。これを忘れると user_id が null になり、削除クエリ（`user_id=eq.…`）にヒットせず「消した画像が消えない」バグになる（過去に発生・既存分は user_name から backfill 済み）。
+
 ---
 
 ## 開発時のデバッグ
@@ -616,7 +666,7 @@ uv run python run.py
 # → MCP ツール: mcp__supabase__get_logs
 
 # コンポーネントキャッシュが怪しいとき
-# → "danran_lp_v49" の数字をインクリメント（現在 v49）
+# → "danran_lp_v57" の数字をインクリメント（現在 v57）
 
 # iOS PWA など画面にログを出せない環境のデバッグ
 # → JS 側: 色付きの fixed div を一定時間表示する _dbg(color,msg) 方式、

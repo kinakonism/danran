@@ -469,7 +469,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v38",   # forcePushResubscribe race condition 修正 → ブラウザキャッシュ強制破棄
+    "danran_lp_v39",   # ログアウト後 blank screen 修正: clearSession→restore_session unblock
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1715,7 +1715,7 @@ if "current_user" in st.session_state:
             f'</div>'
         )
     elif _active_room:
-        _hdr_btn_text  = "✕" if _show_rooms else "＜"
+        _hdr_btn_text  = "＜"
         _hdr_title_text = "ルーム選択" if _show_rooms else _active_room
         _hdr_html = (
             f'<div id="_danran_hdr" style="{_HDR_DIV_STYLE}">'

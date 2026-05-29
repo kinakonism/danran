@@ -236,9 +236,26 @@
         _sessionRestoreSent = false;
       }
 
-      if (clearSession) { localStorage.removeItem(STORAGE_KEY); return; }
+      if (clearSession) {
+        localStorage.removeItem(STORAGE_KEY);
+        // ── ログアウト後の blank screen 防止 ─────────────────────────
+        //    clearSession=true 後は _sessionRestoreSent=true のまま stSetValue が
+        //    送られず Python の _lp_result が None のままになることがある。
+        //    その場合 _waiting_for_js=true で暗い画面が永続する（デッドロック）。
+        //    → session_id="" の restore_session を1回だけ送り Python を unblock する。
+        //    Python 側は session_id 空なら「復元不要」と判断し show_user_select() を出す。
+        if (!_sessionRestoreSent) {
+          _sessionRestoreSent = true;
+          console.log('[danran] clearSession → firing restore_session(empty) to unblock Python');
+          stSetValue({ action: 'restore_session', session_id: '', ts: Date.now() });
+        }
+        return;
+      }
       if (saveSession)  {
         localStorage.setItem(STORAGE_KEY, saveSession);
+        // ログイン後は _sessionRestoreSent をリセットし、次回ログアウト時も
+        // clearSession → restore_session を送れる状態にしておく
+        _sessionRestoreSent = false;
         console.log('[danran] session saved to localStorage:', saveSession.slice(0, 8) + '…');
         return;
       }

@@ -1346,115 +1346,76 @@
    *    チャット画面に戻るバグを引き起こすため完全廃止。
    *    代わりに popstate 監視で ?sr=1 が消えた場合のみ即座に復元する。
    * ════════════════════════════════════════ */
-  var _swipeTouchStart = null;
-  var _swipeSetupDone  = false;
+  var _swipeSX = null, _swipeSY = null, _swipeST = null;
+  var _swipeSetupDone = false;
 
   function setupSwipeBack() {
     if (_swipeSetupDone) return;
     _swipeSetupDone = true;
 
-    var pDoc;
-    var outerWin;
+    var pDoc, outerWin;
     try {
       pDoc     = window.parent.document;
       outerWin = (window.parent.parent && window.parent.parent !== window.parent)
                  ? window.parent.parent : window.parent;
     } catch (e) { return; }
 
-    // 二重登録防止: バージョン付きフラグを親ドキュメントに保持
-    if (pDoc._danranSwipeV30) return;
-    pDoc._danranSwipeV30 = true;
+    // バージョン付きフラグで二重登録防止
+    // 旧バージョン（_danranSwipeV30）のリスナーが残っていても新リスナーを追加する
+    if (pDoc._danranSwipeV41) return;
+    pDoc._danranSwipeV41 = true;
 
-    // 前回スワイプ時刻（500ms デバウンス）
-    if (!pDoc._danranLastSwipe) pDoc._danranLastSwipe = 0;
-
-    function getView()      { return pDoc._danranView !== undefined ? pDoc._danranView : VIEW; }
-    function getShowRooms() { return pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS; }
-
+    // ── スワイプ実行 ──────────────────────────────────────────────
     function execSwipe() {
+      if (!ME) return;   // 未ログインは無効
       var now = Date.now();
-      if (now - pDoc._danranLastSwipe < 500) return false;
+      if (now - (pDoc._danranLastSwipe || 0) < 800) return;   // 800ms デバウンス
       pDoc._danranLastSwipe = now;
-      var view      = getView();
-      var showRooms = getShowRooms();
-      if (view === 'profile' || view === 'room_edit' || view === 'notifications' || view === 'room_create') {
+
+      var view      = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
+      var showRooms = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
+
+      if (view === 'profile' || view === 'room_edit' ||
+          view === 'notifications' || view === 'room_create') {
         stSetValue({ action: 'go_back', ts: now });
-        return true;
-      } else if (view === 'chat' && !showRooms) {
-        stSetValue({ action: 'go_rooms', ts: now });
-        return true;
+      } else if (view === 'chat' || view === '') {
+        // チャット画面: ルーム選択を開く / 閉じる をトグル
+        stSetValue({ action: showRooms ? 'go_chat' : 'go_rooms', ts: now });
       }
-      return false;
     }
 
-    // ── タッチベース: touchstart で開始点を記録 ─────────────────
-    // 【重要】passive: false が必須 — e.preventDefault() で iOS ネイティブ戻るジェスチャーを遮断
+    // ── タッチリスナー（passive: true — スクロール・タップを一切妨げない）──
     //
-    // 【注意】左端ゾーン内にある ＜ ボタン・📷 ボタン（left:8px）への
-    //   タップ時は preventDefault() を呼ばない。
-    //   インタラクティブ要素へのタッチは iOS が tap/click として扱い、
-    //   横スワイプ量がないので native back gesture にはならない。
+    // 旧実装（v30）は passive:false + e.preventDefault() で左端タッチの
+    // スクロールや相手アバターのタップを破壊していた。
+    // passive:true にすることでその問題を完全解消する。
+    // iOS PWA（スタンドアロン）はブラウザの戻るジェスチャーが存在しないため
+    // preventDefault は不要。
     try {
       pDoc.addEventListener('touchstart', function (e) {
+        if (e.touches.length !== 1) { _swipeSX = null; return; }
         var t = e.touches[0];
-        if (t.clientX >= 50) { _swipeTouchStart = null; return; }
-
-        // ── ボタン等のインタラクティブ要素への tap は preventDefault しない ──
-        var tgt = e.target;
-        var isInteractive = false;
-        try {
-          isInteractive = !!(tgt && tgt.closest(
-            'button,a,input,select,textarea,[role="button"],[data-hdr-back],[data-hdr-close]'
-          ));
-        } catch (ex) {
-          isInteractive = tgt && /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(tgt.tagName);
-        }
-
-        if (isInteractive) {
-          // ボタンタップ → スワイプ検出は無効化、タップを通常処理に委ねる
-          _swipeTouchStart = null;
-        } else {
-          // 空白エリアからのスワイプ開始 → iOS native 戻るジェスチャーを遮断
-          e.preventDefault();
-          _swipeTouchStart = { x: t.clientX, y: t.clientY };
-        }
-      }, { capture: true, passive: false });
+        // 画面左 35% 以内で開始したタッチのみ記録
+        var screenW = (outerWin.innerWidth || pDoc.documentElement.clientWidth || 375);
+        if (t.clientX > screenW * 0.35) { _swipeSX = null; return; }
+        _swipeSX = t.clientX;
+        _swipeSY = t.clientY;
+        _swipeST = Date.now();
+      }, { passive: true });
 
       pDoc.addEventListener('touchend', function (e) {
-        if (!_swipeTouchStart) return;
+        if (_swipeSX === null) return;
+        if (e.changedTouches.length !== 1) { _swipeSX = null; return; }
         var t  = e.changedTouches[0];
-        var dx = t.clientX - _swipeTouchStart.x;
-        var dy = Math.abs(t.clientY - _swipeTouchStart.y);
-        _swipeTouchStart = null;
-        if (dx > 60 && dx > dy) {
-          e.preventDefault();
-          pDoc._danranSwipeAt = Date.now();
+        var dx = t.clientX - _swipeSX;
+        var dy = Math.abs(t.clientY - _swipeSY);
+        var dt = Date.now() - _swipeST;
+        _swipeSX = null;
+        // 右へ 100px 以上 + 縦ブレ < 横移動の 45% + 500ms 以内
+        if (dx > 100 && dy < dx * 0.45 && dt < 500) {
           execSwipe();
         }
-      }, { capture: true, passive: false });
-
-      // クリック抑制器: スワイプ後 600ms 以内の click を完全遮断
-      pDoc.addEventListener('click', function (e) {
-        if (pDoc._danranSwipeAt && Date.now() - pDoc._danranSwipeAt < 600) {
-          e.stopImmediatePropagation();
-          e.preventDefault();
-        }
-      }, { capture: true });
-    } catch (e) {}
-
-    // ── popstate 監視: ?sr=1 が消えた場合のみ復元（ナビゲーションは行わない）──
-    // iOS ネイティブ戻るジェスチャーが Streamlit の ?sr=1 を消す可能性があるため
-    try {
-      outerWin.addEventListener('popstate', function () {
-        if (!getShowRooms()) return;   // ルームリスト表示中でなければ何もしない
-        try {
-          var url = new URL(outerWin.location.href);
-          if (!url.searchParams.has('sr')) {
-            url.searchParams.set('sr', '1');
-            outerWin.history.replaceState(null, '', url.toString());
-          }
-        } catch (ex) {}
-      });
+      }, { passive: true });
     } catch (e) {}
 
     // ── アプリ復帰時にバッジをクリア ─────────────────────────────

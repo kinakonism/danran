@@ -484,7 +484,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v36",   # 名前変更 → ブラウザキャッシュ強制破棄
+    "danran_lp_v37",   # forcePushResubscribe 追加 → ブラウザキャッシュ強制破棄
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1594,11 +1594,12 @@ def show_notifications(current_user: dict) -> None:
         # 購読リセット（VapidPkHashMismatch などキー不一致の修復用）
         st.markdown("---")
         st.markdown("**購読をリセットする**（キー不一致エラーの修復）")
-        if st.button("🗑️ 古い購読を削除してリセット", key="push_reset_btn"):
+        if st.button("🗑️ 購読をブラウザごとリセット", key="push_reset_btn"):
             try:
                 supabase.table("push_subscriptions").delete().eq("user_id", uid).execute()
-                st.success("✅ 購読を削除しました。ページをリロードして再登録してください。")
-                st.info("👉 この画面を閉じて、チャット画面に戻り、数秒後にまた通知設定を開いてください。自動で再登録されます。")
+                # JS へ「ブラウザ側も unsubscribe して再登録せよ」フラグをセット
+                st.session_state["_push_force_resubscribe"] = True
+                st.rerun()
             except Exception as e:
                 st.error(f"❌ 削除エラー: {e}")
 
@@ -1672,6 +1673,8 @@ if "current_user" not in st.session_state:
 # Python が HTML data 属性として埋め込み JS が window.parent.document から参照。
 _cu          = st.session_state.get("current_user", {})
 _clear_flag  = st.session_state.pop("_clear_session", False)
+# JS に「ブラウザ側も unsubscribe して再登録せよ」を伝えるフラグ（1回のみ）
+_push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
 _is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications")
 if "current_user" in st.session_state and not _is_profile:
@@ -1756,7 +1759,8 @@ st.html(
     f'data-show-rooms="{str(_show_rooms).lower()}" '
     f'data-view="{_html.escape(_cur_view)}" '
     f'data-vapid-pub="{_html.escape(_vapid_pub)}" '
-    f'data-uid="{_html.escape(_cu.get("id",""))}">'
+    f'data-uid="{_html.escape(_cu.get("id",""))}" '
+    f'data-push-resub="{str(_push_resub).lower()}">'
     f'</div>'
     # ── Python レンダリングヘッダー ──
     # ログイン済み: チャットヘッダー or 編集ヘッダー

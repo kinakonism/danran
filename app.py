@@ -903,6 +903,11 @@ def show_profile(current_user: dict) -> None:
                 st.query_params["sr"] = "1"
                 st.rerun()
 
+        st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+        if st.button("🔔 通知設定", use_container_width=True, key="profile_to_notif"):
+            st.session_state["view"] = "notifications"
+            st.rerun()
+
 # ─────────────────────────────────────
 # 画面⑤ ルーム編集
 # ─────────────────────────────────────

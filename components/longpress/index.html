@@ -1298,6 +1298,14 @@
           stSetValue({ action: 'go_profile', ts: Date.now() });
         });
       }
+      // チャットヘッダー右上の 👥 → ルーム編集（メンバー管理）画面
+      var memBtn = pDoc.querySelector('[data-hdr-roomedit]');
+      if (memBtn && !memBtn._danranHdrRoomEdit) {
+        memBtn._danranHdrRoomEdit = true;
+        memBtn.addEventListener('click', function () {
+          stSetValue({ action: 'go_room_edit', room_id: memBtn.getAttribute('data-hdr-roomedit'), ts: Date.now() });
+        });
+      }
     } catch (e) {}
   }
 

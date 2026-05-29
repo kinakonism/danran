@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v53",   # 通知バナー二重表示の修正（JSフォールバックがPython版と重複）
+    "danran_lp_v54",   # チャットヘッダーに👥メンバー管理ボタン（→ルーム編集へ）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1838,11 +1838,16 @@ _clear_flag  = st.session_state.pop("_clear_session", False)
 _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
 _is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications")
+_active_room_id = ""
 if "current_user" in st.session_state and not _is_profile:
     # active_room が未セット（セッション復元直後）のときは参加ルームの先頭をフォールバック
     _rooms_for_hdr = fetch_rooms(_cu.get("id", ""))
     _active_room   = st.session_state.get("active_room") or (
         _rooms_for_hdr[0]["name"] if _rooms_for_hdr else ""
+    )
+    # チャットヘッダーのメンバー管理ボタン用に active room の id を引く
+    _active_room_id = next(
+        (r["id"] for r in _rooms_for_hdr if r["name"] == _active_room), ""
     )
 else:
     _active_room = ""
@@ -1920,7 +1925,14 @@ if "current_user" in st.session_state:
             # ルーム選択はトップ画面なので戻る（＜）ボタンは出さない
             _hdr_left = '<div style="flex-shrink:0;min-width:44px;"></div>'
         else:
-            _hdr_right = '<div style="flex-shrink:0;min-width:44px;"></div>'
+            # チャット画面: 右上に「👥」メンバー管理ボタン → ルーム編集（メンバー画面）へ
+            if _active_room_id:
+                _hdr_right = (
+                    f'<button data-hdr-roomedit="{_html.escape(_active_room_id)}" '
+                    f'style="{_HDR_BTN_STYLE}font-size:1.1rem">👥</button>'
+                )
+            else:
+                _hdr_right = '<div style="flex-shrink:0;min-width:44px;"></div>'
             _hdr_left = (
                 f'<button data-hdr-nav style="{_HDR_BTN_STYLE}">'
                 f'{_html.escape(_hdr_btn_text)}</button>'

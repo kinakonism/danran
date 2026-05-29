@@ -1316,17 +1316,6 @@
         stSetValue({ action: action, ts: ts });
       };
     } catch (e) {}
-    // ── 指追従ドラッグ完了後、ルーム選択が出たら .stApp の transform をリセット ──
-    //   readConfig() 直後なので SHOW_ROOMS は最新。投げ飛ばした .stApp を元に戻し、
-    //   ルーム選択は自前の CSS スライドイン(danranSlideInLeft)で入る。
-    try {
-      var _pd = window.parent.document;
-      if (_pd._danranDragReset && SHOW_ROOMS) {
-        _pd._danranDragReset = false;
-        var _appEl = _pd.querySelector('[data-testid="stApp"]') || _pd.querySelector('.stApp');
-        if (_appEl) { _appEl.style.transition = 'none'; _appEl.style.transform = ''; _appEl.style.boxShadow = ''; }
-      }
-    } catch (e) {}
     // ログアウト済み（ME が空）なら即座にヘッダー・カメラを除去して終了
     if (!ME) {
       removeHeader();
@@ -1485,18 +1474,13 @@
       if (_dragging && _canDrag && _dragEl) {
         var vel = dx / Math.max(dt, 1);                 // px/ms
         var complete = (dx > sw * 0.32) || (dx > 60 && vel > 0.5);
+        // ★ 完了/キャンセルどちらも .stApp は必ず translateX(0) に戻す。
+        //   画面外へ投げ飛ばすとサーバー往復ラグで戻せず真っ暗固着するため、
+        //   完了時は「バネで戻す + go_rooms」とし、ルーム選択は CSS スライドインで入れる。
+        clearDrag(_dragEl, true);
         if (complete) {
           _swipeAt = Date.now();
-          _dragEl.style.transition = 'transform 0.16s ease-out';
-          _dragEl.style.transform  = 'translateX(' + sw + 'px)';   // 残りを右へ投げる
-          pDoc._danranDragReset = true;                  // ルーム選択出現時に scan() がリセット
-          var elRef = _dragEl;
-          setTimeout(function () { fireNav('go_rooms'); }, 110);
-          setTimeout(function () {                        // 安全策: 1.5s で強制リセット
-            if (pDoc._danranDragReset) { pDoc._danranDragReset = false; clearDrag(elRef, false); }
-          }, 1500);
-        } else {
-          clearDrag(_dragEl, true);                       // バネで戻す
+          fireNav('go_rooms');
         }
         _dragging = false; _dragEl = null;
         return;
@@ -1521,6 +1505,12 @@
       }
       // ルーム選択中(sr=true)はトップ画面のため何もしない
     }
+
+    // touchcancel: 通話・通知等でジェスチャー中断時も必ず .stApp を元に戻す
+    pDoc.addEventListener('touchcancel', function () {
+      if (_dragEl) clearDrag(_dragEl, true);
+      _swipeSX = null; _dragging = false; _dragEl = null;
+    }, { passive: true });
 
     // 合成クリック抑制（スワイプ後 700ms）
     pDoc.addEventListener('click', function (e) {

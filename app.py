@@ -484,7 +484,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v47",   # 指追従スワイプドラッグ + ルーム選択の＜削除・スワイプ無効化
+    "danran_lp_v48",   # 指追従スワイプ: 投げ飛ばし廃止→バネ戻し+go_rooms（真っ暗固着を修正）
     path=_LP_COMPONENT_DIR,
 )
 

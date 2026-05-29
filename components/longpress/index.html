@@ -1322,6 +1322,8 @@
     injectNotifSettings();  // 通知設定画面の UI（VIEW=notifications のときのみ）
     attachPushBannerClick(); // Python 描画バナーのクリックイベント付与
     setupInstallPrompt();   // Android: beforeinstallprompt キャプチャ（iOS は不可）
+    try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
+    reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
     // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
     // （通常は Python が st.html() でレンダリングするため実行されない）
     try {
@@ -1844,6 +1846,116 @@
       if (btn) { btn.textContent = '📷'; btn.style.pointerEvents = ''; }
       showToast('❌ 送信失敗: ' + err.message.slice(0, 40));
     }
+  }
+
+  /* ════════════════════════════════════════
+   *  楽観的 UI（送信中バブル）
+   *  送信経路は Streamlit のまま（insert + push を維持）。
+   *  送信した瞬間にグレーの「🕐送信中」バブルを即表示し、
+   *  本物の緑バブル（同一テキストの mine）が届いたら消す＝送信完了。
+   * ════════════════════════════════════════ */
+  function countRealMine(text) {
+    var n = 0;
+    try {
+      var els = window.parent.document.querySelectorAll('[data-lp-msg][data-lp-mine]');
+      for (var i = 0; i < els.length; i++) {
+        var b = els[i].getAttribute('data-lp-body');
+        if (b !== null && b.trim() === text.trim()) n++;
+      }
+    } catch (e) {}
+    return n;
+  }
+
+  function addOptimisticBubble(text) {
+    try {
+      var pDoc = window.parent.document, pWin = window.parent;
+      var msgs = pDoc.querySelectorAll('[data-lp-msg]');
+      var anchorAfter = null, anchorParent = null;
+      if (msgs.length) {
+        var last = msgs[msgs.length - 1];
+        var md = (last.closest && last.closest('[data-testid="stMarkdown"]')) || last.parentElement;
+        anchorAfter = md; anchorParent = md.parentElement;
+      } else {
+        anchorParent = pDoc.querySelector('[data-testid="stMainBlockContainer"]') || pDoc.body;
+      }
+      var av = ME_AVATAR || '🙂';
+      var avHtml = (av.indexOf('http') === 0)
+        ? '<img src="' + av + '" style="width:40px;height:40px;border-radius:8px;object-fit:cover;flex-shrink:0;display:block">'
+        : '<span style="font-size:1.8rem;line-height:40px;display:block;width:40px;text-align:center;flex-shrink:0">' + av + '</span>';
+      var safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+      var wrap = pDoc.createElement('div');
+      wrap.setAttribute('data-danran-opt', '1');
+      wrap.style.cssText = 'display:flex;justify-content:flex-end;align-items:flex-end;gap:8px;margin:4px 0 2px 48px';
+      wrap.innerHTML =
+        '<div style="text-align:right">' +
+          '<div class="_optstatus" style="font-size:0.7rem;color:#999;margin-bottom:3px">🕐 送信中…</div>' +
+          '<div class="_optbubble" style="background:#00b900;opacity:0.5;color:#fff;border-radius:18px 18px 4px 18px;' +
+          'padding:10px 14px;display:inline-block;max-width:100%;text-align:left;word-break:break-word;font-size:0.93rem">' +
+          safe + '</div>' +
+        '</div>' + avHtml;
+      wrap._optText = text;
+      wrap._optBase = countRealMine(text);
+      wrap._optTime = Date.now();
+      if (anchorAfter && anchorAfter.parentElement) {
+        anchorAfter.parentElement.insertBefore(wrap, anchorAfter.nextSibling);
+      } else if (anchorParent) {
+        anchorParent.appendChild(wrap);
+      }
+      try { pWin.scrollTo({ top: pDoc.body.scrollHeight, behavior: 'smooth' }); }
+      catch (e) { try { pWin.scrollTo(0, pDoc.body.scrollHeight); } catch (e2) {} }
+    } catch (e) {}
+  }
+
+  var _lastOpt = { text: '', t: 0 };
+  function maybeOptimistic(text) {
+    var now = Date.now();
+    if (text === _lastOpt.text && now - _lastOpt.t < 800) return;  // Enter+click 等の二重発火防止
+    _lastOpt = { text: text, t: now };
+    addOptimisticBubble(text);
+  }
+
+  // scan() から毎回呼ぶ: 本物が届いた楽観バブルを消す / 一定時間で失敗表示
+  function reconcileOptimistic() {
+    try {
+      var opts = window.parent.document.querySelectorAll('[data-danran-opt]');
+      for (var i = 0; i < opts.length; i++) {
+        var el = opts[i];
+        if (countRealMine(el._optText || '') > (el._optBase || 0)) {
+          el.remove();                      // 本物の緑が出た＝送信完了
+        } else if (Date.now() - (el._optTime || 0) > 9000) {
+          var st = el.querySelector('._optstatus');
+          var bb = el.querySelector('._optbubble');
+          if (st && st.textContent.indexOf('送信できません') < 0) {
+            st.textContent = '⚠️ 送信できませんでした';
+            st.style.color = '#ff6b6b';
+          }
+          if (bb) bb.style.opacity = '1';
+        }
+      }
+    } catch (e) {}
+  }
+
+  // チャット入力の送信検知（rerun で作り直されるため document に委譲）
+  function setupChatSendHook(pDoc) {
+    if (pDoc._danranSendHook) return;
+    pDoc._danranSendHook = true;
+    // Enter 送信（IME 変換中の Enter は送信ではないので除外＝日本語入力対策）
+    pDoc.addEventListener('keydown', function (e) {
+      var ta = e.target;
+      if (!ta || !ta.closest || !ta.closest('[data-testid="stChatInput"]')) return;
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      if (e.isComposing || e.keyCode === 229) return;
+      var val = (ta.value || '').trim();
+      if (val) maybeOptimistic(val);
+    }, true);
+    // 送信ボタン
+    pDoc.addEventListener('click', function (e) {
+      var btn = e.target && e.target.closest && e.target.closest('[data-testid="stChatInputSubmitButton"]');
+      if (!btn) return;
+      var ta = pDoc.querySelector('[data-testid="stChatInput"] textarea');
+      var val = ta ? (ta.value || '').trim() : '';
+      if (val) maybeOptimistic(val);
+    }, true);
   }
 
   /* ════════════════════════════════════════

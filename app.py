@@ -524,7 +524,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v50",   # クリーンアップ: DEBUGフラグでログ抑制 + 孤立ハンドラ/logout分岐削除
+    "danran_lp_v51",   # 楽観的UI: 送信中バブル（🕐→緑）+ IME安全な送信検知
     path=_LP_COMPONENT_DIR,
 )
 
@@ -646,7 +646,9 @@ def render_messages() -> None:
                 'background:#00b900;color:#fff;border-radius:18px 18px 4px 18px;padding:10px 14px'
             )
             bubble = (
-                f'<div data-lp-msg="{msg_id}" data-lp-mine="1" style="'
+                # data-lp-body: 楽観的バブルとの照合用に生テキストを保持
+                f'<div data-lp-msg="{msg_id}" data-lp-mine="1" '
+                f'data-lp-body="{_html.escape(body)}" style="'
                 f'display:flex;justify-content:flex-end;align-items:flex-end;'
                 f'gap:8px;margin:4px 0 2px 48px">'
                 f'<div style="text-align:right">'

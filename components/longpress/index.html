@@ -321,7 +321,8 @@
       });
   }
   function deleteMsg(msgId) {
-    return sbDelete('messages?id=eq.' + msgId + '&user_name=eq.' + encodeURIComponent(ME));
+    // user_id（UUID）で認可する。user_name（表示名）は変更可能なため認可に使わない
+    return sbDelete('messages?id=eq.' + msgId + '&user_id=eq.' + encodeURIComponent(ME_UID));
   }
 
   /* ════════════════════════════════════════

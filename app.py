@@ -9,6 +9,7 @@ import html as _html
 import io
 import json
 import os
+import threading
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -374,14 +375,22 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
             "room_name": room, "user_id": uid, "user_name": uname,
             "user_avatar": uavatar, "content": content, "image_url": image_url,
         }).execute()
-        send_push(room, uid, uname, content, has_image=bool(image_url))
+        # プッシュ通知はバックグラウンドスレッドで送信（UI をブロックしない）
+        # Apple/Google APNs への HTTP リクエストが完了するまで待たずに即座に return する
+        threading.Thread(
+            target=send_push,
+            args=(room, uid, uname, content),
+            kwargs={"has_image": bool(image_url)},
+            daemon=True,
+        ).start()
         return True
     except Exception as e:
         st.error(f"❌ {e}"); return False
 
-def delete_message(msg_id: str, uname: str) -> bool:
+def delete_message(msg_id: str, user_id: str) -> bool:
+    """メッセージを削除する。user_id（UUID）で認可するため名前変更後も安全。"""
     try:
-        supabase.table("messages").delete().eq("id", msg_id).eq("user_name", uname).execute()
+        supabase.table("messages").delete().eq("id", msg_id).eq("user_id", user_id).execute()
         return True
     except Exception as e:
         st.error(f"❌ {e}"); return False
@@ -469,7 +478,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v39",   # ログアウト後 blank screen 修正: clearSession→restore_session unblock
+    "danran_lp_v40",   # セキュリティ修正 + send_push スレッド化
     path=_LP_COMPONENT_DIR,
 )
 
@@ -630,6 +639,11 @@ def show_user_select() -> None:
         identifier = st.text_input("お名前 または 電話番号", placeholder="例：ユーザー名　または　09012345678", key="login_name")
         st.caption("電話番号はハイフンなし（09012345678）で入力してください")
         pw         = st.text_input("パスワード", type="password", key="login_pw")
+        # ── ブルートフォース対策（同一セッション内で10回失敗でロック）──
+        _fail_count = st.session_state.get("_login_fails", 0)
+        if _fail_count >= 10:
+            st.error("⛔ ログイン試行回数が多すぎます。ページを更新してください。")
+            return
         if st.button("🔓 ログイン", use_container_width=True, type="primary"):
             if not identifier.strip():
                 st.error("お名前または電話番号を入力してください"); return
@@ -658,8 +672,10 @@ def show_user_select() -> None:
                 except Exception:
                     pass
             if u and verify_password(pw, u.get("password_hash") or ""):
+                st.session_state.pop("_login_fails", None)   # 成功時はカウンターリセット
                 do_login(u); st.rerun()
             else:
+                st.session_state["_login_fails"] = _fail_count + 1
                 st.error("名前・電話番号またはパスワードが違います 🔒")
         st.divider()
         if st.button("＋ 新しいメンバーとして登録", use_container_width=True):
@@ -1369,7 +1385,7 @@ def show_chat(current_user: dict) -> None:
     av_str2 = current_user["avatar"]
     # プレースホルダーは短く固定（名前を入れると折り返して最新メッセージが隠れるため）
     ph = "メッセージ" if av_str2.startswith("http") else f"{av_str2} メッセージ"
-    if prompt := st.chat_input(ph):
+    if prompt := st.chat_input(ph, max_chars=2000):
         send_message(selected_room, current_user["id"], current_user["name"], current_user["avatar"], prompt)
         st.rerun()
 

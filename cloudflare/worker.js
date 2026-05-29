@@ -1,28 +1,27 @@
 /**
- * danran Cloudflare Worker — v3
+ * danran Cloudflare Worker — v4
  *
  * 発見: Streamlit Community Cloud の実際の Streamlit アプリは
  *       /~/+/ 以下で nginx 認証をバイパスして Uvicorn に直接アクセスできる。
  *       セッション管理不要。
  *
+ * v4 の変更:
+ *   - WebSocket プロキシを cloudflare:sockets (手動TCP) から
+ *     fetch() WebSocket API (ネイティブ) に変更。
+ *     → フレームエンコーダー/デコーダー不要、Mac Chrome での安定性向上。
+ *
  * 役割:
  *   - /sw.js /manifest.json /icons/* を直接配信（PWA 実現）
  *   - /{path} → /~/+/{path} として Streamlit Uvicorn にリバースプロキシ
- *   - WebSocket は cloudflare:sockets で HTTP/1.1 強制プロキシ
- *     (/~/+/_stcore/stream が正しい WS パス)
+ *   - WebSocket: fetch() WebSocket API で /~/+/_stcore/stream にプロキシ
  *   - cron: 12時間ごとに Streamlit を warm-up
  */
-
-import { connect } from 'cloudflare:sockets';
 
 const STREAMLIT_HOST   = 'danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app';
 const STREAMLIT_ORIGIN = 'https://' + STREAMLIT_HOST;
 // 実際の Streamlit アプリは /~/+/ 以下に存在
 const APP_BASE_PATH    = '/~/+';
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
-
-const ENC = new TextEncoder();
-const DEC = new TextDecoder('latin1');
 
 // ── Service Worker スクリプト ─────────────────────────────────────────
 const SW_JS = `
@@ -95,13 +94,6 @@ const MANIFEST_JSON = JSON.stringify({
   ],
 });
 
-// ── バイト配列結合ヘルパー ─────────────────────────────────────────────
-function concat(a, b) {
-  const c = new Uint8Array(a.length + b.length);
-  c.set(a); c.set(b, a.length);
-  return c;
-}
-
 // ── メインハンドラ ────────────────────────────────────────────────────
 export default {
   async scheduled(event, env, ctx) {
@@ -156,7 +148,8 @@ export default {
 
     // ── WebSocket プロキシ ───────────────────────────────────────────
     if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
-      return handleWebSocket(request, url);
+      console.log('[WS] incoming websocket request:', url.pathname);
+      return handleWebSocket(request, url, ctx);
     }
 
     // ── HTTP プロキシ ────────────────────────────────────────────────
@@ -166,7 +159,6 @@ export default {
 
 // ── HTTP プロキシ: /{path} → /~/+/{path} ──────────────────────────────
 async function proxyHttp(request, url) {
-  // ブラウザのパスを /~/+/{path} にマップ
   const upstreamPath = APP_BASE_PATH + url.pathname + url.search;
   const upstream = `${STREAMLIT_ORIGIN}${upstreamPath}`;
 
@@ -188,8 +180,6 @@ async function proxyHttp(request, url) {
 
   const newHeaders = new Headers();
   for (const [k, v] of res.headers.entries()) {
-    const kl = k.toLowerCase();
-    if (kl === 'set-cookie') continue; // Streamlit 内部クッキーはブラウザに渡さない
     newHeaders.append(k, v);
   }
 
@@ -198,7 +188,6 @@ async function proxyHttp(request, url) {
   if (loc && res.status >= 300 && res.status < 400) {
     try {
       const locUrl = new URL(loc.startsWith('http') ? loc : `${STREAMLIT_ORIGIN}${loc}`);
-      // /~/+/{path} → /{path} に戻す
       let newPath = locUrl.pathname;
       if (newPath.startsWith(APP_BASE_PATH)) newPath = newPath.slice(APP_BASE_PATH.length) || '/';
       locUrl.hostname = url.hostname;
@@ -216,228 +205,132 @@ async function proxyHttp(request, url) {
   });
 }
 
-// ── WebSocket プロキシ（cloudflare:sockets で HTTP/1.1 強制）─────────
+// ── WebSocket プロキシ（fetch() WebSocket API 使用）────────────────────
 //
 // 重要: 正しい WS パスは /~/+/_stcore/stream
 //       /_stcore/stream は nginx が HTML を返す（拒否）
 //       /~/+/_stcore/stream は Uvicorn に直接到達する（Cookie 不要）
-async function handleWebSocket(request, url) {
-  // ブラウザの WS パスを /~/+/_stcore/stream にマップ
-  // (ブラウザは /_stcore/stream に接続するが、上流は /~/+/ 以下)
+//
+// v4: cloudflare:sockets (手動TCP) を廃止し fetch() WebSocket API に変更。
+//     フレームエンコーダー/デコーダー不要でシンプルかつ安定。
+async function handleWebSocket(request, url, ctx) {
   const wsPath = APP_BASE_PATH + url.pathname + url.search;
 
   // ブラウザ向け WebSocket ペア
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
 
-  // cloudflare:sockets で HTTP/1.1 TLS 接続
-  let tcpSocket;
+  // upstream へ WebSocket 接続（fetch() API）
+  const upstreamUrl = `https://${STREAMLIT_HOST}${wsPath}`;
+
+  // upstream への接続ヘッダー
+  const upstreamHeaders = new Headers();
+  upstreamHeaders.set('Host', STREAMLIT_HOST);
+  upstreamHeaders.set('User-Agent', UA);
+  upstreamHeaders.set('Origin', STREAMLIT_ORIGIN);
+  upstreamHeaders.set('Upgrade', 'websocket');
+  upstreamHeaders.set('Connection', 'Upgrade');
+  upstreamHeaders.set('Sec-WebSocket-Version', '13');
+
+  // ★ 重要: Sec-WebSocket-Protocol を転送（streamlit + auth token）
+  // Streamlit JS は new WebSocket(url, ['streamlit', 'PLACEHOLDER_AUTH_TOKEN']) で接続する
+  // このサブプロトコルをそのまま upstream に転送しないと Streamlit が認証できない
+  const wsProtocol = request.headers.get('Sec-WebSocket-Protocol');
+  if (wsProtocol) upstreamHeaders.set('Sec-WebSocket-Protocol', wsProtocol);
+
+  // Cookie があれば転送
+  const cookie = request.headers.get('Cookie');
+  if (cookie) upstreamHeaders.set('Cookie', cookie);
+
+  let upstreamWS;
+  let agreedProtocol = null;
   try {
-    tcpSocket = connect(
-      { hostname: STREAMLIT_HOST, port: 443 },
-      { secureTransport: 'on' }
-    );
+    const upstreamResp = await fetch(upstreamUrl, { headers: upstreamHeaders });
+    if (!upstreamResp.webSocket) {
+      const body = await upstreamResp.text().catch(() => '');
+      throw new Error(`upstream returned ${upstreamResp.status}: ${body.slice(0, 120)}`);
+    }
+    upstreamWS = upstreamResp.webSocket;
+    // upstream が選択したサブプロトコルを取得（ブラウザへの 101 にも echo する）
+    agreedProtocol = upstreamResp.headers.get('Sec-WebSocket-Protocol');
+    upstreamWS.accept();
+    console.log(`[WS] connected to upstream: ${wsPath}, protocol=${agreedProtocol}`);
   } catch (err) {
-    console.error('[WS] connect failed:', err.message);
+    console.error('[WS] upstream connect failed:', err.message);
     server.close(1011, 'upstream connect failed');
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  // HTTP/1.1 WebSocket ハンドシェイク送信
-  const wsKey = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-  const handshake =
-    `GET ${wsPath} HTTP/1.1\r\n` +
-    `Host: ${STREAMLIT_HOST}\r\n` +
-    `Upgrade: websocket\r\n` +
-    `Connection: Upgrade\r\n` +
-    `Sec-WebSocket-Key: ${wsKey}\r\n` +
-    `Sec-WebSocket-Version: 13\r\n` +
-    `Origin: ${STREAMLIT_ORIGIN}\r\n` +
-    `User-Agent: ${UA}\r\n` +
-    `\r\n`;
+  // ── ブリッジ: client ↔ upstreamWS ────────────────────────────────
+  // ctx.waitUntil() でブリッジが Response 返却後も GC されないよう保護する
 
-  try {
-    const w = tcpSocket.writable.getWriter();
-    await w.write(ENC.encode(handshake));
-    w.releaseLock();
-  } catch (err) {
-    console.error('[WS] handshake write failed:', err.message);
-    server.close(1011, 'handshake write failed');
-    return new Response(null, { status: 101, webSocket: client });
-  }
+  const bridgePromise = new Promise((resolve) => {
+    let closedCount = 0;
+    const tryResolve = () => { if (++closedCount >= 2) resolve(); };
 
-  // 101 レスポンスを読む
-  let frameBuffer = new Uint8Array(0);
-  try {
-    const r = tcpSocket.readable.getReader();
-    let done = false;
-    while (!done) {
-      const chunk = await r.read();
-      if (chunk.done) throw new Error('TCP closed before 101');
-      frameBuffer = concat(frameBuffer, chunk.value);
-
-      const text = DEC.decode(frameBuffer);
-      const headerEnd = text.indexOf('\r\n\r\n');
-      if (headerEnd >= 0) {
-        if (!text.startsWith('HTTP/1.1 101')) {
-          const firstLine = text.split('\r\n')[0];
-          throw new Error(`Upstream returned: ${firstLine}`);
-        }
-        frameBuffer = frameBuffer.slice(headerEnd + 4);
-        done = true;
-      }
-    }
-    r.releaseLock();
-  } catch (err) {
-    console.error('[WS] 101 read failed:', err.message);
-    server.close(1011, err.message);
-    return new Response(null, { status: 101, webSocket: client });
-  }
-
-  const dbgFirst = Array.from(frameBuffer.slice(0, 8)).map(b => b.toString(16).padStart(2,'0')).join(' ');
-  console.log(`[WS] connected to ${wsPath}, post-101 buf=${frameBuffer.length}B first8: ${dbgFirst}`);
-
-  // ── フレームブリッジ ──────────────────────────────────────────────
-
-  const writeQueue = [];
-  let writing = false;
-  async function flushWrites() {
-    if (writing) return;
-    writing = true;
-    while (writeQueue.length > 0) {
-      const data = writeQueue.shift();
-      try {
-        const w = tcpSocket.writable.getWriter();
-        await w.write(data);
-        w.releaseLock();
-      } catch (_) { break; }
-    }
-    writing = false;
-  }
-
-  // ブラウザ → Streamlit
-  server.addEventListener('message', (e) => {
-    try {
+    let msgCount = 0;
+    // ブラウザ → Streamlit
+    server.addEventListener('message', (e) => {
+      msgCount++;
       const isBinary = e.data instanceof ArrayBuffer || ArrayBuffer.isView(e.data);
-      const payload = isBinary
-        ? new Uint8Array(e.data instanceof ArrayBuffer ? e.data : e.data.buffer)
-        : ENC.encode(e.data);
-      writeQueue.push(encodeWSFrame(payload, isBinary, true));
-      flushWrites();
-    } catch (_) {}
-  });
-
-  server.addEventListener('close', () => {
-    try {
-      writeQueue.push(new Uint8Array([0x88, 0x82, 0, 0, 0, 0, 0x03, 0xE8]));
-      flushWrites();
-    } catch (_) {}
-    setTimeout(() => { try { tcpSocket.close(); } catch (_) {} }, 500);
-  });
-
-  // Streamlit → ブラウザ
-  (async () => {
-    const r = tcpSocket.readable.getReader();
-    try {
-      while (true) {
-        const { value, done } = await r.read();
-        if (done) break;
-
-        frameBuffer = concat(frameBuffer, value);
-        const { frames, remaining } = decodeWSFrames(frameBuffer);
-        frameBuffer = remaining;
-
-        for (const { opcode, payload } of frames) {
-          if (opcode === 0x8) {
-            try { server.close(); } catch (_) {}
-            return;
-          } else if (opcode === 0x9) { // ping → pong
-            const pong = encodeWSFrame(payload, false, true);
-            pong[0] = 0x8A;
-            writeQueue.push(pong);
-            flushWrites();
-          } else if (opcode === 0x1) {
-            server.send(new TextDecoder().decode(payload));
-          } else if (opcode === 0x2) {
-            server.send(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength));
-          }
-        }
+      const len = isBinary ? (e.data.byteLength || e.data.length) : e.data.length;
+      if (msgCount <= 3) console.log(`[WS] client→upstream #${msgCount} binary=${isBinary} len=${len}`);
+      try {
+        upstreamWS.send(e.data);
+      } catch (err) {
+        console.error('[WS] client→upstream send error:', err.message);
       }
-    } catch (_) {}
-    r.releaseLock();
-    try { server.close(); } catch (_) {}
-  })();
+    });
 
-  return new Response(null, { status: 101, webSocket: client });
-}
+    server.addEventListener('close', (e) => {
+      console.log(`[WS] client closed: ${e.code} ${e.reason}`);
+      try { upstreamWS.close(e.code || 1000, e.reason || ''); } catch (_) {}
+      tryResolve();
+    });
 
-// ── WebSocket フレームエンコーダー ────────────────────────────────────
-function encodeWSFrame(payload, isBinary, masked) {
-  const opcode = isBinary ? 0x2 : 0x1;
-  const len = payload.length;
-  let offset = 2;
-  if (len >= 65536) offset += 8;
-  else if (len >= 126) offset += 2;
-  if (masked) offset += 4;
+    server.addEventListener('error', (e) => {
+      console.error('[WS] client error:', e.message || e);
+    });
 
-  const frame = new Uint8Array(offset + len);
-  frame[0] = 0x80 | opcode;
+    let upMsgCount = 0;
+    // Streamlit → ブラウザ
+    upstreamWS.addEventListener('message', (e) => {
+      upMsgCount++;
+      const isBinary = e.data instanceof ArrayBuffer || ArrayBuffer.isView(e.data);
+      const len = isBinary ? (e.data.byteLength || e.data.length) : e.data.length;
+      if (upMsgCount <= 5) console.log(`[WS] upstream→client #${upMsgCount} binary=${isBinary} len=${len}`);
+      try {
+        server.send(e.data);
+      } catch (err) {
+        console.error('[WS] upstream→client send error:', err.message);
+      }
+    });
 
-  if (len >= 65536) {
-    frame[1] = (masked ? 0x80 : 0) | 127;
-    new DataView(frame.buffer).setBigUint64(2, BigInt(len));
-    offset = masked ? 14 : 10;
-  } else if (len >= 126) {
-    frame[1] = (masked ? 0x80 : 0) | 126;
-    frame[2] = (len >> 8) & 0xFF;
-    frame[3] = len & 0xFF;
-    offset = masked ? 8 : 4;
-  } else {
-    frame[1] = (masked ? 0x80 : 0) | len;
-    offset = masked ? 6 : 2;
+    upstreamWS.addEventListener('close', (e) => {
+      console.log(`[WS] upstream closed: ${e.code} ${e.reason}`);
+      try { server.close(e.code || 1000, e.reason || ''); } catch (_) {}
+      tryResolve();
+    });
+
+    upstreamWS.addEventListener('error', (e) => {
+      console.error('[WS] upstream error:', e.message || e);
+      try { server.close(1011, 'upstream error'); } catch (_) {}
+      tryResolve();
+    });
+  });
+
+  // Worker が Response 返却後もブリッジが継続動作するよう保護
+  ctx.waitUntil(bridgePromise);
+
+  // ★ upstream が選択したサブプロトコルをブラウザへの 101 に echo する
+  // これがないと Chrome は "Server sent no subprotocol" で接続を拒否する
+  const responseHeaders = {};
+  if (agreedProtocol) {
+    responseHeaders['Sec-WebSocket-Protocol'] = agreedProtocol;
+  } else if (wsProtocol) {
+    // upstream が echo しなかった場合は browser が要求した最初のプロトコルを使う
+    responseHeaders['Sec-WebSocket-Protocol'] = wsProtocol.split(',')[0].trim();
   }
 
-  if (masked) {
-    const mask = crypto.getRandomValues(new Uint8Array(4));
-    frame.set(mask, offset - 4);
-    for (let i = 0; i < len; i++) frame[offset + i] = payload[i] ^ mask[i % 4];
-  } else {
-    frame.set(payload, offset);
-  }
-  return frame;
-}
-
-// ── WebSocket フレームデコーダー ─────────────────────────────────────
-function decodeWSFrames(buf) {
-  const frames = [];
-  let i = 0;
-  while (i + 2 <= buf.length) {
-    const opcode = buf[i] & 0x0F;
-    const masked  = (buf[i + 1] & 0x80) !== 0;
-    let plen = buf[i + 1] & 0x7F;
-    let hlen = 2;
-
-    if (plen === 126) {
-      if (i + 4 > buf.length) break;
-      plen = (buf[i + 2] << 8) | buf[i + 3];
-      hlen = 4;
-    } else if (plen === 127) {
-      if (i + 10 > buf.length) break;
-      plen = Number(new DataView(buf.buffer, buf.byteOffset + i + 2).getBigUint64(0));
-      hlen = 10;
-    }
-    if (masked) hlen += 4;
-    if (i + hlen + plen > buf.length) break;
-
-    let payload = buf.slice(i + hlen, i + hlen + plen);
-    if (masked) {
-      const mk = buf.slice(i + hlen - 4, i + hlen);
-      const out = new Uint8Array(plen);
-      for (let j = 0; j < plen; j++) out[j] = payload[j] ^ mk[j % 4];
-      payload = out;
-    }
-    frames.push({ opcode, payload });
-    i += hlen + plen;
-  }
-  return { frames, remaining: buf.slice(i) };
+  return new Response(null, { status: 101, webSocket: client, headers: responseHeaders });
 }

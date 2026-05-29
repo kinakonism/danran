@@ -1591,6 +1591,17 @@ def show_notifications(current_user: dict) -> None:
         except Exception as e:
             st.error(f"購読取得エラー: {e}")
 
+        # 購読リセット（VapidPkHashMismatch などキー不一致の修復用）
+        st.markdown("---")
+        st.markdown("**購読をリセットする**（キー不一致エラーの修復）")
+        if st.button("🗑️ 古い購読を削除してリセット", key="push_reset_btn"):
+            try:
+                supabase.table("push_subscriptions").delete().eq("user_id", uid).execute()
+                st.success("✅ 購読を削除しました。ページをリロードして再登録してください。")
+                st.info("👉 この画面を閉じて、チャット画面に戻り、数秒後にまた通知設定を開いてください。自動で再登録されます。")
+            except Exception as e:
+                st.error(f"❌ 削除エラー: {e}")
+
         # テスト通知送信
         st.markdown("---")
         st.markdown("**自分宛にテスト通知を送る**")

@@ -685,6 +685,15 @@
           el._danranRoomNav = true;
           el.addEventListener('click', function (e) {
             e.stopPropagation();
+            // 即時に選択ハイライト（サーバー往復中も「選んだ」感を出す）
+            try {
+              var rl = pDoc.getElementById('_danran_room_list');
+              if (rl) {
+                var sel = rl.querySelectorAll('button.dr-room.dr-selected');
+                for (var k = 0; k < sel.length; k++) sel[k].classList.remove('dr-selected');
+              }
+              el.classList.add('dr-selected');
+            } catch (ex) {}
             stSetValue({ action: 'go_room', room_name: el.getAttribute('data-room-name'), ts: Date.now() });
           });
         })(navBtns[i]);
@@ -1474,13 +1483,16 @@
       if (_dragging && _canDrag && _dragEl) {
         var vel = dx / Math.max(dt, 1);                 // px/ms
         var complete = (dx > sw * 0.32) || (dx > 60 && vel > 0.5);
-        // ★ 完了/キャンセルどちらも .stApp は必ず translateX(0) に戻す。
-        //   画面外へ投げ飛ばすとサーバー往復ラグで戻せず真っ暗固着するため、
-        //   完了時は「バネで戻す + go_rooms」とし、ルーム選択は CSS スライドインで入れる。
-        clearDrag(_dragEl, true);
+        // 完了/キャンセルとも .stApp は必ず translateX(0) に戻す（画面外固着を防ぐ）。
+        //   完了時: アニメなしで瞬時に戻す（「バネで戻る」動きを見せない）→
+        //           直後にルーム選択が CSS スライドインで入るので前進感だけ残る。
+        //   キャンセル時: バネ戻し（指を離したら元に吸い戻る自然な挙動）。
         if (complete) {
+          clearDrag(_dragEl, false);   // 瞬時クリア（戻るアニメなし）
           _swipeAt = Date.now();
           fireNav('go_rooms');
+        } else {
+          clearDrag(_dragEl, true);    // バネ戻し
         }
         _dragging = false; _dragEl = null;
         return;

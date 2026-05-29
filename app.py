@@ -484,7 +484,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v48",   # 指追従スワイプ: 投げ飛ばし廃止→バネ戻し+go_rooms（真っ暗固着を修正）
+    "danran_lp_v49",   # 完了時の戻りアニメ廃止 + ルームタップの選択ハイライト
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1232,6 +1232,12 @@ def render_room_list() -> None:
 
     # ═══ Section 1: チャットルーム ═══
     rows: list[str] = [
+        # ルーム行の押下/選択フィードバック用スタイル
+        '<style>'
+        '#_danran_room_list button.dr-room{transition:background 0.12s;}'
+        '#_danran_room_list button.dr-room:active{background:rgba(255,255,255,0.10)!important;}'
+        '#_danran_room_list button.dr-room.dr-selected{background:rgba(52,199,89,0.20)!important;}'
+        '</style>'
         f'<div id="_danran_room_list" style="padding-bottom:20px;{_anim_css}">',
     ]
 
@@ -1310,7 +1316,7 @@ def render_room_list() -> None:
             f'<div style="display:flex;align-items:center;{row_border}">'
             # ── ルームナビボタン（左・flex:1） ──
             f'<button data-room-nav="{_html.escape(room_id)}" '
-            f'data-room-name="{_html.escape(rname)}" '
+            f'data-room-name="{_html.escape(rname)}" class="dr-room" '
             f'style="flex:1;display:flex;align-items:center;gap:10px;'
             f'padding:12px 14px;min-height:52px;'
             f'background:none;border:none;color:#fff;'

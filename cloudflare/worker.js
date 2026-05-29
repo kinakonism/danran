@@ -1,23 +1,32 @@
 /**
- * danran Cloudflare Worker
+ * danran Cloudflare Worker — v3
+ *
+ * 発見: Streamlit Community Cloud の実際の Streamlit アプリは
+ *       /~/+/ 以下で nginx 認証をバイパスして Uvicorn に直接アクセスできる。
+ *       セッション管理不要。
  *
  * 役割:
  *   - /sw.js /manifest.json /icons/* を直接配信（PWA 実現）
- *   - Streamlit Cloud の認証フローをサーバー側で自動処理し、セッションをキャッシュ
- *   - それ以外のリクエスト・WebSocket を Streamlit Cloud にリバースプロキシ
+ *   - /{path} → /~/+/{path} として Streamlit Uvicorn にリバースプロキシ
+ *   - WebSocket は cloudflare:sockets で HTTP/1.1 強制プロキシ
+ *     (/~/+/_stcore/stream が正しい WS パス)
+ *   - cron: 12時間ごとに Streamlit を warm-up
  */
+
+import { connect } from 'cloudflare:sockets';
 
 const STREAMLIT_HOST   = 'danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app';
 const STREAMLIT_ORIGIN = 'https://' + STREAMLIT_HOST;
-const GITHUB_RAW_ICONS = 'https://raw.githubusercontent.com/kinakonism/danran/main/static/icons';
+// 実際の Streamlit アプリは /~/+/ 以下に存在
+const APP_BASE_PATH    = '/~/+';
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
-// ── セッションキャッシュ（モジュールレベル、同一 Worker isolate 内で共有）───
-let _session = null; // { cookies: string, expires: number }
+const ENC = new TextEncoder();
+const DEC = new TextDecoder('latin1');
 
 // ── Service Worker スクリプト ─────────────────────────────────────────
 const SW_JS = `
-var SW_VERSION = '3.0.0';
+var SW_VERSION = '3.1.0';
 self.addEventListener('install', function(e) { self.skipWaiting(); });
 self.addEventListener('activate', function(e) { e.waitUntil(clients.claim()); });
 self.addEventListener('message', function(event) {
@@ -86,105 +95,22 @@ const MANIFEST_JSON = JSON.stringify({
   ],
 });
 
-// ── Set-Cookie 1行をパース → { name, value } | null ──────────────────
-function parseSetCookie(header) {
-  const semi = header.indexOf(';');
-  const nameValue = semi >= 0 ? header.slice(0, semi) : header;
-  const eq = nameValue.indexOf('=');
-  if (eq < 0) return null;
-  return { name: nameValue.slice(0, eq).trim(), value: nameValue.slice(eq + 1).trim() };
-}
-
-// ── Response の Set-Cookie を既存 cookies オブジェクトに取り込む ─────
-function collectCookies(response, cookies) {
-  // Cloudflare Workers は Headers を iterable として扱える
-  for (const [k, v] of response.headers.entries()) {
-    if (k.toLowerCase() !== 'set-cookie') continue;
-    const parsed = parseSetCookie(v);
-    if (!parsed) continue;
-    if (parsed.value === '' || v.includes('Max-Age=0')) {
-      delete cookies[parsed.name]; // クリア
-    } else {
-      cookies[parsed.name] = parsed.value;
-    }
-  }
-}
-
-// ── Streamlit 認証フローをサーバー側で完了し、有効な Cookie 文字列を返す ──
-async function ensureSession() {
-  if (_session && Date.now() < _session.expires) {
-    return _session.cookies;
-  }
-
-  const cookies = {};
-
-  // Step 1: GET / → 303 to share.streamlit.io/-/auth/app
-  const r1 = await fetch(`${STREAMLIT_ORIGIN}/`, {
-    redirect: 'manual',
-    headers: { 'User-Agent': UA },
-  });
-  collectCookies(r1, cookies);
-
-  // 認証リダイレクトが不要なら（既にセッション有効な場合等）そのまま返す
-  if (r1.status === 200) {
-    const cs = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
-    _session = { cookies: cs, expires: Date.now() + 3600_000 };
-    return cs;
-  }
-
-  const authUrl = r1.headers.get('location') || '';
-  if (!authUrl.includes('share.streamlit.io')) {
-    return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
-  }
-
-  // Step 2: share.streamlit.io/-/auth/app → セッショントークン取得 + 303 to /-/login?payload=…
-  const r2 = await fetch(authUrl, {
-    redirect: 'manual',
-    headers: {
-      'User-Agent': UA,
-      'Cookie': Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; '),
-    },
-  });
-  collectCookies(r2, cookies);
-  const loginUrl = r2.headers.get('location') || '';
-  if (!loginUrl) return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
-
-  // Step 3: /-/login?payload=… → streamlit_session を danran ドメインに確立
-  const loginParsed = new URL(loginUrl.startsWith('http') ? loginUrl : `${STREAMLIT_ORIGIN}${loginUrl}`);
-  const r3 = await fetch(`${STREAMLIT_ORIGIN}${loginParsed.pathname}${loginParsed.search}`, {
-    redirect: 'manual',
-    headers: {
-      'User-Agent': UA,
-      'Cookie': Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; '),
-    },
-  });
-  collectCookies(r3, cookies);
-
-  // Step 4: GET / → proxy-tracking-id 等を取得
-  const r4 = await fetch(`${STREAMLIT_ORIGIN}/`, {
-    redirect: 'manual',
-    headers: {
-      'User-Agent': UA,
-      'Cookie': Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; '),
-    },
-  });
-  collectCookies(r4, cookies);
-
-  const cs = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
-  // セッションは約4時間有効、3時間でリフレッシュ
-  _session = { cookies: cs, expires: Date.now() + 3 * 3600_000 };
-  return cs;
+// ── バイト配列結合ヘルパー ─────────────────────────────────────────────
+function concat(a, b) {
+  const c = new Uint8Array(a.length + b.length);
+  c.set(a); c.set(b, a.length);
+  return c;
 }
 
 // ── メインハンドラ ────────────────────────────────────────────────────
 export default {
-  // Cloudflare Cron Trigger: 毎日 2 回アクセスしてスリープを防ぐ
-  // wrangler.toml の [triggers] crons = ["0 */12 * * *"] で設定
   async scheduled(event, env, ctx) {
+    // Streamlit warm-up（スリープ防止）
     try {
-      _session = null; // セッションをリセットして新鮮な状態で確認
-      const cs = await ensureSession();
-      console.log('[cron] warm-up ok, cookies:', cs.length, 'chars');
+      const r = await fetch(`${STREAMLIT_ORIGIN}${APP_BASE_PATH}/`, {
+        headers: { 'User-Agent': UA },
+      });
+      console.log('[cron] warm-up:', r.status);
     } catch (e) {
       console.error('[cron] warm-up failed:', e.message);
     }
@@ -193,7 +119,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // /sw.js
+    // ── 直接配信: PWA ファイル ───────────────────────────────────────
     if (url.pathname === '/sw.js') {
       return new Response(SW_JS, {
         headers: {
@@ -204,7 +130,6 @@ export default {
       });
     }
 
-    // /manifest.json
     if (url.pathname === '/manifest.json') {
       return new Response(MANIFEST_JSON, {
         headers: {
@@ -215,11 +140,12 @@ export default {
       });
     }
 
-    // /icons/*
     if (url.pathname.startsWith('/icons/')) {
       const filename = url.pathname.slice('/icons/'.length);
       if (!filename || filename.includes('..')) return new Response('Not Found', { status: 404 });
-      const res = await fetch(`${GITHUB_RAW_ICONS}/${filename}`);
+      const res = await fetch(
+        `https://raw.githubusercontent.com/kinakonism/danran/main/static/icons/${filename}`
+      );
       if (!res.ok) return new Response('Not Found', { status: 404 });
       const h = new Headers();
       h.set('Content-Type', res.headers.get('Content-Type') || 'image/png');
@@ -228,75 +154,57 @@ export default {
       return new Response(res.body, { status: 200, headers: h });
     }
 
-    // WebSocket
-    const upgrade = request.headers.get('Upgrade');
-    if (upgrade && upgrade.toLowerCase() === 'websocket') {
+    // ── WebSocket プロキシ ───────────────────────────────────────────
+    if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
       return handleWebSocket(request, url);
     }
 
-    // HTTP プロキシ
+    // ── HTTP プロキシ ────────────────────────────────────────────────
     return proxyHttp(request, url);
   },
 };
 
-// ── HTTP プロキシ（認証フロー自動処理つき）────────────────────────────
-async function proxyHttp(request, url, retry = true) {
-  const sessionCookies = await ensureSession();
-
-  const upstream = new URL(url.pathname + url.search, STREAMLIT_ORIGIN);
+// ── HTTP プロキシ: /{path} → /~/+/{path} ──────────────────────────────
+async function proxyHttp(request, url) {
+  // ブラウザのパスを /~/+/{path} にマップ
+  const upstreamPath = APP_BASE_PATH + url.pathname + url.search;
+  const upstream = `${STREAMLIT_ORIGIN}${upstreamPath}`;
 
   const headers = new Headers();
   for (const [k, v] of request.headers.entries()) {
     const kl = k.toLowerCase();
-    if (kl === 'host' || kl === 'cookie') continue;
+    if (kl === 'host') continue;
     headers.set(k, v);
   }
   headers.set('Host', STREAMLIT_HOST);
+  headers.set('User-Agent', UA);
 
-  // ブラウザの Cookie（Streamlit 認証系のみ除外）と Worker セッションを合成
-  // proxy-tracking-id はブラウザに渡し、ブラウザから返ってきたものを優先使用
-  const browserCookies = (request.headers.get('Cookie') || '')
-    .split('; ')
-    .filter(c => !c.match(/^(streamlit_session|_streamlit_csrf)=/))
-    .join('; ');
-  const merged = [sessionCookies, browserCookies].filter(Boolean).join('; ');
-  if (merged) headers.set('Cookie', merged);
-
-  const res = await fetch(upstream.toString(), {
+  const res = await fetch(upstream, {
     method: request.method,
     headers,
     body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
     redirect: 'manual',
   });
 
-  // 認証リダイレクトが来た場合はセッションをリセットして1回リトライ
-  const loc = res.headers.get('location') || '';
-  if (retry && res.status >= 300 && res.status < 400 &&
-      (loc.includes('share.streamlit.io') || loc.includes('/-/login'))) {
-    _session = null;
-    return proxyHttp(request, url, false);
-  }
-
-  // レスポンスヘッダー整形
   const newHeaders = new Headers();
   for (const [k, v] of res.headers.entries()) {
     const kl = k.toLowerCase();
-    // Streamlit 認証 Cookie（streamlit_session, _streamlit_csrf）はブラウザに渡さない
-    // proxy-tracking-id はブラウザに渡す（WebSocket ルーティングに必要）
-    if (kl === 'set-cookie') {
-      const parsed = parseSetCookie(v);
-      if (parsed && /^(streamlit_session|_streamlit_csrf)$/.test(parsed.name)) continue;
-    }
+    if (kl === 'set-cookie') continue; // Streamlit 内部クッキーはブラウザに渡さない
     newHeaders.append(k, v);
   }
 
-  // Location ヘッダーのホストを Workers ドメインに書き換え
+  // リダイレクト先を Worker URL に書き換え
+  const loc = res.headers.get('location') || '';
   if (loc && res.status >= 300 && res.status < 400) {
     try {
       const locUrl = new URL(loc.startsWith('http') ? loc : `${STREAMLIT_ORIGIN}${loc}`);
+      // /~/+/{path} → /{path} に戻す
+      let newPath = locUrl.pathname;
+      if (newPath.startsWith(APP_BASE_PATH)) newPath = newPath.slice(APP_BASE_PATH.length) || '/';
       locUrl.hostname = url.hostname;
       locUrl.protocol = url.protocol;
       locUrl.port     = '';
+      locUrl.pathname = newPath;
       newHeaders.set('Location', locUrl.toString());
     } catch (_) {}
   }
@@ -308,89 +216,228 @@ async function proxyHttp(request, url, retry = true) {
   });
 }
 
-// ── WebSocket プロキシ ────────────────────────────────────────────────
+// ── WebSocket プロキシ（cloudflare:sockets で HTTP/1.1 強制）─────────
+//
+// 重要: 正しい WS パスは /~/+/_stcore/stream
+//       /_stcore/stream は nginx が HTML を返す（拒否）
+//       /~/+/_stcore/stream は Uvicorn に直接到達する（Cookie 不要）
 async function handleWebSocket(request, url) {
-  const sessionCookies = await ensureSession();
+  // ブラウザの WS パスを /~/+/_stcore/stream にマップ
+  // (ブラウザは /_stcore/stream に接続するが、上流は /~/+/ 以下)
+  const wsPath = APP_BASE_PATH + url.pathname + url.search;
 
-  // セッション Cookie（認証用）とブラウザの proxy-tracking-id（ルーティング用）を合成
-  // proxy-tracking-id はブラウザが HTTP ページロード時に受け取ったものを優先
-  const sessionMap = {};
-  sessionCookies.split('; ').forEach(c => {
-    const eq = c.indexOf('=');
-    if (eq > 0) sessionMap[c.slice(0, eq).trim()] = c.slice(eq + 1);
-  });
-  const browserCookieStr = request.headers.get('Cookie') || '';
-  browserCookieStr.split('; ').forEach(c => {
-    const eq = c.indexOf('=');
-    if (eq > 0) {
-      const name = c.slice(0, eq).trim();
-      // ブラウザの proxy-tracking-id でセッションのものを上書き（正しいルーティング）
-      if (name === 'proxy-tracking-id') sessionMap[name] = c.slice(eq + 1);
-    }
-  });
-  const mergedCookies = Object.entries(sessionMap)
-    .filter(([k, v]) => k && v)
-    .map(([k, v]) => `${k}=${v}`)
-    .join('; ');
-
-  const wsPath      = url.pathname + url.search;
-  const upstreamUrl = `wss://${STREAMLIT_HOST}${wsPath}`;
-
+  // ブラウザ向け WebSocket ペア
   const [client, server] = Object.values(new WebSocketPair());
-
-  let upstreamRes;
-  try {
-    upstreamRes = await fetch(upstreamUrl, {
-      headers: {
-        'Host':       STREAMLIT_HOST,
-        'Origin':     STREAMLIT_ORIGIN,
-        'Cookie':     mergedCookies,
-        'Upgrade':    'websocket',
-        'Connection': 'Upgrade',
-      },
-    });
-  } catch (err) {
-    // upstream が WebSocket upgrade を拒否した場合（101 以外を返した場合に fetch が throw する）
-    // セッションをリセットして再試行
-    console.error('[WS] fetch threw:', err.message, '— resetting session');
-    _session = null;
-    try {
-      const freshCookies = await ensureSession();
-      upstreamRes = await fetch(upstreamUrl, {
-        headers: {
-          'Host':    STREAMLIT_HOST,
-          'Origin':  STREAMLIT_ORIGIN,
-          'Cookie':  freshCookies,
-          'Upgrade': 'websocket',
-        },
-      });
-    } catch (err2) {
-      console.error('[WS] retry also failed:', err2.message);
-      return new Response(`WebSocket failed: ${err2.message}`, { status: 502 });
-    }
-  }
-
-  const upstream = upstreamRes.webSocket;
-  if (!upstream) {
-    console.error('[WS] upstream returned no webSocket, status:', upstreamRes.status);
-    _session = null; // セッションを無効化して次回リフレッシュ
-    return new Response(`Upstream WebSocket not upgraded (${upstreamRes.status})`, { status: 502 });
-  }
-
-  upstream.accept();
   server.accept();
 
-  server.addEventListener('message',   (e) => { try { upstream.send(e.data); } catch (_) {} });
-  upstream.addEventListener('message', (e) => { try { server.send(e.data);   } catch (_) {} });
+  // cloudflare:sockets で HTTP/1.1 TLS 接続
+  let tcpSocket;
+  try {
+    tcpSocket = connect(
+      { hostname: STREAMLIT_HOST, port: 443 },
+      { secureTransport: 'on' }
+    );
+  } catch (err) {
+    console.error('[WS] connect failed:', err.message);
+    server.close(1011, 'upstream connect failed');
+    return new Response(null, { status: 101, webSocket: client });
+  }
 
-  const closeAll = () => {
-    try { server.close();   } catch (_) {}
-    try { upstream.close(); } catch (_) {}
-  };
-  server.addEventListener('close',   closeAll);
-  upstream.addEventListener('close', closeAll);
-  server.addEventListener('error',   closeAll);
-  upstream.addEventListener('error', closeAll);
+  // HTTP/1.1 WebSocket ハンドシェイク送信
+  const wsKey = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+  const handshake =
+    `GET ${wsPath} HTTP/1.1\r\n` +
+    `Host: ${STREAMLIT_HOST}\r\n` +
+    `Upgrade: websocket\r\n` +
+    `Connection: Upgrade\r\n` +
+    `Sec-WebSocket-Key: ${wsKey}\r\n` +
+    `Sec-WebSocket-Version: 13\r\n` +
+    `Origin: ${STREAMLIT_ORIGIN}\r\n` +
+    `User-Agent: ${UA}\r\n` +
+    `\r\n`;
+
+  try {
+    const w = tcpSocket.writable.getWriter();
+    await w.write(ENC.encode(handshake));
+    w.releaseLock();
+  } catch (err) {
+    console.error('[WS] handshake write failed:', err.message);
+    server.close(1011, 'handshake write failed');
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // 101 レスポンスを読む
+  let frameBuffer = new Uint8Array(0);
+  try {
+    const r = tcpSocket.readable.getReader();
+    let done = false;
+    while (!done) {
+      const chunk = await r.read();
+      if (chunk.done) throw new Error('TCP closed before 101');
+      frameBuffer = concat(frameBuffer, chunk.value);
+
+      const text = DEC.decode(frameBuffer);
+      const headerEnd = text.indexOf('\r\n\r\n');
+      if (headerEnd >= 0) {
+        if (!text.startsWith('HTTP/1.1 101')) {
+          const firstLine = text.split('\r\n')[0];
+          throw new Error(`Upstream returned: ${firstLine}`);
+        }
+        frameBuffer = frameBuffer.slice(headerEnd + 4);
+        done = true;
+      }
+    }
+    r.releaseLock();
+  } catch (err) {
+    console.error('[WS] 101 read failed:', err.message);
+    server.close(1011, err.message);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  const dbgFirst = Array.from(frameBuffer.slice(0, 8)).map(b => b.toString(16).padStart(2,'0')).join(' ');
+  console.log(`[WS] connected to ${wsPath}, post-101 buf=${frameBuffer.length}B first8: ${dbgFirst}`);
+
+  // ── フレームブリッジ ──────────────────────────────────────────────
+
+  const writeQueue = [];
+  let writing = false;
+  async function flushWrites() {
+    if (writing) return;
+    writing = true;
+    while (writeQueue.length > 0) {
+      const data = writeQueue.shift();
+      try {
+        const w = tcpSocket.writable.getWriter();
+        await w.write(data);
+        w.releaseLock();
+      } catch (_) { break; }
+    }
+    writing = false;
+  }
+
+  // ブラウザ → Streamlit
+  server.addEventListener('message', (e) => {
+    try {
+      const isBinary = e.data instanceof ArrayBuffer || ArrayBuffer.isView(e.data);
+      const payload = isBinary
+        ? new Uint8Array(e.data instanceof ArrayBuffer ? e.data : e.data.buffer)
+        : ENC.encode(e.data);
+      writeQueue.push(encodeWSFrame(payload, isBinary, true));
+      flushWrites();
+    } catch (_) {}
+  });
+
+  server.addEventListener('close', () => {
+    try {
+      writeQueue.push(new Uint8Array([0x88, 0x82, 0, 0, 0, 0, 0x03, 0xE8]));
+      flushWrites();
+    } catch (_) {}
+    setTimeout(() => { try { tcpSocket.close(); } catch (_) {} }, 500);
+  });
+
+  // Streamlit → ブラウザ
+  (async () => {
+    const r = tcpSocket.readable.getReader();
+    try {
+      while (true) {
+        const { value, done } = await r.read();
+        if (done) break;
+
+        frameBuffer = concat(frameBuffer, value);
+        const { frames, remaining } = decodeWSFrames(frameBuffer);
+        frameBuffer = remaining;
+
+        for (const { opcode, payload } of frames) {
+          if (opcode === 0x8) {
+            try { server.close(); } catch (_) {}
+            return;
+          } else if (opcode === 0x9) { // ping → pong
+            const pong = encodeWSFrame(payload, false, true);
+            pong[0] = 0x8A;
+            writeQueue.push(pong);
+            flushWrites();
+          } else if (opcode === 0x1) {
+            server.send(new TextDecoder().decode(payload));
+          } else if (opcode === 0x2) {
+            server.send(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength));
+          }
+        }
+      }
+    } catch (_) {}
+    r.releaseLock();
+    try { server.close(); } catch (_) {}
+  })();
 
   return new Response(null, { status: 101, webSocket: client });
+}
+
+// ── WebSocket フレームエンコーダー ────────────────────────────────────
+function encodeWSFrame(payload, isBinary, masked) {
+  const opcode = isBinary ? 0x2 : 0x1;
+  const len = payload.length;
+  let offset = 2;
+  if (len >= 65536) offset += 8;
+  else if (len >= 126) offset += 2;
+  if (masked) offset += 4;
+
+  const frame = new Uint8Array(offset + len);
+  frame[0] = 0x80 | opcode;
+
+  if (len >= 65536) {
+    frame[1] = (masked ? 0x80 : 0) | 127;
+    new DataView(frame.buffer).setBigUint64(2, BigInt(len));
+    offset = masked ? 14 : 10;
+  } else if (len >= 126) {
+    frame[1] = (masked ? 0x80 : 0) | 126;
+    frame[2] = (len >> 8) & 0xFF;
+    frame[3] = len & 0xFF;
+    offset = masked ? 8 : 4;
+  } else {
+    frame[1] = (masked ? 0x80 : 0) | len;
+    offset = masked ? 6 : 2;
+  }
+
+  if (masked) {
+    const mask = crypto.getRandomValues(new Uint8Array(4));
+    frame.set(mask, offset - 4);
+    for (let i = 0; i < len; i++) frame[offset + i] = payload[i] ^ mask[i % 4];
+  } else {
+    frame.set(payload, offset);
+  }
+  return frame;
+}
+
+// ── WebSocket フレームデコーダー ─────────────────────────────────────
+function decodeWSFrames(buf) {
+  const frames = [];
+  let i = 0;
+  while (i + 2 <= buf.length) {
+    const opcode = buf[i] & 0x0F;
+    const masked  = (buf[i + 1] & 0x80) !== 0;
+    let plen = buf[i + 1] & 0x7F;
+    let hlen = 2;
+
+    if (plen === 126) {
+      if (i + 4 > buf.length) break;
+      plen = (buf[i + 2] << 8) | buf[i + 3];
+      hlen = 4;
+    } else if (plen === 127) {
+      if (i + 10 > buf.length) break;
+      plen = Number(new DataView(buf.buffer, buf.byteOffset + i + 2).getBigUint64(0));
+      hlen = 10;
+    }
+    if (masked) hlen += 4;
+    if (i + hlen + plen > buf.length) break;
+
+    let payload = buf.slice(i + hlen, i + hlen + plen);
+    if (masked) {
+      const mk = buf.slice(i + hlen - 4, i + hlen);
+      const out = new Uint8Array(plen);
+      for (let j = 0; j < plen; j++) out[j] = payload[j] ^ mk[j % 4];
+      payload = out;
+    }
+    frames.push({ opcode, payload });
+    i += hlen + plen;
+  }
+  return { frames, remaining: buf.slice(i) };
 }

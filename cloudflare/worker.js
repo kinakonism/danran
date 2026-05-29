@@ -253,12 +253,13 @@ async function proxyHttp(request, url, retry = true) {
   }
   headers.set('Host', STREAMLIT_HOST);
 
-  // ブラウザの Cookie（Streamlit セッション系は除外）と Worker セッションを合成
+  // ブラウザの Cookie（Streamlit 認証系のみ除外）と Worker セッションを合成
+  // proxy-tracking-id はブラウザに渡し、ブラウザから返ってきたものを優先使用
   const browserCookies = (request.headers.get('Cookie') || '')
     .split('; ')
-    .filter(c => !c.match(/^(streamlit_session|_streamlit_csrf|proxy-tracking-id)=/))
+    .filter(c => !c.match(/^(streamlit_session|_streamlit_csrf)=/))
     .join('; ');
-  const merged = [browserCookies, sessionCookies].filter(Boolean).join('; ');
+  const merged = [sessionCookies, browserCookies].filter(Boolean).join('; ');
   if (merged) headers.set('Cookie', merged);
 
   const res = await fetch(upstream.toString(), {
@@ -280,10 +281,11 @@ async function proxyHttp(request, url, retry = true) {
   const newHeaders = new Headers();
   for (const [k, v] of res.headers.entries()) {
     const kl = k.toLowerCase();
-    // Streamlit セッション Cookie はブラウザに渡さない（Worker が管理）
+    // Streamlit 認証 Cookie（streamlit_session, _streamlit_csrf）はブラウザに渡さない
+    // proxy-tracking-id はブラウザに渡す（WebSocket ルーティングに必要）
     if (kl === 'set-cookie') {
       const parsed = parseSetCookie(v);
-      if (parsed && /^(streamlit_session|_streamlit_csrf|proxy-tracking-id)$/.test(parsed.name)) continue;
+      if (parsed && /^(streamlit_session|_streamlit_csrf)$/.test(parsed.name)) continue;
     }
     newHeaders.append(k, v);
   }
@@ -310,24 +312,69 @@ async function proxyHttp(request, url, retry = true) {
 async function handleWebSocket(request, url) {
   const sessionCookies = await ensureSession();
 
+  // セッション Cookie（認証用）とブラウザの proxy-tracking-id（ルーティング用）を合成
+  // proxy-tracking-id はブラウザが HTTP ページロード時に受け取ったものを優先
+  const sessionMap = {};
+  sessionCookies.split('; ').forEach(c => {
+    const eq = c.indexOf('=');
+    if (eq > 0) sessionMap[c.slice(0, eq).trim()] = c.slice(eq + 1);
+  });
+  const browserCookieStr = request.headers.get('Cookie') || '';
+  browserCookieStr.split('; ').forEach(c => {
+    const eq = c.indexOf('=');
+    if (eq > 0) {
+      const name = c.slice(0, eq).trim();
+      // ブラウザの proxy-tracking-id でセッションのものを上書き（正しいルーティング）
+      if (name === 'proxy-tracking-id') sessionMap[name] = c.slice(eq + 1);
+    }
+  });
+  const mergedCookies = Object.entries(sessionMap)
+    .filter(([k, v]) => k && v)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+
   const wsPath      = url.pathname + url.search;
   const upstreamUrl = `wss://${STREAMLIT_HOST}${wsPath}`;
 
   const [client, server] = Object.values(new WebSocketPair());
 
-  const upstreamRes = await fetch(upstreamUrl, {
-    headers: {
-      'Host':       STREAMLIT_HOST,
-      'Origin':     STREAMLIT_ORIGIN,
-      'Cookie':     sessionCookies,
-      'Upgrade':    'websocket',
-      'Connection': 'Upgrade',
-    },
-  });
+  let upstreamRes;
+  try {
+    upstreamRes = await fetch(upstreamUrl, {
+      headers: {
+        'Host':       STREAMLIT_HOST,
+        'Origin':     STREAMLIT_ORIGIN,
+        'Cookie':     mergedCookies,
+        'Upgrade':    'websocket',
+        'Connection': 'Upgrade',
+      },
+    });
+  } catch (err) {
+    // upstream が WebSocket upgrade を拒否した場合（101 以外を返した場合に fetch が throw する）
+    // セッションをリセットして再試行
+    console.error('[WS] fetch threw:', err.message, '— resetting session');
+    _session = null;
+    try {
+      const freshCookies = await ensureSession();
+      upstreamRes = await fetch(upstreamUrl, {
+        headers: {
+          'Host':    STREAMLIT_HOST,
+          'Origin':  STREAMLIT_ORIGIN,
+          'Cookie':  freshCookies,
+          'Upgrade': 'websocket',
+        },
+      });
+    } catch (err2) {
+      console.error('[WS] retry also failed:', err2.message);
+      return new Response(`WebSocket failed: ${err2.message}`, { status: 502 });
+    }
+  }
 
   const upstream = upstreamRes.webSocket;
   if (!upstream) {
-    return new Response('Upstream WebSocket failed', { status: 502 });
+    console.error('[WS] upstream returned no webSocket, status:', upstreamRes.status);
+    _session = null; // セッションを無効化して次回リフレッシュ
+    return new Response(`Upstream WebSocket not upgraded (${upstreamRes.status})`, { status: 502 });
   }
 
   upstream.accept();

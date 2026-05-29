@@ -489,6 +489,14 @@ _lp_detector = st.components.v1.declare_component(
 # ─────────────────────────────────────
 @st.fragment(run_every="2s")
 def render_messages() -> None:
+    # ルーム選択中・未ログイン・編集画面では何も描画しない。
+    # この 2 秒フラグメントはナビゲーション後も独立してタイマー発火するため、
+    # ガードがないと遷移直後に古いチャットが一瞬再描画されてちらつく。
+    if (st.session_state.get("_show_rooms", False)
+            or "current_user" not in st.session_state
+            or st.session_state.get("view") != "chat"):
+        return
+
     current_user  = st.session_state.get("current_user", {})
     selected_room = st.session_state.get("active_room", "")
     uname         = current_user.get("name", "")

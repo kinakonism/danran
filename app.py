@@ -106,9 +106,20 @@ supabase = get_supabase()
 # ルーム DB（DB に rooms テーブルがある場合は取得、なければフォールバック）
 # ─────────────────────────────────────
 @st.cache_data(ttl=60)
-def fetch_rooms() -> list[dict]:
-    """DB からルーム一覧 (id, name, icon) を取得。失敗時はハードコードで補完。"""
+def fetch_rooms(user_id: str = "") -> list[dict]:
+    """ルーム一覧 (id, name, icon) を取得。
+    user_id を渡すと room_members で「参加ルームのみ」に絞る（招待制）。
+    user_id="" は全ルーム（重複名チェック等の管理用途）。"""
     try:
+        if user_id:
+            mrows = supabase.table("room_members").select("room_id")\
+                .eq("user_id", user_id).execute().data or []
+            rids = [m["room_id"] for m in mrows]
+            if not rids:
+                return []                      # 参加ルームなし＝空（招待待ち）
+            return supabase.table("rooms").select("id, name, icon")\
+                .in_("id", rids).order("created_at").execute().data or []
+        # user_id なし: 全ルーム
         data = supabase.table("rooms").select("id, name, icon").order("created_at").execute().data or []
         if data:
             return data
@@ -117,8 +128,55 @@ def fetch_rooms() -> list[dict]:
     return [{"id": r, "name": r, "icon": "💬"} for r in ROOMS_FALLBACK]
 
 def invalidate_rooms_cache() -> None:
-    """rooms キャッシュを破棄（更新・削除後に呼ぶ）。"""
+    """rooms キャッシュを破棄（更新・削除・メンバー変更後に必ず呼ぶ）。"""
     fetch_rooms.clear()
+
+# ─────────────────────────────────────
+# ルームメンバー（招待制）
+# ─────────────────────────────────────
+def fetch_room_members(room_id: str) -> list[dict]:
+    """ルームの参加メンバー (id, name, avatar) を返す。"""
+    try:
+        mrows = supabase.table("room_members").select("user_id")\
+            .eq("room_id", room_id).execute().data or []
+        uids = [m["user_id"] for m in mrows]
+        if not uids:
+            return []
+        return supabase.table("users").select("id, name, avatar")\
+            .in_("id", uids).order("created_at").execute().data or []
+    except Exception:
+        return []
+
+def add_room_member(room_id: str, user_id: str) -> None:
+    try:
+        supabase.table("room_members").upsert(
+            {"room_id": room_id, "user_id": user_id}, on_conflict="room_id,user_id"
+        ).execute()
+        invalidate_rooms_cache()
+    except Exception:
+        pass
+
+def remove_room_member(room_id: str, user_id: str) -> None:
+    try:
+        supabase.table("room_members").delete()\
+            .eq("room_id", room_id).eq("user_id", user_id).execute()
+        invalidate_rooms_cache()
+    except Exception:
+        pass
+
+def _member_room_names(user_id: str) -> list[str]:
+    """user が参加するルーム名一覧。バックグラウンドスレッドからも呼べるよう
+    st.* / cache を使わず素の supabase クエリのみ。"""
+    try:
+        mrows = supabase.table("room_members").select("room_id")\
+            .eq("user_id", user_id).execute().data or []
+        rids = [m["room_id"] for m in mrows]
+        if not rids:
+            return []
+        rrows = supabase.table("rooms").select("name").in_("id", rids).execute().data or []
+        return [r["name"] for r in rrows]
+    except Exception:
+        return []
 
 # ─────────────────────────────────────
 # Web Push 通知
@@ -166,15 +224,14 @@ def save_push_subscription(user_id: str, subscription_json: str) -> None:
 
 def send_push(room: str, sender_uid: str, sender_name: str,
               content: str, has_image: bool = False,
-              priv: str = "", subj: str = "",
-              room_names: list[str] | None = None) -> None:
+              priv: str = "", subj: str = "") -> None:
     """送信者以外の全購読者に Web Push 通知を送る。
     ペイロードに unread_count を含めることで sw.js が即座にバッジを更新できる。
 
     ★ バックグラウンドスレッドから呼ばれるため、st.secrets / @st.cache_data 等の
-      Streamlit コンテキスト依存 API は呼ばない。VAPID 鍵(priv/subj)とルーム名一覧
-      (room_names)は呼び出し元（メインスレッド）が取得して渡すこと。
-      supabase クライアントは素の HTTP クライアントなのでスレッドから呼んで問題ない。"""
+      Streamlit コンテキスト依存 API は呼ばない。VAPID 鍵(priv/subj)は呼び出し元
+      （メインスレッド）が取得して渡す。未読数は受信者ごとの参加ルームを
+      _member_room_names()（素の supabase クエリ）で取得して集計する。"""
     try:
         if not (priv and subj):
             return
@@ -193,10 +250,10 @@ def send_push(room: str, sender_uid: str, sender_name: str,
         for row in rows:
             # 受信者ごとに未読数を計算してペイロードに乗せる（sw.js がバッジに使う）
             recipient_uid = row.get("user_id", "")
-            # room_names はメインスレッドで取得済みのものを使う（fetch_rooms を呼ばない）
+            # 受信者ごとの参加ルームで未読を集計（スレッド安全な素クエリ）
             try:
-                unread = sum(get_unread_counts(recipient_uid, room_names).values()) \
-                    if (recipient_uid and room_names) else 1
+                r_rooms = _member_room_names(recipient_uid) if recipient_uid else []
+                unread = sum(get_unread_counts(recipient_uid, r_rooms).values()) if r_rooms else 1
             except Exception:
                 unread = 1
             payload = json.dumps({
@@ -348,15 +405,22 @@ def update_room(room_id: str, old_name: str, new_name: str, icon: str) -> None:
     except Exception as e:
         raise RuntimeError(str(e))
 
-def create_room(name: str, icon: str) -> dict:
-    """新しいルームを作成して返す。"""
+def create_room(name: str, icon: str, creator_id: str = "") -> dict:
+    """新しいルームを作成し、作成者をメンバーに追加して返す。"""
     new_id = str(uuid.uuid4())
     result = supabase.table("rooms").insert({"id": new_id, "name": name, "icon": icon}).execute()
+    if creator_id:
+        try:
+            supabase.table("room_members").upsert(
+                {"room_id": new_id, "user_id": creator_id}, on_conflict="room_id,user_id"
+            ).execute()
+        except Exception:
+            pass
     invalidate_rooms_cache()
     return result.data[0] if result.data else {}
 
 def delete_room(room_id: str, room_name: str) -> None:
-    """ルームと、そのメッセージ・リアクション・既読情報をすべて削除。"""
+    """ルームと、そのメッセージ・リアクション・既読情報・メンバーをすべて削除。"""
     try:
         # リアクションを先に削除（FK cascade が未設定の場合の保険）
         msgs = supabase.table("messages").select("id").eq("room_name", room_name).execute().data or []
@@ -365,6 +429,7 @@ def delete_room(room_id: str, room_name: str) -> None:
             supabase.table("reactions").delete().in_("message_id", msg_ids).execute()
         supabase.table("last_read").delete().eq("room_name", room_name).execute()
         supabase.table("messages").delete().eq("room_name", room_name).execute()
+        supabase.table("room_members").delete().eq("room_id", room_id).execute()
         supabase.table("rooms").delete().eq("id", room_id).execute()
         invalidate_rooms_cache()
     except Exception as e:
@@ -388,19 +453,18 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
             "user_avatar": uavatar, "content": content, "image_url": image_url,
         }).execute()
         # ── プッシュ通知はバックグラウンドスレッドで送信（UI をブロックしない）──
-        # Streamlit コンテキスト依存の値（VAPID 鍵・ルーム名）はメインスレッドで取得し、
-        # スレッドには値として渡す（スレッド内で st.secrets / st.cache_data を呼ぶと
-        # ScriptRunContext 不在で失敗し、プッシュが静かに飛ばなくなるため）。
+        # VAPID 鍵だけメインスレッドで取得して渡す（スレッド内で st.secrets を呼ぶと
+        # ScriptRunContext 不在で失敗しプッシュが静かに飛ばなくなるため）。
+        # 受信者ごとの未読集計は send_push 内の _member_room_names() が担う。
         _cfg = _vapid_cfg()
         _priv = _cfg.get("vapid_private_key", "")
         _subj = _cfg.get("vapid_subject", "")
-        _room_names = [r["name"] for r in fetch_rooms()]
         threading.Thread(
             target=send_push,
             args=(room, uid, uname, content),
             kwargs={
                 "has_image": bool(image_url),
-                "priv": _priv, "subj": _subj, "room_names": _room_names,
+                "priv": _priv, "subj": _subj,
             },
             daemon=True,
         ).start()
@@ -449,7 +513,7 @@ def toggle_reaction(msg_id: str, uname: str, emoji: str) -> None:
 # ─────────────────────────────────────
 def get_unread_counts(user_id: str, room_names: list[str] | None = None) -> dict[str, int]:
     if room_names is None:
-        room_names = [r["name"] for r in fetch_rooms()]
+        room_names = [r["name"] for r in fetch_rooms(user_id)]
 
     def _parse_ts(ts: str | None):
         """timestamptz 文字列を tz-aware datetime に。失敗時 None。"""
@@ -996,7 +1060,7 @@ def show_profile(current_user: dict) -> None:
 # ─────────────────────────────────────
 # 画面⑤ ルーム編集
 # ─────────────────────────────────────
-_ROOM_EDIT_WIDGET_KEYS = ("room_edit_atype", "room_edit_emoji", "room_edit_photo", "room_edit_name")
+_ROOM_EDIT_WIDGET_KEYS = ("room_edit_atype", "room_edit_emoji", "room_edit_photo", "room_edit_name", "room_edit_add_members")
 
 def _reset_room_edit_widgets() -> None:
     """ルーム編集画面を開くたびにウィジェット状態をリセットする。"""
@@ -1113,6 +1177,51 @@ def show_room_edit(room: dict) -> None:
                 st.session_state["_show_rooms"] = True
                 st.rerun()
 
+        # ── メンバー管理（招待制）──
+        st.divider()
+        st.markdown("### 👥 メンバー")
+        _me_id   = st.session_state.get("current_user", {}).get("id", "")
+        _members = fetch_room_members(room_id)
+        _member_ids = {m["id"] for m in _members}
+        st.caption(f"このルームに参加しているメンバー（{len(_members)}人）")
+        for m in _members:
+            mc1, mc2 = st.columns([6, 1])
+            with mc1:
+                _av = m.get("avatar", "🙂")
+                _icon = "🖼️" if _av.startswith("http") else _av
+                _suffix = "　（あなた）" if m["id"] == _me_id else ""
+                st.markdown(f"{_icon}　**{m['name']}**{_suffix}")
+            with mc2:
+                # 自分以外は外せる（自分を外すと自分がルームを見られなくなるため不可）
+                if m["id"] != _me_id:
+                    if st.button("✕", key=f"rm_member_{m['id']}", help="このメンバーを外す"):
+                        remove_room_member(room_id, m["id"])
+                        st.toast(f"{m['name']} さんを外しました", icon="👋")
+                        st.rerun()
+
+        # 追加候補（まだ参加していないユーザー）
+        _all_users  = fetch_all_users()
+        _candidates = [u for u in _all_users if u["id"] not in _member_ids]
+        if _candidates:
+            _name_to_id = {u["name"]: u["id"] for u in _candidates}
+            _picked = st.multiselect(
+                "メンバーを追加", list(_name_to_id.keys()),
+                key="room_edit_add_members",
+                placeholder="招待する家族を選ぶ",
+            )
+            if st.button("＋ 追加して招待", use_container_width=True, key="room_edit_add_btn"):
+                if _picked:
+                    for _nm in _picked:
+                        add_room_member(room_id, _name_to_id[_nm])
+                    st.success(f"{len(_picked)}人を追加しました！")
+                    st.session_state.pop("room_edit_add_members", None)
+                    _time.sleep(0.3)
+                    st.rerun()
+                else:
+                    st.warning("追加するメンバーを選んでください")
+        else:
+            st.caption("全員がこのルームに参加済みです 🎉")
+
         # ── ルーム削除（2 段階確認） ──
         st.divider()
         st.markdown("### 🗑️ ルームの削除")
@@ -1134,7 +1243,8 @@ def show_room_edit(room: dict) -> None:
                             delete_room(room_id, room_name)
                         # 削除されたルームがアクティブなら残りの先頭ルームへ
                         if st.session_state.get("active_room") == room_name:
-                            remaining = fetch_rooms()
+                            _me = st.session_state.get("current_user", {}).get("id", "")
+                            remaining = fetch_rooms(_me)
                             st.session_state["active_room"] = remaining[0]["name"] if remaining else ""
                         st.session_state.pop(delete_confirm_key, None)
                         _reset_room_edit_widgets()
@@ -1223,7 +1333,8 @@ def show_room_create() -> None:
                             icon_url = upload_photo(AVATAR_BUCKET, f"room_{tmp_id}", icon_photo)
                             new_icon = icon_url
                     with st.spinner("作成中…"):
-                        new_room = create_room(new_name, new_icon)
+                        _creator = st.session_state.get("current_user", {}).get("id", "")
+                        new_room = create_room(new_name, new_icon, creator_id=_creator)
                     st.success(f"✅ 「{new_name}」を作成しました！")
                     _time.sleep(0.3)
                     # 作成したルームをアクティブにしてチャットへ
@@ -1252,7 +1363,7 @@ def render_room_list() -> None:
     current_user = st.session_state.get("current_user")
     if not current_user or not st.session_state.get("_show_rooms", False):
         return
-    _all_rooms      = fetch_rooms()
+    _all_rooms      = fetch_rooms(current_user["id"])
     _all_room_names = [r["name"] for r in _all_rooms]
     selected_room   = st.session_state.get("active_room") or (_all_room_names[0] if _all_room_names else "")
     unread = get_unread_counts(current_user["id"], _all_room_names)
@@ -1325,6 +1436,16 @@ def render_room_list() -> None:
         'border:1px solid rgba(255,255,255,0.1);'
         'border-radius:14px;overflow:hidden">',
     ])
+
+    # 参加ルームが無い場合（新規ユーザー等）の案内
+    if not _all_rooms:
+        rows.append(
+            '<div style="padding:20px 16px;text-align:center;color:rgba(255,255,255,0.5);'
+            'font-size:0.85rem;line-height:1.7">'
+            'まだ参加しているルームがありません。<br>'
+            '右上の <b>＋</b> で作るか、家族に招待してもらってください。'
+            '</div>'
+        )
 
     for i, room in enumerate(_all_rooms):
         rname   = room["name"]
@@ -1403,7 +1524,7 @@ def render_room_list() -> None:
 def show_chat(current_user: dict) -> None:
 
     # ── ルーム状態 ──
-    _all_rooms      = fetch_rooms()
+    _all_rooms      = fetch_rooms(current_user["id"])
     _all_room_names = [r["name"] for r in _all_rooms]
     _default_room   = _all_room_names[0] if _all_room_names else ""
     # active_room 初期化 or 削除済みルームのフォールバック
@@ -1718,8 +1839,8 @@ _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
 _is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications")
 if "current_user" in st.session_state and not _is_profile:
-    # active_room が未セット（セッション復元直後）のときは DB の先頭ルームをフォールバック
-    _rooms_for_hdr = fetch_rooms()
+    # active_room が未セット（セッション復元直後）のときは参加ルームの先頭をフォールバック
+    _rooms_for_hdr = fetch_rooms(_cu.get("id", ""))
     _active_room   = st.session_state.get("active_room") or (
         _rooms_for_hdr[0]["name"] if _rooms_for_hdr else ""
     )
@@ -1769,7 +1890,8 @@ if "current_user" in st.session_state:
             f'<div style="flex-shrink:0;min-width:44px;"></div>'
             f'</div>'
         )
-    elif _active_room:
+    elif _show_rooms or _active_room:
+        # _show_rooms 時は参加ルーム0でもヘッダーを出す（アバター→プロフィール導線を確保）
         _hdr_btn_text  = "＜"
         _hdr_title_text = "ルーム選択" if _show_rooms else _active_room
         # ルーム選択画面では右上にアバターボタンを置きプロフィール画面へ誘導（LINE 風）
@@ -1908,7 +2030,7 @@ if isinstance(_lp_result, dict):
             # JS ルームリストの ⚙️ クリック → ルーム編集画面
             _room_id = _lp_result.get("room_id", "")
             if _room_id:
-                _found = [r for r in fetch_rooms() if r["id"] == _room_id]
+                _found = [r for r in fetch_rooms(_cu.get("id", "")) if r["id"] == _room_id]
                 if _found:
                     _reset_room_edit_widgets()
                     st.session_state["editing_room"] = _found[0]

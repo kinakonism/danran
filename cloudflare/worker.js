@@ -178,6 +178,18 @@ async function ensureSession() {
 
 // ── メインハンドラ ────────────────────────────────────────────────────
 export default {
+  // Cloudflare Cron Trigger: 毎日 2 回アクセスしてスリープを防ぐ
+  // wrangler.toml の [triggers] crons = ["0 */12 * * *"] で設定
+  async scheduled(event, env, ctx) {
+    try {
+      _session = null; // セッションをリセットして新鮮な状態で確認
+      const cs = await ensureSession();
+      console.log('[cron] warm-up ok, cookies:', cs.length, 'chars');
+    } catch (e) {
+      console.error('[cron] warm-up failed:', e.message);
+    }
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 

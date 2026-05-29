@@ -1,0 +1,7 @@
+name = "danran-chat"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[triggers]
+# 12時間おきにウォームアップ（Streamlit の7日スリープを防ぐ）
+crons = ["0 */12 * * *"]

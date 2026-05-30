@@ -9,6 +9,7 @@ import html as _html
 import io
 import json
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -623,8 +624,38 @@ _lp_detector = st.components.v1.declare_component(
 )
 
 # ─────────────────────────────────────
-# ★ リアルタイムタイムライン（フラグメント）
-#   5秒ごとに自動更新。ページ全体は再描画しない。
+# 本文の URL リンク化
+# ─────────────────────────────────────
+_URL_RE = re.compile(r'(https?://[^\s<>"\']+)')
+
+def linkify_body(body: str) -> str:
+    """本文を HTML エスケープしつつ URL を <a> 化して返す（改行は <br>）。
+    URL タップで target=_blank → iOS PWA では既定ブラウザ(Safari)で開く。
+    エスケープは URL/非URL を分けて行い XSS を防ぐ。"""
+    def esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    out: list[str] = []
+    last = 0
+    for m in _URL_RE.finditer(body):
+        out.append(esc(body[last:m.start()]))
+        url = m.group(1)
+        trail = ""                       # 末尾の句読点・閉じ括弧はリンクから除外
+        while url and url[-1] in '.,!?。、）)」』】':
+            trail = url[-1] + trail
+            url = url[:-1]
+        u = esc(url)
+        out.append(
+            f'<a href="{u}" target="_blank" rel="noopener noreferrer" '
+            f'style="color:inherit;text-decoration:underline;word-break:break-all">{u}</a>'
+        )
+        out.append(esc(trail))
+        last = m.end()
+    out.append(esc(body[last:]))
+    return ''.join(out).replace("\n", "<br>")
+
+# ─────────────────────────────────────
+# ★ リアルタイムタイムライン
+#   変化検知ポーラー（poll_messages）が変化時のみ再描画する。
 # ─────────────────────────────────────
 def build_messages_html(selected_room: str, current_user: dict) -> str:
     """チャットの全メッセージ HTML（バブル＋軽い既読）を 1 つの文字列で返す。
@@ -671,9 +702,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str:
                  f'width:40px;text-align:center;flex-shrink:0">{avatar}</span>'
         )
 
-        # ── 本文・画像 HTML ──
-        body_esc  = (body.replace("&", "&amp;").replace("<", "&lt;")
-                        .replace(">", "&gt;").replace("\n", "<br>"))
+        # ── 本文・画像 HTML ──（URL はリンク化。エスケープは linkify_body 内で実施）
+        body_esc  = linkify_body(body)
         is_img_only = bool(img_url) and not body.strip()  # 画像のみ（テキスト無し）
         img_piece = (
             # ★ <img> を直接出さず JS 管理のスロットにする。

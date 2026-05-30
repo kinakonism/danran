@@ -564,6 +564,33 @@ def mark_as_read(user_id: str, room: str) -> None:
     except Exception:
         pass
 
+def read_by_users(room: str, my_id: str, msg_created_iso: str) -> list[dict]:
+    """指定メッセージ(msg_created_iso)以降に既読にした「自分以外」のユーザー一覧を返す。
+    last_read（ユーザー×ルームの最終既読時刻）を流用。軽い既読表示用。"""
+    def _p(ts):
+        try:
+            return datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
+        except Exception:
+            return None
+    cdt = _p(msg_created_iso)
+    if cdt is None:
+        return []
+    try:
+        lr = supabase.table("last_read").select("user_id, read_at")\
+            .eq("room_name", room).execute().data or []
+        users_by_id = {u["id"]: u for u in fetch_all_users()}
+        out = []
+        for r in lr:
+            uid = r.get("user_id", "")
+            if not uid or uid == my_id:
+                continue
+            rdt = _p(r.get("read_at"))
+            if rdt and rdt >= cdt and uid in users_by_id:
+                out.append(users_by_id[uid])
+        return out
+    except Exception:
+        return []
+
 # ─────────────────────────────────────
 # タイムスタンプ
 # ─────────────────────────────────────
@@ -638,7 +665,8 @@ def render_messages() -> None:
     # 要素を生成・差分計算してもっさり/ちらつきの原因になる。
     # バブル HTML をリストに溜めてループ後に 1 回だけ描画する。
     _bubbles: list[str] = []
-    for msg in messages:
+    _last_mine_i = None    # 自分の最新メッセージの位置（軽い既読表示用）
+    for _mi, msg in enumerate(messages):
         msg_id   = msg.get("id",          "")
         sender   = msg.get("user_name",  "不明")
         msg_uid  = msg.get("user_id",    "")
@@ -648,6 +676,8 @@ def render_messages() -> None:
         img_url  = msg.get("image_url")
         # user_id があればIDで判定（名前変更後も正しく動く）、なければ名前フォールバック
         is_mine  = (msg_uid == my_id) if (msg_uid and my_id) else (sender == uname)
+        if is_mine:
+            _last_mine_i = _mi
 
         msg_reactions = all_reactions.get(msg_id, {})
 
@@ -753,6 +783,24 @@ def render_messages() -> None:
             )
 
         _bubbles.append(bubble)
+
+    # ── 軽い既読表示（自分の最新メッセージにだけ・既読した人だけ・圧をかけない）──
+    if _last_mine_i is not None and my_id:
+        _readers = read_by_users(selected_room, my_id, messages[_last_mine_i].get("created_at", ""))
+        if _readers:
+            _avs = ""
+            for _u in _readers[:5]:
+                _ua = _u.get("avatar", "🙂")
+                if _ua.startswith("http"):
+                    _avs += (f'<img src="{_html.escape(_ua)}" style="width:15px;height:15px;'
+                             f'border-radius:50%;object-fit:cover;margin-left:2px">')
+                else:
+                    _avs += f'<span style="font-size:0.78rem;margin-left:2px">{_html.escape(_ua)}</span>'
+            _bubbles[_last_mine_i] += (
+                f'<div style="text-align:right;margin:0 48px 6px 0;font-size:0.66rem;'
+                f'color:rgba(240,232,224,0.45);display:flex;justify-content:flex-end;'
+                f'align-items:center;gap:1px">既読 {len(_readers)}{_avs}</div>'
+            )
 
     # 全バブルを 1 回の st.markdown でまとめて描画（要素数を N→1 に削減）
     st.markdown('\n'.join(_bubbles), unsafe_allow_html=True)

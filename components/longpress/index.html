@@ -127,6 +127,19 @@
   // ＜/✕ ボタン → Python にナビゲーション指示（sandbox で location.href が使えないため）
   function stSetValue(val) { stPost('streamlit:setComponentValue', { value: val, dataType: 'json' }); }
 
+  // ★ DOM 要素に1回だけ張るクリックハンドラ等は「古い iframe」が所有することがあり、
+  //   その死んだ window から postMessage すると Streamlit に event.source 不一致で
+  //   無視される（ルーム選択で入れない・ボタンが効かない等の原因）。
+  //   scan() が毎回ライブ iframe の stSetValue を pDoc._danranSend に登録するので、
+  //   ナビ送信は必ずこれ経由にする。未登録時のみ自分の stSetValue にフォールバック。
+  function sendNav(val) {
+    try {
+      var pd = window.parent.document;
+      if (pd._danranSend) { pd._danranSend(val); return; }
+    } catch (e) {}
+    stSetValue(val);
+  }
+
   /* ════════════════════════════════════════
    *  DOM config 要素から設定を読み込む
    *  Python が <div id="_danran_cfg" data-sb-url="..." ...> を
@@ -253,7 +266,7 @@
         if (!_sessionRestoreSent) {
           _sessionRestoreSent = true;
           dlog('[danran] clearSession → firing restore_session(empty) to unblock Python');
-          stSetValue({ action: 'restore_session', session_id: '', ts: Date.now() });
+          sendNav({ action: 'restore_session', session_id: '', ts: Date.now() });
         }
         return;
       }
@@ -288,7 +301,7 @@
         dlog('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '", _gotRender=' + _gotRender);
         _sessionRestoreSent = true;
         dlog('[danran] → stSetValue restore_session firing, sid=' + (lsSid ? lsSid.slice(0, 8) + '…' : '(empty)'));
-        stSetValue({ action: 'restore_session', session_id: lsSid || '', ts: Date.now() });
+        sendNav({ action: 'restore_session', session_id: lsSid || '', ts: Date.now() });
       }
     } catch (e) { console.error('[danran] handleSession error:', e); }
   }
@@ -700,7 +713,7 @@
               }
               el.classList.add('dr-selected');
             } catch (ex) {}
-            stSetValue({ action: 'go_room', room_name: el.getAttribute('data-room-name'), ts: Date.now() });
+            sendNav({ action: 'go_room', room_name: el.getAttribute('data-room-name'), ts: Date.now() });
           });
         })(navBtns[i]);
       }
@@ -713,7 +726,7 @@
           el._danranRoomGear = true;
           el.addEventListener('click', function (e) {
             e.stopPropagation();
-            stSetValue({ action: 'go_room_edit', room_id: el.getAttribute('data-room-gear'), ts: Date.now() });
+            sendNav({ action: 'go_room_edit', room_id: el.getAttribute('data-room-gear'), ts: Date.now() });
           });
         })(gearBtns[i]);
       }
@@ -726,7 +739,7 @@
           el._danranRoomCreate = true;
           el.addEventListener('click', function (e) {
             e.stopPropagation();
-            stSetValue({ action: 'go_room_create', ts: Date.now() });
+            sendNav({ action: 'go_room_create', ts: Date.now() });
           });
         })(createBtns[i]);
       }
@@ -746,7 +759,7 @@
             el.addEventListener('click', function (e) {
               e.stopPropagation();
               // ts: で一意なタイムスタンプを付与し Python 側が「同じ action を二重処理しない」ようにする
-              stSetValue({ action: 'go_profile', ts: Date.now() });
+              sendNav({ action: 'go_profile', ts: Date.now() });
             });
           })(av);
         }
@@ -805,7 +818,7 @@
           dlog('[danran] forcePushResubscribe OK, endpoint=...', sub.endpoint.slice(-30));
           // _danranSwDone をリセットして次回 injectSwSetup が正しい購読を参照できるようにする
           try { pWin._danranSwDone = null; } catch(e) {}
-          stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: _uid, ts: Date.now() });
+          sendNav({ action: 'save_push_subscription', subscription: subJson, user_id: _uid, ts: Date.now() });
         }).catch(function(err) {
           console.error('[danran] forcePushResubscribe failed:', err);
           _pushResubInProgress = false;
@@ -860,7 +873,7 @@
       // 既にユーザーが許可済みなら自動購読（バナータップ不要）
       if (pWin.Notification.permission === 'granted') {
         pWin._danranSubscribe(ME_UID, function (subJson, uid) {
-          stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
+          sendNav({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
         });
       }
     } catch (e) {}
@@ -1015,7 +1028,7 @@
 
       // バナータップ → アプリ内の通知設定画面へ遷移
       banner.addEventListener('click', function () {
-        stSetValue({ action: 'go_notifications', ts: Date.now() });
+        sendNav({ action: 'go_notifications', ts: Date.now() });
       });
 
       // roomList の直前に挿入（Streamlit が room_list を再描画しても banner は残る）
@@ -1103,7 +1116,7 @@
         // ── 未許可（PWA 内）→ requestPermission → 購読 ──
         if (!pWin._danranSubscribe || !ME_UID) return;
         pWin._danranSubscribe(ME_UID, function (subJson, uid) {
-          stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
+          sendNav({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
           btn.style.opacity = '0.4';
           btn.style.pointerEvents = 'none';
         });
@@ -1189,7 +1202,7 @@
         // まだ DB に購読がなければ自動購読
         if (pWin._danranSubscribe && ME_UID) {
           pWin._danranSubscribe(ME_UID, function (subJson, uid) {
-            stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
+            sendNav({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
           });
         }
 
@@ -1247,7 +1260,7 @@
       if (enableBtn && pWin._danranSubscribe) {
         enableBtn.addEventListener('click', function () {
           pWin._danranSubscribe(ME_UID, function (subJson, uid) {
-            stSetValue({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
+            sendNav({ action: 'save_push_subscription', subscription: subJson, user_id: uid, ts: Date.now() });
             // ステータス表示を更新
             container._danranNotifDone = false;
             injectNotifSettings();
@@ -1279,7 +1292,7 @@
       if (navBtn && !navBtn._danranHdrNav) {
         navBtn._danranHdrNav = true;
         navBtn.addEventListener('click', function () {
-          stSetValue({ action: SHOW_ROOMS ? 'go_chat' : 'go_rooms', ts: Date.now() });
+          sendNav({ action: SHOW_ROOMS ? 'go_chat' : 'go_rooms', ts: Date.now() });
         });
       }
       // 編集ヘッダーの ＜ ボタン
@@ -1287,7 +1300,7 @@
       if (backBtn && !backBtn._danranHdrBack) {
         backBtn._danranHdrBack = true;
         backBtn.addEventListener('click', function () {
-          stSetValue({ action: 'go_back', ts: Date.now() });
+          sendNav({ action: 'go_back', ts: Date.now() });
         });
       }
       // ルーム選択ヘッダー右上のアバター → プロフィール画面
@@ -1295,7 +1308,7 @@
       if (profBtn && !profBtn._danranHdrProfile) {
         profBtn._danranHdrProfile = true;
         profBtn.addEventListener('click', function () {
-          stSetValue({ action: 'go_profile', ts: Date.now() });
+          sendNav({ action: 'go_profile', ts: Date.now() });
         });
       }
       // チャットヘッダー右上の 👥 → ルーム編集（メンバー管理）画面
@@ -1303,7 +1316,7 @@
       if (memBtn && !memBtn._danranHdrRoomEdit) {
         memBtn._danranHdrRoomEdit = true;
         memBtn.addEventListener('click', function () {
-          stSetValue({ action: 'go_room_edit', room_id: memBtn.getAttribute('data-hdr-roomedit'), ts: Date.now() });
+          sendNav({ action: 'go_room_edit', room_id: memBtn.getAttribute('data-hdr-roomedit'), ts: Date.now() });
         });
       }
     } catch (e) {}
@@ -1320,6 +1333,8 @@
       window.parent.document._danranNav = function (action, ts) {
         stSetValue({ action: action, ts: ts });
       };
+      // ナビ送信全般のライブ送信口（sendNav が使う）
+      window.parent.document._danranSend = function (val) { stSetValue(val); };
     } catch (e) {}
     // ログアウト済み（ME が空）なら即座にヘッダー・カメラを除去して終了
     if (!ME) {
@@ -1611,7 +1626,7 @@
         'flex-shrink:0;min-width:44px;text-align:center;box-sizing:border-box;' +
         '-webkit-tap-highlight-color:transparent;';
       backBtn.addEventListener('click', function () {
-        stSetValue({ action: 'go_back', ts: Date.now() });
+        sendNav({ action: 'go_back', ts: Date.now() });
       });
       hdr.appendChild(backBtn);
 
@@ -1686,7 +1701,7 @@
           'flex-shrink:0;min-width:44px;text-align:center;box-sizing:border-box;' +
           '-webkit-tap-highlight-color:transparent;';
         backBtn.addEventListener('click', function () {
-          stSetValue({ action: 'go_rooms', ts: Date.now() });
+          sendNav({ action: 'go_rooms', ts: Date.now() });
         });
         hdr.appendChild(backBtn);
       }
@@ -1867,6 +1882,8 @@
           headers: {
             'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY,
             'Content-Type': file.type || 'image/jpeg', 'x-upsert': 'true',
+            // 長期キャッシュ（再描画時のブランク/再取得を減らす）
+            'cache-control': 'max-age=31536000',
           },
           body: file,
         }
@@ -1924,9 +1941,10 @@
         'display:flex;align-items:center;justify-content:center;overflow:hidden;' +
         '-webkit-tap-highlight-color:transparent;animation:_danranFadeIn 0.18s ease;';
       var img = pDoc.createElement('img');
-      img.src = list[idx];
       img.style.cssText =
-        'max-width:100%;max-height:100%;object-fit:contain;display:block;will-change:transform;';
+        'max-width:100%;max-height:100%;object-fit:contain;display:block;will-change:transform;' +
+        'min-width:120px;min-height:120px;background:rgba(255,255,255,0.05);border-radius:6px;';
+      img.src = list[idx];
       var close = pDoc.createElement('button');
       close.textContent = '✕';
       close.style.cssText =

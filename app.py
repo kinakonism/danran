@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v58",   # 画像送りをクロスフェード堅牢化 + トースト残留をscan掃除で修正
+    "danran_lp_v59",   # nav送信を生きたiframe経由に統一(ルーム入室失敗修正)+画像プレースホルダ/キャッシュ延長
     path=_LP_COMPONENT_DIR,
 )
 
@@ -666,8 +666,10 @@ def render_messages() -> None:
         is_img_only = bool(img_url) and not body.strip()  # 画像のみ（テキスト無し）
         img_piece = (
             # data-lp-image: タップで全画面ビューア（JS）を開く
-            f'<img src="{img_url}" data-lp-image="{_html.escape(img_url)}" '
-            f'style="max-width:200px;border-radius:10px;cursor:pointer;'
+            # background + min-height: 読み込み前/失敗時に「ブランク」でなく薄グレーの枠を出す
+            f'<img src="{img_url}" data-lp-image="{_html.escape(img_url)}" loading="lazy" '
+            f'style="max-width:200px;min-height:80px;border-radius:10px;cursor:pointer;'
+            f'background:rgba(255,255,255,0.06);'
             f'display:block;{"margin-bottom:6px" if body else ""}">'
         ) if img_url else ""
         content = img_piece + body_esc

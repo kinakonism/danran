@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v64",   # 入室カバーをヘッダーごと覆う（LINE風・遷移を完全シームレスに）
+    "danran_lp_v65",   # 入室カバーに🏠danranロゴのloading表示（遅延フェードで高速時はチラ見えなし）
     path=_LP_COMPONENT_DIR,
 )
 

@@ -1871,6 +1871,15 @@
     try {
       var pDoc = window.parent.document;
       if (pDoc.getElementById('_danran_enter_cover')) return;
+      // パルス用 keyframe（1回だけ注入）— 起動時スプラッシュと同テイスト
+      if (!pDoc.getElementById('_danran_splash_css')) {
+        var ks = pDoc.createElement('style');
+        ks.id = '_danran_splash_css';
+        ks.textContent =
+          '@keyframes danranSplashPulse{0%,100%{opacity:0.5;transform:scale(0.96)}' +
+          '50%{opacity:1;transform:scale(1)}}';
+        (pDoc.head || pDoc.body).appendChild(ks);
+      }
       var cover = pDoc.createElement('div');
       cover.id = '_danran_enter_cover';
       cover.setAttribute('data-cover-expire', String(Date.now() + 2500));
@@ -1878,8 +1887,21 @@
       // → ヘッダーごと覆い、入室中のヘッダー中身の切り替わり(LINE で言う画面遷移)を隠す
       cover.style.cssText =
         'position:fixed;inset:0;z-index:2147483647;background:#1a1614;' +
-        'pointer-events:none;opacity:1;transition:opacity 0.14s ease;';
+        'pointer-events:none;opacity:1;transition:opacity 0.18s ease;' +
+        'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;';
+      // ロゴは少し遅れてフェードイン（高速遷移ではチラ見えさせず、待つ時だけ出す）
+      cover.innerHTML =
+        '<div id="_danran_splash_inner" style="opacity:0;transition:opacity 0.25s ease;' +
+        'display:flex;flex-direction:column;align-items:center;gap:12px">' +
+          '<div style="font-size:3.2rem;animation:danranSplashPulse 1.2s ease-in-out infinite">🏠</div>' +
+          '<div style="color:rgba(240,232,224,0.5);font-size:0.85rem;font-weight:700;' +
+          'letter-spacing:0.12em">danran</div>' +
+        '</div>';
       pDoc.body.appendChild(cover);
+      setTimeout(function () {
+        var inner = pDoc.getElementById('_danran_splash_inner');
+        if (inner) inner.style.opacity = '1';
+      }, 160);
     } catch (e) {}
   }
 

@@ -426,6 +426,68 @@
     } catch (e) { fallback(); }
   }
 
+  // URL を既定ブラウザで開く（一時 <a target=_blank> をクリック）
+  function openUrlExternal(url) {
+    try {
+      var pDoc = window.parent.document;
+      var a = pDoc.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      pDoc.body.appendChild(a); a.click();
+      setTimeout(function () { if (a.parentNode) a.remove(); }, 0);
+    } catch (e) { try { window.parent.open(url, '_blank'); } catch (e2) {} }
+  }
+
+  // リンクタップ時のアクションメニュー（開く / コピー / 共有）
+  function showLinkMenu(url) {
+    try {
+      var pDoc = window.parent.document, pWin = window.parent;
+      var old = pDoc.getElementById('_danran_link_menu'); if (old) old.remove();
+      var ov = pDoc.createElement('div');
+      ov.id = '_danran_link_menu';
+      ov.style.cssText =
+        'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.45);' +
+        'display:flex;align-items:flex-end;justify-content:center;' +
+        '-webkit-tap-highlight-color:transparent;animation:_danranFadeIn 0.15s ease;';
+      var sheet = pDoc.createElement('div');
+      sheet.style.cssText =
+        'background:#241f1c;border-radius:18px;width:calc(100% - 24px);max-width:420px;' +
+        'margin:0 0 calc(env(safe-area-inset-bottom, 0px) + 12px);overflow:hidden;' +
+        'box-shadow:0 8px 28px rgba(0,0,0,0.6);';
+      function close() { if (ov.parentNode) ov.remove(); }
+      var head = pDoc.createElement('div');
+      head.textContent = url;
+      head.style.cssText =
+        'padding:12px 16px;font-size:0.76rem;color:rgba(240,232,224,0.5);' +
+        'word-break:break-all;border-bottom:1px solid rgba(255,255,255,0.08);';
+      sheet.appendChild(head);
+      function row(label, fn) {
+        var b = pDoc.createElement('button');
+        b.textContent = label;
+        b.style.cssText =
+          'width:100%;padding:15px 16px;background:none;border:none;' +
+          'border-bottom:1px solid rgba(255,255,255,0.06);color:#f0e8e0;' +
+          'font-size:1rem;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;';
+        b.addEventListener('click', function (e) { e.stopPropagation(); close(); fn(); });
+        sheet.appendChild(b);
+      }
+      row('🔗 開く', function () { openUrlExternal(url); });
+      row('📋 リンクをコピー', function () { copyText(url); });
+      if (pWin.navigator && pWin.navigator.share) {
+        row('📤 共有', function () { try { pWin.navigator.share({ url: url }); } catch (e) {} });
+      }
+      var cancel = pDoc.createElement('button');
+      cancel.textContent = 'キャンセル';
+      cancel.style.cssText =
+        'width:100%;padding:15px 16px;background:none;border:none;color:#888;' +
+        'font-size:1rem;cursor:pointer;-webkit-tap-highlight-color:transparent;';
+      cancel.addEventListener('click', function (e) { e.stopPropagation(); close(); });
+      sheet.appendChild(cancel);
+      ov.appendChild(sheet);
+      ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+      pDoc.body.appendChild(ov);
+    } catch (e) {}
+  }
+
   function showPopup(el, msgId, isMine) {
     hidePopup();
     try {
@@ -1323,6 +1385,7 @@
       if (navBtn && !navBtn._danranHdrNav) {
         navBtn._danranHdrNav = true;
         navBtn.addEventListener('click', function () {
+          if (!SHOW_ROOMS) { try { showBackCover(); } catch (e) {} }  // チャット→ルーム選択を覆う
           sendNav({ action: SHOW_ROOMS ? 'go_chat' : 'go_rooms', ts: Date.now() });
         });
       }
@@ -1417,6 +1480,21 @@
         })(imgs[j]);
       }
     } catch (e) {}
+    // リンクタップを横取り → アクションメニュー（開く/コピー/共有）
+    try {
+      var links = window.parent.document.querySelectorAll('[data-lp-link]');
+      for (var L = 0; L < links.length; L++) {
+        (function (a) {
+          if (a._danranLinkHooked) return;
+          a._danranLinkHooked = true;
+          a.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            showLinkMenu(a.getAttribute('data-lp-link') || a.href);
+          });
+        })(links[L]);
+      }
+    } catch (e) {}
   }
 
   /* ════════════════════════════════════════
@@ -1466,6 +1544,7 @@
       var now = Date.now();
       if (now - _swipeLastFire < 800) return;
       _swipeLastFire = now;
+      if (action === 'go_rooms') { try { showBackCover(); } catch (e) {} }  // 戻り遷移を覆う
       if (pDoc._danranNav) { pDoc._danranNav(action, now); }
       else { stSetValue({ action: action, ts: now }); }
     }
@@ -1921,6 +2000,7 @@
       var cover = pDoc.createElement('div');
       cover.id = '_danran_enter_cover';
       cover.setAttribute('data-cover-expire', String(Date.now() + 2500));
+      cover.setAttribute('data-cover-dir', 'enter');
       // z-index はヘッダーと同値。body 末尾に追加するので DOM 順でヘッダーの上に来る
       // → ヘッダーごと覆い、入室中のヘッダー中身の切り替わり(LINE で言う画面遷移)を隠す
       cover.style.cssText =
@@ -1943,6 +2023,23 @@
     } catch (e) {}
   }
 
+  // 戻り（チャット→ルーム選択）用の軽いカバー。ロゴ無し・地色のみで往復ラグを隠す。
+  // ルーム選択が表示されたら scrollToLatestOnEnter 内で除去する。
+  function showBackCover() {
+    try {
+      var pDoc = window.parent.document;
+      if (pDoc.getElementById('_danran_enter_cover')) return;
+      var cover = pDoc.createElement('div');
+      cover.id = '_danran_enter_cover';
+      cover.setAttribute('data-cover-expire', String(Date.now() + 2000));
+      cover.setAttribute('data-cover-dir', 'back');
+      cover.style.cssText =
+        'position:fixed;inset:0;z-index:2147483647;background:#1a1614;' +
+        'pointer-events:none;opacity:1;transition:opacity 0.16s ease;';
+      pDoc.body.appendChild(cover);
+    } catch (e) {}
+  }
+
   // チャットに「入った瞬間」だけ最新メッセージ（最下部）へ移動し、カバーを外す。
   // ポーリング中・履歴閲覧中はスクロールを奪わない（入室イベントのみ）。
   var _lastChatKey = '';
@@ -1954,6 +2051,12 @@
       if (cExist) {
         var exp = parseInt(cExist.getAttribute('data-cover-expire') || '0', 10);
         if (exp && Date.now() > exp) { cExist.remove(); }
+      }
+      // 戻りカバー: ルーム選択が表示されたらフェードアウト
+      if (SHOW_ROOMS && cExist && cExist.getAttribute('data-cover-dir') === 'back'
+          && pDoc.getElementById('_danran_room_list')) {
+        cExist.style.opacity = '0';
+        setTimeout(function () { if (cExist.parentNode) cExist.remove(); }, 200);
       }
       if (!ME) { _lastChatKey = ''; return; }
       if (SHOW_ROOMS || !ACTIVE_ROOM) { _lastChatKey = '__rooms__'; return; }

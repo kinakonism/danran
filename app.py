@@ -619,7 +619,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v68",   # 長押しポップアップに📋コピーボタン（全メッセージ data-lp-body）
+    "danran_lp_v69",   # リンクのアクションメニュー(開く/コピー/共有) + 戻り遷移の軽い地色カバー
     path=_LP_COMPONENT_DIR,
 )
 
@@ -649,8 +649,10 @@ def linkify_body(body: str) -> str:
             trail = url[-1] + trail
             url = url[:-1]
         u = esc(url)
+        # data-lp-link: JS がタップを横取りして「開く/コピー/共有」メニューを出す。
+        # href/target は JS 無効時のフォールバック（既定ブラウザで開く）。
         out.append(
-            f'<a href="{u}" target="_blank" rel="noopener noreferrer" '
+            f'<a href="{u}" data-lp-link="{u}" target="_blank" rel="noopener noreferrer" '
             f'style="color:inherit;text-decoration:underline;word-break:break-all">{u}</a>'
         )
         out.append(esc(trail))

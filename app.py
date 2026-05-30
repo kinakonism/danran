@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v60",   # チャット入室時に最新メッセージへ即スクロール
+    "danran_lp_v61",   # 入室時カバーで隠して最下部確定後にフェード（上がチラ見え→飛ぶを解消）
     path=_LP_COMPONENT_DIR,
 )
 

@@ -1870,22 +1870,45 @@
     } catch (e) {}
   }
 
-  // チャットに「入った瞬間」だけ最新メッセージ（最下部）へ即移動。
-  // ポーリング中・履歴を読んでいる最中はスクロールを奪わない。
+  // チャットに「入った瞬間」だけ最新メッセージ（最下部）へ移動。
+  // "上が一瞬見えて下へ飛ぶ" のを防ぐため、地色のカバーを被せて裏で最下部へ
+  // スクロールし終えてからカバーをフェードアウトする（ヘッダーは z-index 上なので残る）。
+  // ポーリング中・履歴閲覧中はスクロールを奪わない（入室イベントのみ）。
   var _lastChatKey = '';
   function scrollToLatestOnEnter() {
     try {
+      var pWin = window.parent, pDoc = pWin.document;
+      // 安全掃除: 期限切れカバーが残っていたら除去（rAF/iframe が死んだ場合の保険）
+      var cExist = pDoc.getElementById('_danran_enter_cover');
+      if (cExist) {
+        var exp = parseInt(cExist.getAttribute('data-cover-expire') || '0', 10);
+        if (exp && Date.now() > exp) { cExist.remove(); }
+      }
       if (!ME) { _lastChatKey = ''; return; }
       if (SHOW_ROOMS || !ACTIVE_ROOM) { _lastChatKey = '__rooms__'; return; }
       if (ACTIVE_ROOM === _lastChatKey) return;   // 既に同じチャットを表示中＝何もしない
       _lastChatKey = ACTIVE_ROOM;
-      // メッセージ描画を待って数回、アニメなしで最下部へ（「もう最新にいる」状態にする）
-      var pWin = window.parent, pDoc = pWin.document;
-      [50, 180, 400].forEach(function (ms) {
-        setTimeout(function () {
-          try { pWin.scrollTo(0, pDoc.body.scrollHeight); } catch (e) {}
-        }, ms);
-      });
+
+      if (cExist) cExist.remove();
+      var cover = pDoc.createElement('div');
+      cover.id = '_danran_enter_cover';
+      cover.setAttribute('data-cover-expire', String(Date.now() + 1200));
+      // z-index はヘッダー(2147483647)より下＝ヘッダーは見えたまま、本文だけ隠す
+      cover.style.cssText =
+        'position:fixed;inset:0;z-index:2147483000;background:#1a1614;' +
+        'pointer-events:none;opacity:1;transition:opacity 0.18s ease;';
+      pDoc.body.appendChild(cover);
+
+      var until = Date.now() + 340;   // この間 裏で最下部へ寄せ続ける
+      (function settle() {
+        try { pWin.scrollTo(0, pDoc.body.scrollHeight); } catch (e) {}
+        if (Date.now() < until) {
+          pWin.requestAnimationFrame(settle);
+        } else {
+          cover.style.opacity = '0';
+          setTimeout(function () { if (cover.parentNode) cover.remove(); }, 220);
+        }
+      })();
     } catch (e) {}
   }
 

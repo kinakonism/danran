@@ -197,7 +197,7 @@ JS コンポーネントをブラウザにキャッシュさせないため、�
 
 ```python
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v57",   # ← v57, v58... と上げる（現在 v57）
+    "danran_lp_v66",   # ← v66, v67... と上げる（現在 v66）
     path=_LP_COMPONENT_DIR,
 )
 ```
@@ -233,12 +233,33 @@ _lp_detector = st.components.v1.declare_component(
 
 ### 画像の全画面ビューア（ライトボックス）
 
-チャット画像に `data-lp-image`（生 URL）を付与。`scan()` が各画像へ直接 `click` を添付（`_danranImgHooked`／デリゲーションは iOS で発火しないため直接添付）。
+**チャット画像は JS 管理スロット**: Python は `<img>` を直接出さず `<span class="lp-imgslot" data-img="URL" data-lp-image="URL">`（薄グレー枠）だけ出す。JS `fillImageSlots()`（scan 毎）が URL ごとに `<img>` を1つだけ生成して `pDoc._danranImgPool` にプールし、スロットへ**同じノードを移動させるだけ**にする → 2秒ポーリングの再描画でも画像が再ロードされない狙い。タップは `data-lp-image` を持つスロットに直接 `click` を添付（`_danranImgHooked`）。
 
 - `openImageViewer(src)`: 全画像を DOM 順（古い→新しい）で集めギャラリー化。
 - **左上 ✕ / 背景タップ** → 閉じる。**下スワイプ(dy>90)** → 指追従で閉じる。
-- **右スワイプ → 古い画像 / 左スワイプ → 新しい画像**（`navigate(±1)`）。
+- **右スワイプ → 古い画像 / 左スワイプ → 新しい画像**（`navigate(±1)`・クロスフェード＋ロード待ち）。
 - 表示中は `IMG_VIEWER_ID` 存在チェックで**右スワイプ戻りを無効化**。
+- アップロード時に `cache-control: max-age=31536000` を付与（キャッシュ命中率↑）。
+- **未解決メモ**: 2秒ポーリング由来の画像チカチカは残存（run_every フラグメントが領域を再ペイント）。完全解消には「変化時のみ再描画」構成への refactor が必要。
+
+### 入室遷移（カバー＋🏠ローディング）
+
+ルームをタップ→チャット表示までの「一覧消去→2回 rerun→描画」のチカチカを隠す。
+
+- `showEnterCover()`: タップ click ハンドラで**即**、地色カバーを全画面に出す（z-index はヘッダーと同値＋body 末尾＝ヘッダーごと覆う）。160ms 遅れて 🏠+danran のパルス（`danranSplashPulse`）をフェードイン（高速遷移ではロゴを出さずチラ見え回避）。
+- `scrollToLatestOnEnter()`（scan 毎）: ACTIVE_ROOM が変わった瞬間だけ、最下部へスクロール完了（高さ安定 or 最大320ms）後にカバーをフェードアウト。`_lastChatKey` で入室イベントのみ検出。
+- カバーは `data-cover-expire` を持ち scan が期限切れを掃除（死んだ iframe 対策）。
+
+### 軽い既読表示
+
+`read_by_users(room, my_id, msg_created_iso)` が `last_read` を流用し、指定メッセージ以降に既読にした自分以外のユーザーを返す（TZ 差は datetime パースで比較・返りは user_id ソートで**順序固定**）。`render_messages` が**自分の最新メッセージにだけ**「既読 N + ミニアバター」を表示。既読した人だけ出す（未読を責めない＝家族向け）。
+
+> ★ 既読アバターの順序が変わると `st.markdown` 全体が再描画され画像チカチカの一因になるため、必ず決定的順序にすること。
+
+### ナビ送信は sendNav（生きた iframe 経由）に統一
+
+DOM 要素へ1回張るクリックハンドラ等は「古い iframe」が所有することがあり、その死んだ window から `postMessage` すると Streamlit に `event.source` 不一致で無視される（スワイプ不発・ルーム入室失敗・ボタン不発の原因）。  
+→ `scan()` がライブ iframe の送信口を `pDoc._danranSend` に毎回登録し、ナビ送信は **`sendNav(val)`** 経由で行う（未登録時のみ自分の `stSetValue` にフォールバック）。トースト/カバーも `data-*-expire` ＋ scan 掃除で「死んだ iframe のタイマー」対策。[[swipe-back-live-iframe]]
 
 ### テーマ（あたたかダーク）
 
@@ -666,7 +687,7 @@ uv run python run.py
 # → MCP ツール: mcp__supabase__get_logs
 
 # コンポーネントキャッシュが怪しいとき
-# → "danran_lp_v57" の数字をインクリメント（現在 v57）
+# → "danran_lp_v66" の数字をインクリメント（現在 v66）
 
 # iOS PWA など画面にログを出せない環境のデバッグ
 # → JS 側: 色付きの fixed div を一定時間表示する _dbg(color,msg) 方式、

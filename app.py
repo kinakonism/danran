@@ -619,7 +619,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v67",   # 画像ビューア: 上スワイプでも閉じる（下と両対応）
+    "danran_lp_v68",   # 長押しポップアップに📋コピーボタン（全メッセージ data-lp-body）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -781,7 +781,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str:
                 'background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:10px 14px'
             )
             bubble = (
-                f'<div data-lp-msg="{msg_id}" style="'
+                f'<div data-lp-msg="{msg_id}" data-lp-body="{_html.escape(body)}" style="'
                 f'display:flex;align-items:flex-end;gap:8px;margin:4px 0 2px 0">'
                 f'{av_html}'
                 f'<div>'

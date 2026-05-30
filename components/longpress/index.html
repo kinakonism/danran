@@ -399,6 +399,33 @@
       });
   }
 
+  // クリップボードへコピー（iframe/PWA でも確実なよう execCommand フォールバック付き）
+  function copyText(text) {
+    if (!text) return;
+    var nav = window.parent.navigator || navigator;
+    function fallback() {
+      try {
+        var pDoc = window.parent.document;
+        var ta = pDoc.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        pDoc.body.appendChild(ta);
+        ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+        var ok = false;
+        try { ok = pDoc.execCommand('copy'); } catch (e) {}
+        ta.remove();
+        showToast(ok ? '📋 コピーしました' : 'コピーできませんでした');
+      } catch (e) { showToast('コピーできませんでした'); }
+    }
+    try {
+      if (nav.clipboard && nav.clipboard.writeText) {
+        nav.clipboard.writeText(text)
+          .then(function () { showToast('📋 コピーしました'); })
+          .catch(fallback);
+      } else { fallback(); }
+    } catch (e) { fallback(); }
+  }
+
   function showPopup(el, msgId, isMine) {
     hidePopup();
     try {
@@ -467,6 +494,16 @@
               showToast('🗑️ 削除しました');
             });
           }
+        }));
+        pop.appendChild(makeSep());
+      }
+
+      // 📋 コピー（テキストがあるメッセージのみ）
+      var bodyText = el.getAttribute('data-lp-body') || '';
+      if (bodyText.trim()) {
+        pop.appendChild(makeBtn('📋', function () {
+          copyText(bodyText);
+          hidePopup();
         }));
         pop.appendChild(makeSep());
       }

@@ -704,15 +704,9 @@
           el._danranRoomNav = true;
           el.addEventListener('click', function (e) {
             e.stopPropagation();
-            // 即時に選択ハイライト（サーバー往復中も「選んだ」感を出す）
-            try {
-              var rl = pDoc.getElementById('_danran_room_list');
-              if (rl) {
-                var sel = rl.querySelectorAll('button.dr-room.dr-selected');
-                for (var k = 0; k < sel.length; k++) sel[k].classList.remove('dr-selected');
-              }
-              el.classList.add('dr-selected');
-            } catch (ex) {}
+            // ★ タップした瞬間にカバーを出して遷移全体（一覧消去→rerun→チャット描画）を
+            //   覆い隠す。これでルーム選択時のチカチカが見えなくなる。
+            showEnterCover();
             sendNav({ action: 'go_room', room_name: el.getAttribute('data-room-name'), ts: Date.now() });
           });
         })(navBtns[i]);
@@ -1870,9 +1864,24 @@
     } catch (e) {}
   }
 
-  // チャットに「入った瞬間」だけ最新メッセージ（最下部）へ移動。
-  // "上が一瞬見えて下へ飛ぶ" のを防ぐため、地色のカバーを被せて裏で最下部へ
-  // スクロールし終えてからカバーをフェードアウトする（ヘッダーは z-index 上なので残る）。
+  // 入室カバー: 地色のオーバーレイを即出して遷移中のチカチカを覆い隠す。
+  // タップ時（room-nav）に呼ぶことで「一覧消去→rerun→チャット描画」を丸ごと隠す。
+  // z-index はヘッダー(2147483647)より下＝ヘッダーは見えたまま、本文だけ隠す。
+  function showEnterCover() {
+    try {
+      var pDoc = window.parent.document;
+      if (pDoc.getElementById('_danran_enter_cover')) return;
+      var cover = pDoc.createElement('div');
+      cover.id = '_danran_enter_cover';
+      cover.setAttribute('data-cover-expire', String(Date.now() + 2500));
+      cover.style.cssText =
+        'position:fixed;inset:0;z-index:2147483000;background:#1a1614;' +
+        'pointer-events:none;opacity:1;transition:opacity 0.14s ease;';
+      pDoc.body.appendChild(cover);
+    } catch (e) {}
+  }
+
+  // チャットに「入った瞬間」だけ最新メッセージ（最下部）へ移動し、カバーを外す。
   // ポーリング中・履歴閲覧中はスクロールを奪わない（入室イベントのみ）。
   var _lastChatKey = '';
   function scrollToLatestOnEnter() {
@@ -1889,21 +1898,16 @@
       if (ACTIVE_ROOM === _lastChatKey) return;   // 既に同じチャットを表示中＝何もしない
       _lastChatKey = ACTIVE_ROOM;
 
-      if (cExist) cExist.remove();
-      var cover = pDoc.createElement('div');
-      cover.id = '_danran_enter_cover';
-      cover.setAttribute('data-cover-expire', String(Date.now() + 1200));
-      // z-index はヘッダー(2147483647)より下＝ヘッダーは見えたまま、本文だけ隠す
-      cover.style.cssText =
-        'position:fixed;inset:0;z-index:2147483000;background:#1a1614;' +
-        'pointer-events:none;opacity:1;transition:opacity 0.12s ease;';
-      pDoc.body.appendChild(cover);
+      // タップ経由ならカバーは既にある。それ以外（復元/スワイプ）はここで用意。
+      showEnterCover();
+      var cover = pDoc.getElementById('_danran_enter_cover');
 
       // 高さが安定したら（＝描画完了したら）すぐカバーを外す。最大 320ms で打ち切り。
       var startT = Date.now(), lastH = -1, stable = 0;
       function reveal() {
+        if (!cover) return;
         cover.style.opacity = '0';
-        setTimeout(function () { if (cover.parentNode) cover.remove(); }, 140);
+        setTimeout(function () { if (cover.parentNode) cover.remove(); }, 160);
       }
       (function settle() {
         try { pWin.scrollTo(0, pDoc.body.scrollHeight); } catch (e) {}

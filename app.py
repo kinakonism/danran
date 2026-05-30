@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v62",   # 入室カバーを高さ安定で即フェード（暗転短縮・最大320ms）
+    "danran_lp_v63",   # ルーム選択のチカチカ解消: タップ即カバーで遷移全体を隠す
     path=_LP_COMPONENT_DIR,
 )
 

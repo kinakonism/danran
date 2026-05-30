@@ -543,18 +543,11 @@
           } else {
             deleteMsg(msgId).then(function () {
               hidePopup();
-              // ★ DOM からノードを remove() すると React(Streamlit) の再描画と競合して
-              //   NotFoundError になるため、構造は変えず display:none で隠すだけにする。
-              //   実体は次の rerun（poll が変化検知）で再描画され消える。
-              try {
-                var msgEl = pDoc.querySelector('[data-lp-msg="' + msgId + '"]');
-                if (msgEl) {
-                  msgEl.style.transition = 'opacity 0.2s';
-                  msgEl.style.opacity    = '0';
-                  setTimeout(function () { try { msgEl.style.display = 'none'; } catch (e) {} }, 200);
-                }
-              } catch (ex) {}
               showToast('🗑️ 削除しました');
+              // ★ DOM は手で触らない（display:none 等の部分操作は変化駆動描画のキャッシュと
+              //   競合し、別メッセージまで一時的に消える不具合の原因）。
+              //   Python に refresh_chat を投げ、DB から綺麗に再描画させる。
+              sendNav({ action: 'refresh_chat', ts: Date.now() });
             });
           }
         }));

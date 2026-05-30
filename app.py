@@ -619,7 +619,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v73",   # 効かなかった送信後blurを撤去（iOSでキーボード閉じず）
+    "danran_lp_v74",   # 削除を refresh_chat で DB から綺麗に再描画（別メッセージ消失を修正）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2180,6 +2180,10 @@ if isinstance(_lp_result, dict):
             # ルームリストの + ボタン → ルーム作成画面
             _reset_room_create_widgets()
             st.session_state["view"] = "room_create"
+            st.rerun()
+        elif _nav == "refresh_chat":
+            # メッセージ削除後など: チャットHTMLキャッシュを捨ててDBから綺麗に再描画
+            st.session_state.pop("_chat_html", None)
             st.rerun()
         elif _nav == "restore_session":
             # JS コンポーネントが localStorage からセッションIDを読み取り postMessage で通知

@@ -1355,6 +1355,7 @@
     try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
     reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
     sweepToast();           // 期限切れトーストの掃除（死んだ iframe タイマー対策）
+    scrollToLatestOnEnter(); // チャット入室時に最新メッセージへ即移動
     // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
     // （通常は Python が st.html() でレンダリングするため実行されない）
     try {
@@ -1866,6 +1867,25 @@
       if (!t) return;
       var exp = parseInt(t.getAttribute('data-toast-expire') || '0', 10);
       if (exp && Date.now() > exp + 500) { t.remove(); }
+    } catch (e) {}
+  }
+
+  // チャットに「入った瞬間」だけ最新メッセージ（最下部）へ即移動。
+  // ポーリング中・履歴を読んでいる最中はスクロールを奪わない。
+  var _lastChatKey = '';
+  function scrollToLatestOnEnter() {
+    try {
+      if (!ME) { _lastChatKey = ''; return; }
+      if (SHOW_ROOMS || !ACTIVE_ROOM) { _lastChatKey = '__rooms__'; return; }
+      if (ACTIVE_ROOM === _lastChatKey) return;   // 既に同じチャットを表示中＝何もしない
+      _lastChatKey = ACTIVE_ROOM;
+      // メッセージ描画を待って数回、アニメなしで最下部へ（「もう最新にいる」状態にする）
+      var pWin = window.parent, pDoc = pWin.document;
+      [50, 180, 400].forEach(function (ms) {
+        setTimeout(function () {
+          try { pWin.scrollTo(0, pDoc.body.scrollHeight); } catch (e) {}
+        }, ms);
+      });
     } catch (e) {}
   }
 

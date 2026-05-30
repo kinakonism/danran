@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v59",   # nav送信を生きたiframe経由に統一(ルーム入室失敗修正)+画像プレースホルダ/キャッシュ延長
+    "danran_lp_v60",   # チャット入室時に最新メッセージへ即スクロール
     path=_LP_COMPONENT_DIR,
 )
 

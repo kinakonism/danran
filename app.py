@@ -628,6 +628,11 @@ _lp_detector = st.components.v1.declare_component(
 # ─────────────────────────────────────
 _URL_RE = re.compile(r'(https?://[^\s<>"\']+)')
 
+def _body_attr(body: str) -> str:
+    """data-lp-body 属性用エスケープ。生の改行を属性に入れると st.markdown の
+    Markdown 処理が HTML タグを壊すため &#10; に変換（getAttribute では \\n に復元される）。"""
+    return _html.escape(body).replace("\r", "").replace("\n", "&#10;")
+
 def linkify_body(body: str) -> str:
     """本文を HTML エスケープしつつ URL を <a> 化して返す（改行は <br>）。
     URL タップで target=_blank → iOS PWA では既定ブラウザ(Safari)で開く。
@@ -760,7 +765,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str:
             bubble = (
                 # data-lp-body: 楽観的バブルとの照合用に生テキストを保持
                 f'<div data-lp-msg="{msg_id}" data-lp-mine="1" '
-                f'data-lp-body="{_html.escape(body)}" style="'
+                f'data-lp-body="{_body_attr(body)}" style="'
                 f'display:flex;justify-content:flex-end;align-items:flex-end;'
                 f'gap:8px;margin:4px 0 2px 48px">'
                 f'<div style="text-align:right">'
@@ -781,7 +786,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str:
                 'background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:10px 14px'
             )
             bubble = (
-                f'<div data-lp-msg="{msg_id}" data-lp-body="{_html.escape(body)}" style="'
+                f'<div data-lp-msg="{msg_id}" data-lp-body="{_body_attr(body)}" style="'
                 f'display:flex;align-items:flex-end;gap:8px;margin:4px 0 2px 0">'
                 f'{av_html}'
                 f'<div>'

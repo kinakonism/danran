@@ -626,40 +626,18 @@ _lp_detector = st.components.v1.declare_component(
 # ★ リアルタイムタイムライン（フラグメント）
 #   5秒ごとに自動更新。ページ全体は再描画しない。
 # ─────────────────────────────────────
-@st.fragment(run_every="2s")
-def render_messages() -> None:
-    # ルーム選択中・未ログイン・編集画面では何も描画しない。
-    # この 2 秒フラグメントはナビゲーション後も独立してタイマー発火するため、
-    # ガードがないと遷移直後に古いチャットが一瞬再描画されてちらつく。
-    if (st.session_state.get("_show_rooms", False)
-            or "current_user" not in st.session_state
-            or st.session_state.get("view") != "chat"):
-        return
-
-    current_user  = st.session_state.get("current_user", {})
-    selected_room = st.session_state.get("active_room", "")
-    uname         = current_user.get("name", "")
-    my_id         = current_user.get("id", "")
+def build_messages_html(selected_room: str, current_user: dict) -> str:
+    """チャットの全メッセージ HTML（バブル＋軽い既読）を 1 つの文字列で返す。
+    副作用なし（fetch のみ）。静的描画と変化検知ポーラーの両方から共用する。
+    ★ この出力が前回と同一なら再描画しない＝画像チカチカ防止の要。"""
+    uname = current_user.get("name", "")
+    my_id = current_user.get("id", "")
 
     messages = fetch_messages(selected_room)
-
-    # 新着トースト（他人のメッセージのみ）
-    count_key = f"cnt_{selected_room}"
-    prev      = st.session_state.get(count_key, -1)
-    if prev >= 0 and len(messages) > prev:
-        for m in messages[prev:]:
-            if m["user_name"] != uname:
-                preview = m["content"][:30] if m["content"] else "📷 写真"
-                st.toast(f"💬 {m['user_name']}: {preview}", icon="🔔")
-    st.session_state[count_key] = len(messages)
-
-    # 既読マーク
-    if uid := current_user.get("id"):
-        mark_as_read(uid, selected_room)
-
     if not messages:
-        st.info("📭 まだメッセージはありません。最初のメッセージを送ってみましょう！")
-        return
+        return ('<div style="padding:22px 16px;text-align:center;'
+                'color:rgba(255,255,255,0.5);font-size:0.9rem;line-height:1.7">'
+                '📭 まだメッセージはありません。<br>最初のメッセージを送ってみましょう！</div>')
 
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
@@ -808,8 +786,60 @@ def render_messages() -> None:
                 f'align-items:center;gap:1px">既読 {len(_readers)}{_avs}</div>'
             )
 
-    # 全バブルを 1 回の st.markdown でまとめて描画（要素数を N→1 に削減）
-    st.markdown('\n'.join(_bubbles), unsafe_allow_html=True)
+    # 全バブルを 1 つの文字列で返す（呼び出し元が 1 回だけ st.markdown する）
+    return '\n'.join(_bubbles)
+
+
+# ── 変化時のみ再描画する仕組み ────────────────────────────────────────
+# 旧実装は @st.fragment(run_every="2s") で毎2秒メッセージDOMを再生成しており、
+# 内容が同じでも画像スロットが作り直されてチカチカしていた。
+# → 静的描画(render_chat_messages) ＋ 変化検知ポーラー(poll_messages) に分離。
+#   描画は「実際に内容が変わった時」だけ行われる。
+def render_chat_messages(current_user: dict) -> None:
+    """チャットメッセージを描画（full rerun 時のみ実行＝変化駆動）。
+    キャッシュ済み HTML があればそれを使い、無ければ build して保存する。"""
+    room = st.session_state.get("active_room", "")
+    if st.session_state.get("_chat_html_room") != room or "_chat_html" not in st.session_state:
+        st.session_state["_chat_html"] = build_messages_html(room, current_user)
+        st.session_state["_chat_html_room"] = room
+    st.markdown(st.session_state.get("_chat_html", ""), unsafe_allow_html=True)
+
+
+@st.fragment(run_every="2s")
+def poll_messages() -> None:
+    """2秒ごとに「内容が変わったか」だけを確認し、変わった時だけ st.rerun()。
+    何も描画しない（＝変化が無ければ DOM は一切いじらない→画像チカチカしない）。"""
+    if (st.session_state.get("_show_rooms", False)
+            or "current_user" not in st.session_state
+            or st.session_state.get("view") != "chat"):
+        return
+    current_user  = st.session_state.get("current_user", {})
+    selected_room = st.session_state.get("active_room", "")
+    uname         = current_user.get("name", "")
+    my_id         = current_user.get("id", "")
+
+    # 既読マーク（自分がこのルームを見ている＝最新まで既読）
+    if my_id:
+        mark_as_read(my_id, selected_room)
+
+    # 新着トースト（他人のメッセージのみ）
+    _msgs = fetch_messages(selected_room)
+    count_key = f"cnt_{selected_room}"
+    prev = st.session_state.get(count_key, -1)
+    if prev >= 0 and len(_msgs) > prev:
+        for m in _msgs[prev:]:
+            if m["user_name"] != uname:
+                preview = m["content"][:30] if m["content"] else "📷 写真"
+                st.toast(f"💬 {m['user_name']}: {preview}", icon="🔔")
+    st.session_state[count_key] = len(_msgs)
+
+    # 内容（バブルHTML）が前回と変わっていれば再描画。同じなら何もしない。
+    _html_now = build_messages_html(selected_room, current_user)
+    if _html_now != st.session_state.get("_chat_html") \
+            or st.session_state.get("_chat_html_room") != selected_room:
+        st.session_state["_chat_html"]      = _html_now
+        st.session_state["_chat_html_room"] = selected_room
+        st.rerun()
 
 # ─────────────────────────────────────
 # 画面① ログイン（名前 + パスワード）
@@ -1596,8 +1626,9 @@ def show_chat(current_user: dict) -> None:
         render_room_list()
         return   # ルーム選択中はメッセージ非表示
 
-    # ★ リアルタイム更新フラグメント（5秒ごと）
-    render_messages()
+    # メッセージ描画（変化駆動）＋ 2秒ポーラー（変化検知時のみ rerun）
+    render_chat_messages(current_user)
+    poll_messages()
 
     # ── テキスト入力 ──
     av_str2 = current_user["avatar"]
@@ -1605,6 +1636,8 @@ def show_chat(current_user: dict) -> None:
     ph = "メッセージ" if av_str2.startswith("http") else f"{av_str2} メッセージ"
     if prompt := st.chat_input(ph, max_chars=2000):
         send_message(selected_room, current_user["id"], current_user["name"], current_user["avatar"], prompt)
+        # 送信した自分のメッセージを即描画するためキャッシュを破棄（次の描画で再ビルド）
+        st.session_state.pop("_chat_html", None)
         st.rerun()
 
 # ─────────────────────────────────────

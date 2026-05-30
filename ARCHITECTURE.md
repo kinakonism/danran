@@ -149,14 +149,53 @@ erDiagram
     rooms ||--o{ messages : "contains (room_name)"
     messages ||--o{ reactions : has
 
-    users { uuid id PK; text name; text avatar; text phone; text password_hash }
-    sessions { uuid id PK; uuid user_id FK; timestamptz created_at }
-    rooms { uuid id PK; text name; text icon }
-    room_members { uuid id PK; uuid room_id; uuid user_id }
-    messages { uuid id PK; text room_name; uuid user_id; text content; text image_url }
-    reactions { uuid id PK; uuid message_id FK; text user_name; text emoji }
-    last_read { uuid user_id; text room_name; timestamptz read_at }
-    push_subscriptions { uuid id PK; uuid user_id FK; text endpoint; text p256dh; text auth }
+    users {
+        uuid id PK
+        text name
+        text avatar
+        text phone
+        text password_hash
+    }
+    sessions {
+        uuid id PK
+        uuid user_id FK
+        timestamptz created_at
+    }
+    rooms {
+        uuid id PK
+        text name
+        text icon
+    }
+    room_members {
+        uuid id PK
+        uuid room_id
+        uuid user_id
+    }
+    messages {
+        uuid id PK
+        text room_name
+        uuid user_id
+        text content
+        text image_url
+    }
+    reactions {
+        uuid id PK
+        uuid message_id FK
+        text user_name
+        text emoji
+    }
+    last_read {
+        uuid user_id
+        text room_name
+        timestamptz read_at
+    }
+    push_subscriptions {
+        uuid id PK
+        uuid user_id FK
+        text endpoint
+        text p256dh
+        text auth
+    }
 ```
 
 注意:

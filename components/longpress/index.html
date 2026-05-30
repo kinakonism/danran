@@ -2375,6 +2375,16 @@
   function setupChatSendHook(pDoc) {
     if (pDoc._danranSendHook) return;
     pDoc._danranSendHook = true;
+    // 送信後に入力欄のフォーカスを外す＝キーボードを閉じる（送信処理を妨げないよう少し遅延）
+    function blurInputSoon(ta) {
+      setTimeout(function () {
+        try {
+          if (ta) ta.blur();
+          var ae = pDoc.activeElement;
+          if (ae && ae.closest && ae.closest('[data-testid="stChatInput"]')) ae.blur();
+        } catch (e) {}
+      }, 60);
+    }
     // Enter 送信（IME 変換中の Enter は送信ではないので除外＝日本語入力対策）
     pDoc.addEventListener('keydown', function (e) {
       var ta = e.target;
@@ -2382,7 +2392,7 @@
       if (e.key !== 'Enter' || e.shiftKey) return;
       if (e.isComposing || e.keyCode === 229) return;
       var val = (ta.value || '').trim();
-      if (val) maybeOptimistic(val);
+      if (val) { maybeOptimistic(val); blurInputSoon(ta); }
     }, true);
     // 送信ボタン
     pDoc.addEventListener('click', function (e) {
@@ -2390,7 +2400,7 @@
       if (!btn) return;
       var ta = pDoc.querySelector('[data-testid="stChatInput"] textarea');
       var val = ta ? (ta.value || '').trim() : '';
-      if (val) maybeOptimistic(val);
+      if (val) { maybeOptimistic(val); blurInputSoon(ta); }
     }, true);
   }
 

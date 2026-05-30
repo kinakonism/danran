@@ -618,7 +618,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v65",   # 入室カバーに🏠danranロゴのloading表示（遅延フェードで高速時はチラ見えなし）
+    "danran_lp_v66",   # 画像をJS管理スロット化(再描画で再ロードしない)→チカチカ解消
     path=_LP_COMPONENT_DIR,
 )
 
@@ -698,12 +698,15 @@ def render_messages() -> None:
                         .replace(">", "&gt;").replace("\n", "<br>"))
         is_img_only = bool(img_url) and not body.strip()  # 画像のみ（テキスト無し）
         img_piece = (
-            # data-lp-image: タップで全画面ビューア（JS）を開く
-            # background + min-height: 読み込み前/失敗時に「ブランク」でなく薄グレーの枠を出す
-            f'<img src="{img_url}" data-lp-image="{_html.escape(img_url)}" loading="lazy" '
-            f'style="max-width:200px;min-height:80px;border-radius:10px;cursor:pointer;'
-            f'background:rgba(255,255,255,0.06);'
-            f'display:block;{"margin-bottom:6px" if body else ""}">'
+            # ★ <img> を直接出さず JS 管理のスロットにする。
+            #   2秒ポーリングで再描画されても、JS が「同じ画像ノードを移動させるだけ」で
+            #   再ロードしないためチカチカしない（fillImageSlots）。
+            #   data-lp-image: タップで全画面ビューア / 薄グレー枠 = 読込前プレースホルダー
+            f'<span class="lp-imgslot" data-img="{_html.escape(img_url)}" '
+            f'data-lp-image="{_html.escape(img_url)}" '
+            f'style="display:block;max-width:200px;min-height:80px;border-radius:10px;'
+            f'cursor:pointer;background:rgba(255,255,255,0.06);'
+            f'{"margin-bottom:6px" if body else ""}"></span>'
         ) if img_url else ""
         content = img_piece + body_esc
 

@@ -1364,7 +1364,8 @@
         if (!els[i]._danranLp) attach(els[i], els[i].getAttribute('data-lp-msg'));
       }
     } catch (e) {}
-    // チャット画像に直接タップハンドラを付与（デリゲーションより iOS で確実）
+    fillImageSlots();   // 画像スロットに永続 img を流し込む（再描画でも再ロードしない）
+    // チャット画像スロットに直接タップハンドラを付与（デリゲーションより iOS で確実）
     try {
       var imgs = window.parent.document.querySelectorAll('[data-lp-image]');
       for (var j = 0; j < imgs.length; j++) {
@@ -1985,6 +1986,32 @@
       if (btn) { btn.textContent = '📷'; btn.style.pointerEvents = ''; }
       showToast('❌ 送信失敗: ' + err.message.slice(0, 40));
     }
+  }
+
+  /* ════════════════════════════════════════
+   *  チャット画像スロット（.lp-imgslot）に永続 img を流し込む。
+   *  URL ごとに img ノードを1つだけ作ってプールし、再描画でスロットが作り直されても
+   *  「同じ img ノードを移動させるだけ」にする → 再ロード/レイアウトずれ＝チカチカを防ぐ。
+   * ════════════════════════════════════════ */
+  function fillImageSlots() {
+    try {
+      var pDoc = window.parent.document;
+      var pool = pDoc._danranImgPool || (pDoc._danranImgPool = {});
+      var slots = pDoc.querySelectorAll('.lp-imgslot');
+      for (var i = 0; i < slots.length; i++) {
+        var slot = slots[i];
+        var url = slot.getAttribute('data-img');
+        if (!url) continue;
+        var im = pool[url];
+        if (!im) {
+          im = pDoc.createElement('img');
+          im.src = url;
+          im.style.cssText = 'max-width:200px;border-radius:10px;display:block;';
+          pool[url] = im;
+        }
+        if (im.parentNode !== slot) { slot.appendChild(im); }  // 既存ノードを移動（再ロード無し）
+      }
+    } catch (e) {}
   }
 
   /* ════════════════════════════════════════

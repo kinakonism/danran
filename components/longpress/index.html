@@ -543,14 +543,15 @@
           } else {
             deleteMsg(msgId).then(function () {
               hidePopup();
-              // フェードアウト → DOM 即削除（リロードなし・暗転なし）
+              // ★ DOM からノードを remove() すると React(Streamlit) の再描画と競合して
+              //   NotFoundError になるため、構造は変えず display:none で隠すだけにする。
+              //   実体は次の rerun（poll が変化検知）で再描画され消える。
               try {
                 var msgEl = pDoc.querySelector('[data-lp-msg="' + msgId + '"]');
                 if (msgEl) {
-                  msgEl.style.transition = 'opacity 0.22s,transform 0.22s';
+                  msgEl.style.transition = 'opacity 0.2s';
                   msgEl.style.opacity    = '0';
-                  msgEl.style.transform  = 'scale(0.94)';
-                  setTimeout(function () { if (msgEl.parentNode) msgEl.remove(); }, 240);
+                  setTimeout(function () { try { msgEl.style.display = 'none'; } catch (e) {} }, 200);
                 }
               } catch (ex) {}
               showToast('🗑️ 削除しました');
@@ -1944,11 +1945,11 @@
       var t = pDoc.createElement('div');
       t.id = '_danran_toast';
       t.style.cssText =
-        'position:fixed;bottom:72px;left:50%;transform:translateX(-50%) translateY(0);' +
-        'background:rgba(232,145,91,0.96);color:#fff;padding:10px 22px;border-radius:22px;' +
-        'font-size:0.9rem;font-weight:600;z-index:9999;pointer-events:none;' +
-        'box-shadow:0 4px 18px rgba(0,0,0,0.45);white-space:nowrap;' +
-        'animation:_danranFadeIn 0.25s ease;';
+        'position:fixed;top:46%;left:50%;transform:translate(-50%,-50%);' +
+        'background:rgba(36,31,28,0.96);color:#fff;padding:12px 24px;border-radius:16px;' +
+        'font-size:0.95rem;font-weight:600;z-index:2147483600;pointer-events:none;' +
+        'box-shadow:0 8px 28px rgba(0,0,0,0.55);white-space:nowrap;max-width:80vw;' +
+        'text-align:center;opacity:0;transition:opacity 0.18s ease;';
       // animation keyframes（1回だけ注入）
       if (!pDoc.getElementById('_danran_toast_css')) {
         var ks = pDoc.createElement('style');
@@ -1963,6 +1964,8 @@
       //   タイマーが死んでトーストが残るため、期限を要素に持たせ scan() でも掃除する。
       t.setAttribute('data-toast-expire', String(Date.now() + duration));
       pDoc.body.appendChild(t);
+      // 入場フェードイン
+      window.parent.requestAnimationFrame(function () { t.style.opacity = '1'; });
       setTimeout(function () {
         t.style.transition = 'opacity 0.35s';
         t.style.opacity    = '0';
@@ -2318,36 +2321,24 @@
   function addOptimisticBubble(text) {
     try {
       var pDoc = window.parent.document, pWin = window.parent;
-      var msgs = pDoc.querySelectorAll('[data-lp-msg]');
-      // ★ React 管理の縦ブロックに兄弟ノードを差し込むと、rerun の React 再描画が
-      //   removeChild/insertBefore で破綻し NotFoundError になる。
-      //   バブル群と同じコンテナ（=st.markdown の innerHTML 一括置換される不透明領域）の
-      //   末尾に入れることで、再描画時はまるごと置換されるだけで安全。
-      //   メッセージが無い空ルームでは安全な親が無いので楽観バブルは出さない（rerun で即出る）。
-      if (!msgs.length) return;
-      var container = msgs[msgs.length - 1].parentElement;
-      if (!container) return;
-      var av = ME_AVATAR || '🙂';
-      var avHtml = (av.indexOf('http') === 0)
-        ? '<img src="' + av + '" style="width:40px;height:40px;border-radius:8px;object-fit:cover;flex-shrink:0;display:block">'
-        : '<span style="font-size:1.8rem;line-height:40px;display:block;width:40px;text-align:center;flex-shrink:0">' + av + '</span>';
+      // ★ React(Streamlit) 管理の DOM には一切手を加えない。
+      //   楽観バブルは body 直下の fixed 要素として出す（React 管理外＝再描画と衝突しない）。
+      //   入力欄の少し上に「送信中」バブルを浮かべ、本物が届いたら reconcileOptimistic で消す。
       var safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
       var wrap = pDoc.createElement('div');
       wrap.setAttribute('data-danran-opt', '1');
-      wrap.style.cssText = 'display:flex;justify-content:flex-end;align-items:flex-end;gap:8px;margin:4px 0 2px 48px';
+      wrap.style.cssText =
+        'position:fixed;right:10px;bottom:78px;z-index:2147483500;max-width:75vw;' +
+        'pointer-events:none;text-align:right;';
       wrap.innerHTML =
-        '<div style="text-align:right">' +
-          '<div class="_optstatus" style="font-size:0.7rem;color:#999;margin-bottom:3px">🕐 送信中…</div>' +
-          '<div class="_optbubble" style="background:#e8915b;opacity:0.5;color:#fff;border-radius:18px 18px 4px 18px;' +
-          'padding:10px 14px;display:inline-block;max-width:100%;text-align:left;word-break:break-word;font-size:0.93rem">' +
-          safe + '</div>' +
-        '</div>' + avHtml;
+        '<div class="_optstatus" style="font-size:0.66rem;color:rgba(240,232,224,0.55);margin-bottom:3px">🕐 送信中…</div>' +
+        '<div class="_optbubble" style="background:#e8915b;opacity:0.6;color:#fff;border-radius:18px 18px 4px 18px;' +
+        'padding:10px 14px;display:inline-block;max-width:100%;text-align:left;word-break:break-word;' +
+        'font-size:0.93rem;box-shadow:0 2px 10px rgba(0,0,0,0.35)">' + safe + '</div>';
       wrap._optText = text;
       wrap._optBase = countRealMine(text);
       wrap._optTime = Date.now();
-      container.appendChild(wrap);   // 不透明領域内に追加（再描画で安全に置換される）
-      try { pWin.scrollTo({ top: pDoc.body.scrollHeight, behavior: 'smooth' }); }
-      catch (e) { try { pWin.scrollTo(0, pDoc.body.scrollHeight); } catch (e2) {} }
+      pDoc.body.appendChild(wrap);
     } catch (e) {}
   }
 

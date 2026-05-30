@@ -619,7 +619,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v70",   # 楽観バブルをReact管理外(markdown内)へ→NotFoundErrorクラッシュ修正
+    "danran_lp_v71",   # トーストを画面中央に表示
     path=_LP_COMPONENT_DIR,
 )
 

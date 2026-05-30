@@ -587,6 +587,9 @@ def read_by_users(room: str, my_id: str, msg_created_iso: str) -> list[dict]:
             rdt = _p(r.get("read_at"))
             if rdt and rdt >= cdt and uid in users_by_id:
                 out.append(users_by_id[uid])
+        # ★ 順序を固定（user_id ソート）。並びが毎回変わると既読HTMLが変化し、
+        #   チャット全体(1つのst.markdown)が2秒ごとに再描画されて画像がチカチカするため。
+        out.sort(key=lambda u: u.get("id", ""))
         return out
     except Exception:
         return []

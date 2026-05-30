@@ -325,10 +325,12 @@ def delete_session(sid: str) -> None:
 
 def do_login(user: dict) -> None:
     sid = create_session(user["id"])
-    st.query_params[SESSION_PARAM]   = sid
+    # ★ セッションIDは URL に載せない（載せると URL 共有で他人がログイン状態になり
+    #   チャットが見えてしまう重大な穴になる）。復元は localStorage + restore_session 経由のみ。
     st.session_state["session_id"]   = sid
     st.session_state["current_user"] = {k: user.get(k, "") for k in ("id", "name", "avatar", "phone")}
     st.session_state["view"]         = "chat"
+    st.session_state.pop("_invite_ok", None)
 
 def do_logout() -> None:
     delete_session(st.session_state.pop("session_id", "") or "")
@@ -960,16 +962,36 @@ def _get_register_key() -> str:
         pass
     return os.environ.get("REGISTER_KEY", "")
 
+def _app_url() -> str:
+    """本番アプリ URL（末尾スラッシュ付き）。"""
+    try:
+        u = (st.secrets.get("app") or {}).get("url")
+    except Exception:
+        u = None
+    u = u or os.environ.get("APP_URL", "") or "https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/"
+    return u if u.endswith("/") else u + "/"
+
+def _invite_url() -> str:
+    """家族に共有する招待リンク。?invite=<招待コード> で登録画面に着地する。"""
+    rk = _get_register_key()
+    base = _app_url()
+    return f"{base}?invite={rk}" if rk else f"{base}?invite=1"
+
 def show_register() -> None:
     _, col, _ = st.columns([1, 2, 1])
     with col:
         st.markdown("<br>" * 2, unsafe_allow_html=True)
-        st.markdown("## 👋 新しいメンバー登録")
+        if st.session_state.get("_invite_ok"):
+            st.markdown("## 🏠 danran へようこそ！")
+            st.caption("家族から招待されました。アカウントを作成して参加しましょう。")
+        else:
+            st.markdown("## 👋 新しいメンバー登録")
         st.divider()
 
         # ── 招待コード認証（secrets に register_key が設定されている場合のみ） ──
+        #   招待リンク経由（_invite_ok）はコード検証済みなので入力をスキップ。
         req_key = _get_register_key()
-        if req_key:
+        if req_key and not st.session_state.get("_invite_ok"):
             entered_key = st.text_input(
                 "🔑 招待コード", type="password",
                 placeholder="管理者から受け取ったコードを入力",
@@ -1161,6 +1183,12 @@ def show_profile(current_user: dict) -> None:
         if st.button("🔔 通知設定", use_container_width=True, key="profile_to_notif"):
             st.session_state["view"] = "notifications"
             st.rerun()
+
+        # ── 家族を招待 ──
+        st.divider()
+        st.markdown("### 📨 家族を招待")
+        st.caption("このリンクを家族に送ると、サインアップ画面が開きます（チャットは登録するまで見えません）。")
+        st.code(_invite_url(), language=None)
 
         # ── ログアウト（2 段階確認） ──
         st.divider()
@@ -1946,16 +1974,30 @@ if "embed" in st.query_params:
     del st.query_params["embed"]
     st.rerun()
 
-# ① URL パラメータからのセッション復元
-#   JS コンポーネントが localStorage→?s= にリダイレクトした場合も同じ経路で処理される
-if "current_user" not in st.session_state:
-    _url_sid = st.query_params.get(SESSION_PARAM)
-    if _url_sid:
-        _url_user = get_session_user(_url_sid)
-        if _url_user:
-            st.session_state["current_user"] = _url_user
-            st.session_state["session_id"]   = _url_sid
-            st.session_state.setdefault("view", "chat")
+# ① セッション復元は localStorage 経由のみ（JS が restore_session を送る）。
+#   ★ 旧実装は ?s=SESSION_ID（URL）から自動ログインしていたが、URL を共有すると
+#     受け取った人が共有者としてログイン状態になりチャットが丸見えになる重大な穴だった。
+#     URL からのセッション復元は完全に廃止する。
+#   後方互換: 万一 URL に ?s= が残っていても無視し、痕跡を消す。
+if SESSION_PARAM in st.query_params:
+    try:
+        del st.query_params[SESSION_PARAM]
+    except Exception:
+        pass
+
+# ② 招待リンク: ?invite=<招待コード> で新規登録画面へ誘導（未ログイン時のみ）。
+#   コードが一致すれば登録画面で招待コード入力をスキップする（家族が手間なくサインアップ）。
+#   ★ 招待リンクはサインアップ画面に着地するだけ。ログインも、チャット表示もしない。
+if "current_user" not in st.session_state and "invite" in st.query_params:
+    _inv = st.query_params.get("invite") or ""
+    st.session_state["view"] = "register"
+    _rk = _get_register_key()
+    if _rk and _inv == _rk:
+        st.session_state["_invite_ok"] = True
+    try:
+        del st.query_params["invite"]
+    except Exception:
+        pass
 
 # ── DOM config 要素（JS コンポーネントが直接読む設定ストア）──
 # render イベントのタイミング問題を回避するため、
@@ -2215,7 +2257,9 @@ if isinstance(_lp_result, dict):
 # このタイミングで show_user_select() を呼ぶとログインフォームが一瞬表示される。
 # JS は streamlit:render を受信したら必ず restore_session を送るので
 # ここでは空画面を出してその到着を待つ。
-_waiting_for_js = (_lp_result is None and "current_user" not in st.session_state)
+# 招待リンクで register を表示する場合はスプラッシュを出さず即フォームを見せる
+_waiting_for_js = (_lp_result is None and "current_user" not in st.session_state
+                   and st.session_state.get("view") not in ("register",))
 if _waiting_for_js:
     # セッション復元待ちの間、意図的なスプラッシュを全画面で表示する。
     # （旧実装は #1a1a2e のベタ塗り div が全画面を覆えず「黒地に紺の四角」が

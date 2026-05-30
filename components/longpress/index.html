@@ -1896,18 +1896,22 @@
       // z-index はヘッダー(2147483647)より下＝ヘッダーは見えたまま、本文だけ隠す
       cover.style.cssText =
         'position:fixed;inset:0;z-index:2147483000;background:#1a1614;' +
-        'pointer-events:none;opacity:1;transition:opacity 0.18s ease;';
+        'pointer-events:none;opacity:1;transition:opacity 0.12s ease;';
       pDoc.body.appendChild(cover);
 
-      var until = Date.now() + 340;   // この間 裏で最下部へ寄せ続ける
+      // 高さが安定したら（＝描画完了したら）すぐカバーを外す。最大 320ms で打ち切り。
+      var startT = Date.now(), lastH = -1, stable = 0;
+      function reveal() {
+        cover.style.opacity = '0';
+        setTimeout(function () { if (cover.parentNode) cover.remove(); }, 140);
+      }
       (function settle() {
         try { pWin.scrollTo(0, pDoc.body.scrollHeight); } catch (e) {}
-        if (Date.now() < until) {
-          pWin.requestAnimationFrame(settle);
-        } else {
-          cover.style.opacity = '0';
-          setTimeout(function () { if (cover.parentNode) cover.remove(); }, 220);
-        }
+        var h = pDoc.body.scrollHeight;
+        if (h === lastH) { stable++; } else { stable = 0; lastH = h; }
+        var elapsed = Date.now() - startT;
+        if ((stable >= 2 && elapsed > 60) || elapsed > 320) { reveal(); }
+        else { pWin.requestAnimationFrame(settle); }
       })();
     } catch (e) {}
   }

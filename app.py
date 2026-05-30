@@ -588,7 +588,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v61",   # 入室時カバーで隠して最下部確定後にフェード（上がチラ見え→飛ぶを解消）
+    "danran_lp_v62",   # 入室カバーを高さ安定で即フェード（暗転短縮・最大320ms）
     path=_LP_COMPONENT_DIR,
 )
 

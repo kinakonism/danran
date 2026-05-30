@@ -618,7 +618,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v66",   # 画像をJS管理スロット化(再描画で再ロードしない)→チカチカ解消
+    "danran_lp_v67",   # 画像ビューア: 上スワイプでも閉じる（下と両対応）
     path=_LP_COMPONENT_DIR,
 )
 

@@ -1874,8 +1874,10 @@
       var cover = pDoc.createElement('div');
       cover.id = '_danran_enter_cover';
       cover.setAttribute('data-cover-expire', String(Date.now() + 2500));
+      // z-index はヘッダーと同値。body 末尾に追加するので DOM 順でヘッダーの上に来る
+      // → ヘッダーごと覆い、入室中のヘッダー中身の切り替わり(LINE で言う画面遷移)を隠す
       cover.style.cssText =
-        'position:fixed;inset:0;z-index:2147483000;background:#1a1614;' +
+        'position:fixed;inset:0;z-index:2147483647;background:#1a1614;' +
         'pointer-events:none;opacity:1;transition:opacity 0.14s ease;';
       pDoc.body.appendChild(cover);
     } catch (e) {}

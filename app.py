@@ -619,7 +619,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v72",   # 送信後に入力欄をblur（キーボードを閉じる）
+    "danran_lp_v73",   # 効かなかった送信後blurを撤去（iOSでキーボード閉じず）
     path=_LP_COMPONENT_DIR,
 )
 

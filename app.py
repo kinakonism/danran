@@ -658,7 +658,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v93",   # 下端で上スワイプ→🔁リロード（プルアップ更新）+ 画像ストール監視
+    "danran_lp_v94",   # プルアップ更新を passive 化（スクロール非ブロック）+ 実スクロール要素で最下部判定
     path=_LP_COMPONENT_DIR,
 )
 

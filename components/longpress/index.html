@@ -2007,8 +2007,25 @@
       var sr = pDoc._danranSR, view = pDoc._danranView;
       return !sr && (view === 'chat' || view === '' || view === undefined);
     }
+    // 実際にスクロールしている要素を特定（window でなくインナーコンテナのことがある）
+    function getScroller() {
+      var cands = [
+        pDoc.querySelector('section.main'),
+        pDoc.querySelector('[data-testid="stMain"]'),
+        pDoc.querySelector('[data-testid="stAppViewContainer"]'),
+        pDoc.scrollingElement, pDoc.documentElement,
+      ];
+      for (var i = 0; i < cands.length; i++) {
+        var el = cands[i];
+        if (el && el.scrollHeight > el.clientHeight + 4) return el;
+      }
+      return pDoc.scrollingElement || pDoc.documentElement;
+    }
     function atBottomNow() {
-      return (pDoc.body.scrollHeight - (pWin.scrollY + pWin.innerHeight)) < 18;
+      try {
+        var sc = getScroller();
+        return (sc.scrollHeight - (sc.scrollTop + sc.clientHeight)) < 14;
+      } catch (e) { return false; }
     }
     function ind() {
       var el = pDoc.getElementById('_danran_pull');
@@ -2036,19 +2053,20 @@
       if (!atBottom || e.touches.length !== 1) return;
       var dy = e.touches[0].clientY - sY;
       var dx = e.touches[0].clientX - sX;
-      if (dy < -8 && Math.abs(dy) > Math.abs(dx) + 4) {     // 下端でさらに上スワイプ
+      // ★ preventDefault は一切しない（passive）。スクロールを絶対にブロックしない。
+      //   下端で上に十分引いた時だけ 🔁 を出す。引きが浅い/横/下向きなら何もしない＝通常スクロール。
+      if (dy < -24 && Math.abs(dy) > Math.abs(dx) + 8 && atBottomNow()) {
         pulling = true;
-        dist = Math.min(-dy, 110);
+        dist = Math.min(-dy - 24, 110);
         var el = ind();
-        el.style.opacity = String(Math.min(dist / 70, 1));
+        el.style.opacity = String(Math.min(dist / 60, 1));
         el.style.transform = 'translateX(-50%) translateY(' + (-dist * 0.4) + 'px) rotate(' + Math.round(dist * 3) + 'deg)';
-        if (e.cancelable) e.preventDefault();              // 下端ラバーバンド抑止
-      } else if (pulling && dy >= -4) {
+      } else if (pulling) {
         pulling = false; dist = 0; hideInd();
       }
     };
     var onTe = function () {
-      if (pulling && dist > 60) {
+      if (pulling && dist > 50) {
         var el = ind();
         el.style.opacity = '1';
         el.style.transform = 'translateX(-50%)';
@@ -2062,7 +2080,7 @@
       pulling = false; atBottom = false; dist = 0;
     };
     pDoc.addEventListener('touchstart', onTs, { capture: true, passive: true });
-    pDoc.addEventListener('touchmove',  onTm, { capture: true, passive: false });
+    pDoc.addEventListener('touchmove',  onTm, { capture: true, passive: true });   // passive＝スクロール非ブロック
     pDoc.addEventListener('touchend',   onTe, { capture: true, passive: true });
     pDoc._danranPullReg = { ts: onTs, tm: onTm, te: onTe };
   }

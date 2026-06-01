@@ -1708,9 +1708,10 @@
         if (isEdit) { injectEditHeader(VIEW); } else { injectHeader(ACTIVE_ROOM, SHOW_ROOMS); }
       }
     } catch (e) {}
-    // 長押し検出・スワイプ戻りは委譲方式で「生きた iframe」に毎回貼り直す（死んだ iframe 対策）
+    // 長押し検出・スワイプ戻り・プルアップ更新は委譲方式で「生きた iframe」に毎回貼り直す
     try { setupLongPressDelegation(); } catch (e) {}
     try { setupSwipeBack(); } catch (e) {}
+    try { setupPullRefresh(); } catch (e) {}
     // 引用返信バー（入力欄の真上に固定描画・スクロール/キーボード追従）
     try { injectReplyBar(); } catch (e) {}
     fillImageSlots();   // 画像スロットに永続 img を流し込む（再描画でも再ロードしない）
@@ -1979,6 +1980,91 @@
     pDoc.addEventListener('click',      onCk, { capture: true });
     pDoc.addEventListener('visibilitychange', onVc);
     pDoc._danranSwipeReg = { ts: onTs, tm: onTm, te: onTe, tc: onTc, ck: onCk, vc: onVc };
+  }
+
+  /* ════════════════════════════════════════
+   *  下端で上スワイプ → リロード（プルアップ・リフレッシュ）。🔁 を表示。
+   *  最新メッセージ（これ以上下に行けない）状態でさらに上に引くと refresh_chat。
+   *  画像の取りこぼし等を手動で再読込できる。生きた iframe で毎 scan 貼り直す。
+   * ════════════════════════════════════════ */
+  function setupPullRefresh() {
+    var pDoc = window.parent.document, pWin = window.parent;
+    var prev = pDoc._danranPullReg;
+    if (prev) {
+      pDoc.removeEventListener('touchstart', prev.ts, true);
+      pDoc.removeEventListener('touchmove',  prev.tm, true);
+      pDoc.removeEventListener('touchend',   prev.te, true);
+    }
+    if (!pDoc.getElementById('_danran_spin_css')) {
+      var s = pDoc.createElement('style');
+      s.id = '_danran_spin_css';
+      s.textContent = '@keyframes _danranSpin{from{transform:translateX(-50%) rotate(0)}' +
+                      'to{transform:translateX(-50%) rotate(360deg)}}';
+      (pDoc.head || pDoc.body).appendChild(s);
+    }
+    var sY = 0, sX = 0, atBottom = false, pulling = false, dist = 0;
+    function isChat() {
+      var sr = pDoc._danranSR, view = pDoc._danranView;
+      return !sr && (view === 'chat' || view === '' || view === undefined);
+    }
+    function atBottomNow() {
+      return (pDoc.body.scrollHeight - (pWin.scrollY + pWin.innerHeight)) < 18;
+    }
+    function ind() {
+      var el = pDoc.getElementById('_danran_pull');
+      if (!el) {
+        el = pDoc.createElement('div');
+        el.id = '_danran_pull';
+        el.textContent = '🔁';
+        el.style.cssText =
+          'position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:9990;' +
+          'font-size:1.7rem;opacity:0;pointer-events:none;transition:opacity 0.1s;' +
+          'filter:drop-shadow(0 2px 6px rgba(0,0,0,0.55));';
+        pDoc.body.appendChild(el);
+      }
+      return el;
+    }
+    function hideInd() { var el = pDoc.getElementById('_danran_pull'); if (el) { el.style.opacity = '0'; el.style.animation = ''; } }
+    var onTs = function (e) {
+      pulling = false; dist = 0; atBottom = false;
+      if (!isChat() || e.touches.length !== 1) return;
+      if (pDoc.getElementById(IMG_VIEWER_ID)) return;
+      sY = e.touches[0].clientY; sX = e.touches[0].clientX;
+      atBottom = atBottomNow();
+    };
+    var onTm = function (e) {
+      if (!atBottom || e.touches.length !== 1) return;
+      var dy = e.touches[0].clientY - sY;
+      var dx = e.touches[0].clientX - sX;
+      if (dy < -8 && Math.abs(dy) > Math.abs(dx) + 4) {     // 下端でさらに上スワイプ
+        pulling = true;
+        dist = Math.min(-dy, 110);
+        var el = ind();
+        el.style.opacity = String(Math.min(dist / 70, 1));
+        el.style.transform = 'translateX(-50%) translateY(' + (-dist * 0.4) + 'px) rotate(' + Math.round(dist * 3) + 'deg)';
+        if (e.cancelable) e.preventDefault();              // 下端ラバーバンド抑止
+      } else if (pulling && dy >= -4) {
+        pulling = false; dist = 0; hideInd();
+      }
+    };
+    var onTe = function () {
+      if (pulling && dist > 60) {
+        var el = ind();
+        el.style.opacity = '1';
+        el.style.transform = 'translateX(-50%)';
+        el.style.animation = '_danranSpin 0.6s linear infinite';
+        sendNav({ action: 'refresh_chat', ts: Date.now() });
+        showToast('🔁 再読み込み中…');
+        setTimeout(hideInd, 1400);
+      } else {
+        hideInd();
+      }
+      pulling = false; atBottom = false; dist = 0;
+    };
+    pDoc.addEventListener('touchstart', onTs, { capture: true, passive: true });
+    pDoc.addEventListener('touchmove',  onTm, { capture: true, passive: false });
+    pDoc.addEventListener('touchend',   onTe, { capture: true, passive: true });
+    pDoc._danranPullReg = { ts: onTs, tm: onTm, te: onTe };
   }
 
   function setupObs() {
@@ -2682,17 +2768,23 @@
         if (!im) {
           im = pDoc.createElement('img');
           im.decoding = 'async';
-          // ★ 読み込み失敗（一時的なネットワーク等）時に最大3回まで再試行する。
-          //   「写真が1枚だけ表示されない」対策（クエリを足して確実に再リクエスト）。
+          // ★「写真が1枚だけ表示されない」対策：読み込み失敗(onerror)に加え、一定時間
+          //   ロードできない（ストール）場合も最大3回まで再リクエストする（クエリ付与）。
           (function (image, u) {
-            image.onerror = function () {
+            function retry() {
               var n = (image._danranTries || 0);
               if (n >= 3) return;
               image._danranTries = n + 1;
               setTimeout(function () {
                 try { image.src = u + (u.indexOf('?') >= 0 ? '&' : '?') + '_retry=' + Date.now(); } catch (e) {}
-              }, 700 * (n + 1));
-            };
+              }, 500 * (n + 1));
+            }
+            image.onerror = retry;
+            image.onload  = function () { image._danranLoaded = true; };
+            // ストール監視（4秒・初回のみ）：完了していなければ再試行
+            setTimeout(function () {
+              if (!image._danranLoaded && (!image.complete || image.naturalWidth === 0)) retry();
+            }, 4000);
           })(im, url);
           im.src = url;
           pool[url] = im;

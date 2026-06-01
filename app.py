@@ -229,6 +229,15 @@ def save_push_subscription(user_id: str, subscription_json: str) -> None:
         auth     = keys.get("auth", "")
         if not (endpoint and p256dh and auth):
             return
+        # ★ 1つの endpoint（＝その端末ブラウザ）は「今ログイン中のユーザー」専属にする。
+        #   同じ端末で別ユーザーにログインし直した時、前ユーザーの購読が残ると
+        #   その端末に「重複通知」や「前ユーザーの部屋の通知（誤配信）」が届くため、
+        #   同一 endpoint の他ユーザー行を削除してから upsert する。
+        try:
+            supabase.table("push_subscriptions").delete()\
+                .eq("endpoint", endpoint).neq("user_id", user_id).execute()
+        except Exception:
+            pass
         supabase.table("push_subscriptions").upsert(
             {"user_id": user_id, "endpoint": endpoint, "p256dh": p256dh, "auth": auth},
             on_conflict="user_id,endpoint",
@@ -344,6 +353,10 @@ def do_login(user: dict) -> None:
     st.session_state["current_user"] = {k: user.get(k, "") for k in ("id", "name", "avatar", "phone")}
     st.session_state["view"]         = "chat"
     st.session_state.pop("_invite_ok", None)
+    # ★ ログイン時に端末を購読し直す。別ユーザーで使った端末でも「今ログインした人」が
+    #   端末の現在のエンドポイントで購読し直すので、前ユーザーの古い購読が残って
+    #   通知が来ない/誤配信になるのを防ぐ（save_push_subscription が endpoint 専属化）。
+    st.session_state["_push_force_resubscribe"] = True
 
 def do_logout() -> None:
     delete_session(st.session_state.pop("session_id", "") or "")

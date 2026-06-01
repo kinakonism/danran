@@ -132,6 +132,19 @@ def invalidate_rooms_cache() -> None:
     """rooms キャッシュを破棄（更新・削除・メンバー変更後に必ず呼ぶ）。"""
     fetch_rooms.clear()
 
+# 無料枠の容量目安（Supabase 無料: ストレージ 1GB）。80% 超でルーム選択に警告。
+STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024   # 1 GB
+STORAGE_WARN_RATIO  = 0.8
+
+@st.cache_data(ttl=600)
+def fetch_storage_bytes() -> int:
+    """日次 pg_cron が更新する storage_stats から現在のストレージ使用量(byte)を読む。"""
+    try:
+        r = supabase.table("storage_stats").select("bytes").eq("id", 1).limit(1).execute().data
+        return int(r[0]["bytes"]) if r else 0
+    except Exception:
+        return 0
+
 # ─────────────────────────────────────
 # ルームメンバー（招待制）
 # ─────────────────────────────────────
@@ -1817,6 +1830,16 @@ def render_room_list() -> None:
     _all_room_names = [r["name"] for r in _all_rooms]
     selected_room   = st.session_state.get("active_room") or (_all_room_names[0] if _all_room_names else "")
     unread = get_unread_counts(current_user["id"], _all_room_names)
+
+    # ── ストレージ逼迫の警告（無料枠1GBの80%超）──
+    _sb = fetch_storage_bytes()
+    if _sb >= STORAGE_LIMIT_BYTES * STORAGE_WARN_RATIO:
+        _pct     = int(_sb / STORAGE_LIMIT_BYTES * 100)
+        _used_mb = _sb // (1024 * 1024)
+        st.warning(
+            f"📦 写真の保存容量が **{_pct}%**（{_used_mb}MB / 1024MB）になりました。"
+            "そろそろ古い写真を整理してください（無料枠は1GBまで）。"
+        )
 
     # ─ セクションラベルのスタイル（iOS Settings 風小文字グレー） ─
     _sec_label = (

@@ -624,7 +624,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v74",   # 削除を refresh_chat で DB から綺麗に再描画（別メッセージ消失を修正）
+    "danran_lp_v75",   # 連投画像を LINE 風コンパクトグリッドに（fillImageSlots に data-fit=cover 追加）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -687,12 +687,108 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
 
+    # ── リアクション pills 生成（通常バブル・連投グリッド両方で共用）──
+    def _build_pills(msg_reactions: dict) -> str:
+        pills = ""
+        for emoji in REACTION_EMOJIS:
+            users = msg_reactions.get(emoji, [])
+            if users:
+                my  = uname in users
+                bg  = "rgba(232,145,91,0.32)" if my else "rgba(255,255,255,0.08)"
+                bdr = "rgba(240,168,104,0.9)" if my else "rgba(255,255,255,0.2)"
+                pills += (
+                    f'<span style="display:inline-flex;align-items:center;gap:2px;'
+                    f'background:{bg};border:1px solid {bdr};border-radius:20px;'
+                    f'padding:1px 7px;font-size:0.8rem;margin-right:3px">'
+                    f'{emoji}&nbsp;{len(users)}</span>'
+                )
+        return pills
+
+    # ── 連投画像のグルーピング（LINE 風コンパクトグリッド）──
+    #   同一送信者・画像のみ（本文なし）・直前から WINDOW 秒以内 のメッセージが
+    #   2件以上連続したら、1つのグリッドバブルにまとめて描画する。
+    #   各セルは個別の data-lp-msg を保持するので長押し削除・タップ全画面は従来どおり動く。
+    def _ts_sec(s: str) -> float:
+        if not s:
+            return 0.0
+        try:
+            from datetime import datetime as _DT
+            return _DT.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    _IMG_GROUP_WINDOW = 600  # 秒（10分以内の連投をまとめる）
+    def _is_img_only(m: dict) -> bool:
+        return bool(m.get("image_url")) and not (m.get("content") or "").strip()
+    def _same_sender(a: dict, b: dict) -> bool:
+        if a.get("user_id") and b.get("user_id"):
+            return a["user_id"] == b["user_id"]
+        return a.get("user_name") == b.get("user_name")
+
+    _group_start: dict[int, list] = {}  # 開始index -> [msg,...]（len>=2 のみ）
+    _skip: set[int] = set()             # グループ2件目以降（個別描画しない）
+    _gi = 0
+    _n = len(messages)
+    while _gi < _n:
+        _m = messages[_gi]
+        if _is_img_only(_m):
+            _run = [_m]
+            _gj = _gi + 1
+            while _gj < _n:
+                _x = messages[_gj]
+                if (_is_img_only(_x) and _same_sender(_x, _m)
+                        and abs(_ts_sec(_x.get("created_at", "")) -
+                                _ts_sec(_run[-1].get("created_at", ""))) <= _IMG_GROUP_WINDOW):
+                    _run.append(_x)
+                    _gj += 1
+                else:
+                    break
+            if len(_run) >= 2:
+                _group_start[_gi] = _run
+                for _k in range(_gi + 1, _gj):
+                    _skip.add(_k)
+            _gi = _gj
+        else:
+            _gi += 1
+
+    # ── 連投グリッド HTML（各セル = 正方形・object-fit:cover・個別 data-lp-msg）──
+    def _img_grid_html(run: list, is_mine: bool) -> str:
+        n = len(run)
+        cols = 2 if n in (2, 4) else (3 if n >= 3 else 1)
+        cells = ""
+        for im in run:
+            u   = im.get("image_url") or ""
+            mid = im.get("id", "")
+            pills = _build_pills(all_reactions.get(mid, {}))
+            overlay = (
+                f'<div data-lp-react="{mid}" style="position:absolute;left:3px;bottom:3px;'
+                f'z-index:1;pointer-events:none;line-height:1;display:flex;flex-wrap:wrap;'
+                f'gap:2px">{pills}</div>'
+            )
+            mine_attr = ' data-lp-mine="1"' if is_mine else ''
+            cells += (
+                f'<span class="lp-imgslot" data-fit="cover" '
+                f'data-img="{_html.escape(u)}" data-lp-image="{_html.escape(u)}" '
+                f'data-lp-msg="{mid}"{mine_attr} '
+                f'style="position:relative;display:block;width:100%;aspect-ratio:1/1;'
+                f'background:rgba(255,255,255,0.06);cursor:pointer;overflow:hidden">'
+                f'{overlay}</span>'
+            )
+        return (
+            f'<div style="display:grid;grid-template-columns:repeat({cols},1fr);'
+            f'gap:3px;width:210px;max-width:72vw;border-radius:12px;overflow:hidden;'
+            f'{"margin-left:auto" if is_mine else ""}">{cells}</div>'
+        )
+
     # メッセージごとに st.markdown を呼ぶと 2 秒ポーリングのたびに N 個の Streamlit
     # 要素を生成・差分計算してもっさり/ちらつきの原因になる。
     # バブル HTML をリストに溜めてループ後に 1 回だけ描画する。
     _bubbles: list[str] = []
-    _last_mine_i = None    # 自分の最新メッセージの位置（軽い既読表示用）
+    _last_mine_bidx = None   # _bubbles 内の自分の最新バブル位置（軽い既読表示用）
+    _last_mine_created = ""  # その既読判定に使う created_at
     for _mi, msg in enumerate(messages):
+        if _mi in _skip:
+            continue   # 連投グリッドにまとめ済み
         msg_id   = msg.get("id",          "")
         sender   = msg.get("user_name",  "不明")
         msg_uid  = msg.get("user_id",    "")
@@ -702,12 +798,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         img_url  = msg.get("image_url")
         # user_id があればIDで判定（名前変更後も正しく動く）、なければ名前フォールバック
         is_mine  = (msg_uid == my_id) if (msg_uid and my_id) else (sender == uname)
-        if is_mine:
-            _last_mine_i = _mi
 
-        msg_reactions = all_reactions.get(msg_id, {})
-
-        # ── アバター HTML ──
+        # ── アバター HTML（他人用・自分用）──
         av_html = (
             f'<img src="{avatar}" style="width:40px;height:40px;border-radius:8px;'
             f'object-fit:cover;flex-shrink:0;display:block">'
@@ -715,6 +807,51 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             else f'<span style="font-size:1.8rem;line-height:40px;display:block;'
                  f'width:40px;text-align:center;flex-shrink:0">{avatar}</span>'
         )
+        mine_av_html = (
+            f'<img data-lp-my-avatar="1" src="{avatar}" '
+            f'style="width:40px;height:40px;border-radius:8px;'
+            f'object-fit:cover;flex-shrink:0;display:block;cursor:pointer">'
+            if avatar.startswith("http")
+            else f'<span data-lp-my-avatar="1" '
+                 f'style="font-size:1.8rem;line-height:40px;display:block;'
+                 f'width:40px;text-align:center;flex-shrink:0;cursor:pointer">{avatar}</span>'
+        )
+
+        # ── 連投画像グループ → コンパクトグリッドバブル ──
+        _grp = _group_start.get(_mi)
+        if is_mine:
+            _last_mine_bidx    = len(_bubbles)   # このバブルが入る位置
+            _last_mine_created = (_grp[-1] if _grp else msg).get("created_at", "")
+        if _grp:
+            grid_html = _img_grid_html(_grp, is_mine)
+            _last_ts  = _grp[-1].get("created_at", "")
+            if is_mine:
+                bubble = (
+                    f'<div style="display:flex;justify-content:flex-end;align-items:flex-start;'
+                    f'gap:8px;margin:4px 0 2px 48px">'
+                    f'<div style="text-align:right">'
+                    f'<div style="font-size:0.7rem;color:#888;margin-bottom:3px">{fmt_ts(_last_ts)}</div>'
+                    f'{grid_html}'
+                    f'</div>'
+                    f'{mine_av_html}'
+                    f'</div>'
+                )
+            else:
+                bubble = (
+                    f'<div style="display:flex;align-items:flex-start;gap:8px;margin:4px 0 2px 0">'
+                    f'{av_html}'
+                    f'<div>'
+                    f'<div style="font-size:0.75rem;color:#9a9a9a;font-weight:600;'
+                    f'margin-bottom:3px">{sender}</div>'
+                    f'{grid_html}'
+                    f'<div style="font-size:0.7rem;color:#888;margin-top:3px">{fmt_ts(_last_ts)}</div>'
+                    f'</div>'
+                    f'</div>'
+                )
+            _bubbles.append(bubble)
+            continue
+
+        msg_reactions = all_reactions.get(msg_id, {})
 
         # ── 本文・画像 HTML ──（URL はリンク化。エスケープは linkify_body 内で実施）
         body_esc  = linkify_body(body)
@@ -733,19 +870,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         content = img_piece + body_esc
 
         # ── リアクション pills ──
-        pills = ""
-        for emoji in REACTION_EMOJIS:
-            users = msg_reactions.get(emoji, [])
-            if users:
-                my  = uname in users
-                bg  = "rgba(232,145,91,0.32)" if my else "rgba(255,255,255,0.08)"
-                bdr = "rgba(240,168,104,0.9)" if my else "rgba(255,255,255,0.2)"
-                pills += (
-                    f'<span style="display:inline-flex;align-items:center;gap:2px;'
-                    f'background:{bg};border:1px solid {bdr};border-radius:20px;'
-                    f'padding:1px 7px;font-size:0.8rem;margin-right:3px">'
-                    f'{emoji}&nbsp;{len(users)}</span>'
-                )
+        pills = _build_pills(msg_reactions)
         # data-lp-react: JS がリアルタイムで書き換えるためのコンテナ（常に出力）
         pills_row = (
             f'<div data-lp-react="{msg_id}" style="margin-top:4px;text-align:{"right" if is_mine else "left"};'
@@ -756,15 +881,6 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         # data-lp-mine="1"   → JS が「自分のメッセージ」と判別して削除ボタン表示
         # data-lp-my-avatar  → JS が「自分のアバター」と判別してタップでプロフィール遷移
         if is_mine:
-            mine_av_html = (
-                f'<img data-lp-my-avatar="1" src="{avatar}" '
-                f'style="width:40px;height:40px;border-radius:8px;'
-                f'object-fit:cover;flex-shrink:0;display:block;cursor:pointer">'
-                if avatar.startswith("http")
-                else f'<span data-lp-my-avatar="1" '
-                     f'style="font-size:1.8rem;line-height:40px;display:block;'
-                     f'width:40px;text-align:center;flex-shrink:0;cursor:pointer">{avatar}</span>'
-            )
             # 画像のみなら透明バブル（緑背景・パディング不要）
             _mine_bstyle = (
                 'background:transparent;padding:0;border-radius:0'
@@ -813,8 +929,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         _bubbles.append(bubble)
 
     # ── 軽い既読表示（自分の最新メッセージにだけ・既読した人だけ・圧をかけない）──
-    if _last_mine_i is not None and my_id:
-        _readers = read_by_users(selected_room, my_id, messages[_last_mine_i].get("created_at", ""))
+    if _last_mine_bidx is not None and my_id:
+        _readers = read_by_users(selected_room, my_id, _last_mine_created)
         if _readers:
             _avs = ""
             for _u in _readers[:5]:
@@ -824,7 +940,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                              f'border-radius:50%;object-fit:cover;margin-left:2px">')
                 else:
                     _avs += f'<span style="font-size:0.78rem;margin-left:2px">{_html.escape(_ua)}</span>'
-            _bubbles[_last_mine_i] += (
+            _bubbles[_last_mine_bidx] += (
                 f'<div style="text-align:right;margin:0 48px 6px 0;font-size:0.66rem;'
                 f'color:rgba(240,232,224,0.45);display:flex;justify-content:flex-end;'
                 f'align-items:center;gap:1px">既読 {len(_readers)}{_avs}</div>'

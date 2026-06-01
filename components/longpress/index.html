@@ -1871,13 +1871,14 @@
 
       // 非表示 file input
       var fileInput = pDoc.createElement('input');
-      fileInput.type   = 'file';
-      fileInput.accept = 'image/*';
-      fileInput.id     = CAM_FILE_ID;
+      fileInput.type     = 'file';
+      fileInput.accept   = 'image/*';
+      fileInput.multiple = true;   // ★ LINE 風: 複数選択して一気に送信
+      fileInput.id       = CAM_FILE_ID;
       fileInput.style.display = 'none';
       fileInput.addEventListener('change', function () {
-        var file = fileInput.files && fileInput.files[0];
-        if (file) handleImageUpload(file, room, avatar);
+        var files = fileInput.files;
+        if (files && files.length) handleImageUpload(files, room, avatar);
         fileInput.value = '';
       });
       pDoc.body.appendChild(fileInput);
@@ -2081,46 +2082,69 @@
     } catch (e) {}
   }
 
-  async function handleImageUpload(file, room, avatar) {
-    var btn = window.parent.document.getElementById(CAM_BTN_ID);
-    if (btn) { btn.textContent = '⏳'; btn.style.pointerEvents = 'none'; }
-    try {
-      var ext     = (file.name.split('.').pop() || 'jpg').toLowerCase();
-      var objName = Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
-      var uploadResp = await fetch(
-        SB_URL + '/storage/v1/object/' + CHAT_IMG_BUCKET + '/' + objName,
-        {
-          method: 'POST',
-          headers: {
-            'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY,
-            'Content-Type': file.type || 'image/jpeg', 'x-upsert': 'true',
-            // 長期キャッシュ（再描画時のブランク/再取得を減らす）
-            'cache-control': 'max-age=31536000',
-          },
-          body: file,
-        }
-      );
-      if (!uploadResp.ok) {
-        var et = await uploadResp.text();
-        throw new Error('Upload ' + uploadResp.status + ': ' + et.slice(0, 120));
+  // 1枚アップロード＋messages挿入（btn/トーストは呼び出し側が管理）
+  async function uploadOneImage(file, room, avatar) {
+    var ext     = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    var objName = Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+    var uploadResp = await fetch(
+      SB_URL + '/storage/v1/object/' + CHAT_IMG_BUCKET + '/' + objName,
+      {
+        method: 'POST',
+        headers: {
+          'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY,
+          'Content-Type': file.type || 'image/jpeg', 'x-upsert': 'true',
+          // 長期キャッシュ（再描画時のブランク/再取得を減らす）
+          'cache-control': 'max-age=31536000',
+        },
+        body: file,
       }
-      var imageUrl = SB_URL + '/storage/v1/object/public/' + CHAT_IMG_BUCKET + '/' + objName;
-      var insertResp = await sbPost('messages', {
-        // ★ user_id を必ず入れる（削除は user_id 認可のため、無いと画像が消せない）
-        room_name: room, user_id: ME_UID, user_name: ME, user_avatar: avatar,
-        content: '', image_url: imageUrl,
-      });
-      if (!insertResp.ok) throw new Error('Insert ' + insertResp.status);
+    );
+    if (!uploadResp.ok) {
+      var et = await uploadResp.text();
+      throw new Error('Upload ' + uploadResp.status + ': ' + et.slice(0, 120));
+    }
+    var imageUrl = SB_URL + '/storage/v1/object/public/' + CHAT_IMG_BUCKET + '/' + objName;
+    var insertResp = await sbPost('messages', {
+      // ★ user_id を必ず入れる（削除は user_id 認可のため、無いと画像が消せない）
+      room_name: room, user_id: ME_UID, user_name: ME, user_avatar: avatar,
+      content: '', image_url: imageUrl,
+    });
+    if (!insertResp.ok) throw new Error('Insert ' + insertResp.status);
+  }
 
+  // 複数ファイルを「選択順＝表示順」を保つため順番にアップロード。
+  //   連投扱いになるので build_messages_html がコンパクトグリッドにまとめてくれる。
+  //   単一 File でも FileList/配列でも受ける（後方互換）。
+  async function handleImageUpload(files, room, avatar) {
+    if (!files) return;
+    if (files.name && files.length === undefined) files = [files];   // 単一 File 互換
+    var list = Array.prototype.slice.call(files);
+    if (!list.length) return;
+    var btn = window.parent.document.getElementById(CAM_BTN_ID);
+    var total = list.length, done = 0, failed = 0;
+    if (btn) {
+      btn.style.pointerEvents = 'none';
+      btn.style.fontSize = total > 1 ? '0.72rem' : '';
+      btn.textContent = total > 1 ? ('0/' + total) : '⏳';
+    }
+    for (var i = 0; i < list.length; i++) {
+      try {
+        await uploadOneImage(list[i], room, avatar);
+        done++;
+      } catch (err) {
+        console.error('[danran-cam] upload error:', err);
+        failed++;
+      }
+      if (btn && total > 1) btn.textContent = (done + failed) + '/' + total;
+    }
+    if (btn) { btn.style.fontSize = ''; btn.style.pointerEvents = ''; }
+    if (failed === 0) {
       // ✅ 成功トースト → リロードなし（5秒フラグメントが自動反映）
-      showToast('📷 写真を送信しました！');
-      if (btn) { btn.textContent = '✅'; btn.style.pointerEvents = ''; }
-      setTimeout(function () { if (btn) btn.textContent = '📷'; }, 2500);
-
-    } catch (err) {
-      console.error('[danran-cam] upload error:', err);
-      if (btn) { btn.textContent = '📷'; btn.style.pointerEvents = ''; }
-      showToast('❌ 送信失敗: ' + err.message.slice(0, 40));
+      showToast(total > 1 ? ('📷 ' + total + '枚送信しました！') : '📷 写真を送信しました！');
+      if (btn) { btn.textContent = '✅'; setTimeout(function () { if (btn) btn.textContent = '📷'; }, 2500); }
+    } else {
+      showToast('❌ ' + failed + '枚送信失敗' + (done ? '（' + done + '枚成功）' : ''));
+      if (btn) btn.textContent = '📷';
     }
   }
 
@@ -2142,8 +2166,15 @@
         if (!im) {
           im = pDoc.createElement('img');
           im.src = url;
-          im.style.cssText = 'max-width:200px;border-radius:10px;display:block;';
           pool[url] = im;
+        }
+        // スロットの data-fit に応じてスタイル適用（cover=連投グリッドの正方形セル / natural=単体画像）
+        var fit = slot.getAttribute('data-fit') === 'cover' ? 'cover' : 'natural';
+        if (im._danranFit !== fit) {
+          im.style.cssText = (fit === 'cover')
+            ? 'width:100%;height:100%;object-fit:cover;display:block;'
+            : 'max-width:200px;border-radius:10px;display:block;';
+          im._danranFit = fit;
         }
         if (im.parentNode !== slot) { slot.appendChild(im); }  // 既存ノードを移動（再ロード無し）
       }

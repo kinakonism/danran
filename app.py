@@ -984,7 +984,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         _emoji_only, _emoji_n = _emoji_only_info(body)
         _big_emoji = (_emoji_only and 1 <= _emoji_n <= 3
                       and not img_url and not msg.get("reply_to_id"))
-        _content_fs = ("3.8rem" if _emoji_n == 1 else "2.4rem") if _big_emoji else "0.93rem"
+        _content_fs = ("5.5rem" if _emoji_n == 1 else "3.4rem") if _big_emoji else "0.93rem"
 
         # ── リアクション pills ──
         pills = _build_pills(msg_reactions)

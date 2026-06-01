@@ -632,7 +632,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v81",   # 引用バーを入力欄上に固定追従 + 引用タップで元へジャンプ&強調 + 写真サムネ引用
+    "danran_lp_v82",   # ジャンプ強調を左右シェイクに + ポップアップ折返し + 返信/Copy/削除をテキストラベル化
     path=_LP_COMPONENT_DIR,
 )
 

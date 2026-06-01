@@ -544,20 +544,25 @@
       pop.style.cssText =
         'position:fixed;z-index:2147483647;top:' + topPx + 'px;left:50%;transform:translateX(-50%);' +
         'background:#241f1c;border:1px solid rgba(255,255,255,0.13);border-radius:18px;' +
-        'padding:8px 10px;display:flex;align-items:center;gap:5px;' +
-        'box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;white-space:nowrap;';
+        'padding:8px 10px;display:flex;align-items:center;justify-content:center;gap:5px;' +
+        'flex-wrap:wrap;max-width:min(92vw,430px);' +   // 内容が多いとき折り返す
+        'box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
 
       function makeSep() {
         var s = pDoc.createElement('span');
         s.style.cssText = 'width:1px;height:24px;background:rgba(255,255,255,0.15);flex-shrink:0;margin:0 2px;';
         return s;
       }
-      function makeBtn(label, onClick) {
+      // isText=true → テキストラベル用（返信/Copy/削除）。絵文字リアクションと区別する。
+      function makeBtn(label, onClick, isText) {
         var b = pDoc.createElement('button');
         b.textContent = label;
-        b.style.cssText =
-          'background:none;border:none;font-size:1.5rem;cursor:pointer;padding:3px 4px;' +
-          'border-radius:10px;line-height:1;-webkit-tap-highlight-color:transparent;transition:transform 0.12s;';
+        b.style.cssText = isText
+          ? 'background:rgba(255,255,255,0.08);border:none;color:#f0e8e0;font-size:0.9rem;' +
+            'font-weight:600;cursor:pointer;padding:6px 13px;border-radius:12px;line-height:1;' +
+            'white-space:nowrap;-webkit-tap-highlight-color:transparent;transition:transform 0.12s;'
+          : 'background:none;border:none;font-size:1.5rem;cursor:pointer;padding:3px 4px;' +
+            'border-radius:10px;line-height:1;-webkit-tap-highlight-color:transparent;transition:transform 0.12s;';
         b.addEventListener('click', function (e) { e.stopPropagation(); onClick(b); });
         b.addEventListener('touchend', function (e) { e.stopPropagation(); }, { passive: true });
         return b;
@@ -575,14 +580,15 @@
         pop.appendChild(makeSep());
       }
 
-      // 自分のメッセージ → 削除のみ（絵文字なし）
+      // 自分のメッセージ → 削除のみ（テキストラベル・2段階確認）
       if (isMine) {
         var delStage = 0;
-        pop.appendChild(makeBtn('🗑️', function (b) {
+        pop.appendChild(makeBtn('削除', function (b) {
           if (!delStage) {
             delStage = 1;
-            b.textContent = '✓ 削除';
-            b.style.cssText += ';color:#ff4d4d;font-size:0.82rem;background:rgba(255,77,77,0.15);padding:4px 9px;';
+            b.textContent = '本当に削除';
+            b.style.color = '#ff4d4d';
+            b.style.background = 'rgba(255,77,77,0.18)';
           } else {
             deleteMsg(msgId).then(function (res) {
               hidePopup();
@@ -613,24 +619,24 @@
               sendNav({ action: 'refresh_chat', ts: Date.now() });
             });
           }
-        }));
+        }, true));
         pop.appendChild(makeSep());
       }
 
-      // ↩︎ リプライ（全メッセージ）
-      pop.appendChild(makeBtn('↩︎', function () {
+      // 返信（全メッセージ・テキストラベル）
+      pop.appendChild(makeBtn('返信', function () {
         hidePopup();
         startReply(el);
-      }));
+      }, true));
       pop.appendChild(makeSep());
 
-      // 📋 コピー（テキストがあるメッセージのみ）
+      // Copy（テキストがあるメッセージのみ）
       var bodyText = el.getAttribute('data-lp-body') || '';
       if (bodyText.trim()) {
-        pop.appendChild(makeBtn('📋', function () {
+        pop.appendChild(makeBtn('Copy', function () {
           copyText(bodyText);
           hidePopup();
-        }));
+        }, true));
         pop.appendChild(makeSep());
       }
 
@@ -2199,21 +2205,27 @@
         var s = pDoc.createElement('style');
         s.id = '_danran_jump_css';
         s.textContent =
+          // 左右に2往復ほど揺れる（ぷるぷる）
           '@keyframes danranJumpPulse{' +
-          '0%{box-shadow:0 0 0 0 rgba(240,168,104,0)}' +
-          '15%{box-shadow:0 0 0 4px rgba(240,168,104,0.9)}' +
-          '30%{box-shadow:0 0 0 0 rgba(240,168,104,0)}' +
-          '45%{box-shadow:0 0 0 4px rgba(240,168,104,0.9)}' +
-          '60%{box-shadow:0 0 0 0 rgba(240,168,104,0)}' +
-          '100%{box-shadow:0 0 0 0 rgba(240,168,104,0)}}';
+          '0%{transform:translateX(0)}' +
+          '12%{transform:translateX(-9px)}' +
+          '28%{transform:translateX(9px)}' +
+          '44%{transform:translateX(-7px)}' +
+          '60%{transform:translateX(6px)}' +
+          '78%{transform:translateX(-3px)}' +
+          '100%{transform:translateX(0)}}';
         (pDoc.head || pDoc.body).appendChild(s);
       }
       var target = pDoc.querySelector('[data-lp-msg="' + id + '"]');
       if (!target) { showToast('元のメッセージは見つかりませんでした'); return; }
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      target.style.borderRadius = target.style.borderRadius || '12px';
-      target.style.animation = 'danranJumpPulse 1.1s ease';
-      setTimeout(function () { try { target.style.animation = ''; } catch (e) {} }, 1250);
+      // スクロール完了後に揺らす（即時だと画面外で揺れて見えないことがある）
+      setTimeout(function () {
+        try {
+          target.style.animation = 'danranJumpPulse 0.6s ease';
+          setTimeout(function () { try { target.style.animation = ''; } catch (e) {} }, 700);
+        } catch (e) {}
+      }, 320);
     } catch (e) {}
   }
 

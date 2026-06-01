@@ -1424,9 +1424,9 @@ def _reset_room_edit_widgets() -> None:
     """ルーム編集画面を開くたびにウィジェット状態をリセットする。"""
     for k in _ROOM_EDIT_WIDGET_KEYS:
         st.session_state.pop(k, None)
-    # 削除確認フラグもクリア
+    # 削除確認フラグ（ルーム削除・メンバー削除）もクリア
     for k in list(st.session_state.keys()):
-        if k.startswith("room_delete_confirm_"):
+        if k.startswith("room_delete_confirm_") or k.startswith("_rm_member_confirm_"):
             st.session_state.pop(k, None)
 
 def show_room_edit(room: dict) -> None:
@@ -1543,18 +1543,34 @@ def show_room_edit(room: dict) -> None:
         _member_ids = {m["id"] for m in _members}
         st.caption(f"このルームに参加しているメンバー（{len(_members)}人）")
         for m in _members:
+            _av = m.get("avatar", "🙂")
+            _icon = "🖼️" if _av.startswith("http") else _av
+            _rm_key = f"_rm_member_confirm_{m['id']}"
+            # 確認中（✕ を押した後）→ 本当に外すか はい/いいえ
+            if st.session_state.get(_rm_key):
+                st.warning(f"{_icon}　**{m['name']}** さんをこのルームから外しますか？")
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    if st.button("いいえ", use_container_width=True, key=f"rm_no_{m['id']}"):
+                        st.session_state.pop(_rm_key, None)
+                        st.rerun()
+                with rc2:
+                    if st.button("はい、外す", type="primary", use_container_width=True,
+                                 key=f"rm_yes_{m['id']}"):
+                        remove_room_member(room_id, m["id"])
+                        st.session_state.pop(_rm_key, None)
+                        st.toast(f"{m['name']} さんを外しました", icon="👋")
+                        st.rerun()
+                continue
             mc1, mc2 = st.columns([6, 1])
             with mc1:
-                _av = m.get("avatar", "🙂")
-                _icon = "🖼️" if _av.startswith("http") else _av
                 _suffix = "　（あなた）" if m["id"] == _me_id else ""
                 st.markdown(f"{_icon}　**{m['name']}**{_suffix}")
             with mc2:
                 # 自分以外は外せる（自分を外すと自分がルームを見られなくなるため不可）
                 if m["id"] != _me_id:
                     if st.button("✕", key=f"rm_member_{m['id']}", help="このメンバーを外す"):
-                        remove_room_member(room_id, m["id"])
-                        st.toast(f"{m['name']} さんを外しました", icon="👋")
+                        st.session_state[_rm_key] = True   # まず確認を表示
                         st.rerun()
 
         # 追加候補（まだ参加していないユーザー）

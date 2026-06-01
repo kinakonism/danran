@@ -57,12 +57,20 @@ chat（チャット）⇄ ルーム選択（_show_rooms=True で同一 view 内�
 
 ### セッション管理
 
-- ログイン時: `sessions` テーブルに INSERT → `?s=SESSION_ID` をURLにセット
-- ブラウザ復元: JS が localStorage → stSetValue(restore_session) → Python が `get_session_user()` で復元
-- ログアウト: `sessions` レコード削除 + localStorage クリア。**プロフィール画面下部のボタンから「本当にログアウトしますか？→ いいえ/はい」の2段階確認**（`_logout_confirm` session_state）。誤操作防止のためルーム選択画面には置かない。
-- **セッション TTL**: pg_cron `danran-session-cleanup`（毎朝4時）で30日以上前の `sessions` を削除。
-- **Render 1 フラッシュ防止**: `_lp_result is None` かつ未ログイン時は空白画面を表示しログインフォームを出さない。JS が必ず restore_session を送るので Render 2 以降で正しい画面に遷移。
-- **ログアウト後の blank screen 防止**: JS `handleSession(clearSession=true)` 時に `_sessionRestoreSent=false` なら `restore_session(session_id='')` を送って Python の `_waiting_for_js` デッドロックを解除する。
+- ログイン時: `sessions` テーブルに INSERT → セッションIDは **session_state のみ**に保持し、JS が localStorage に保存。
+- ブラウザ復元: JS が localStorage → stSetValue(restore_session) → Python が `get_session_user()` で復元。**同一端末のみ**。
+- **★ セキュリティ: セッションIDを URL（`?s=`）に絶対に載せない。** 旧実装は `do_login` が `?s=SESSION_ID` を付け、読込時にそれで自動ログインしていたため、**URL を共有すると受け取った人が共有者としてログイン状態になりチャットが丸見え**になる重大な穴だった。URL からのセッション復元は完全廃止（残存 `?s=` は無視して消す）。
+- **無効/漏洩セッションの自己修復**: `restore_session` で `get_session_user()` が None のとき `_clear_session=True` にして JS に localStorage を消させる（古い/漏洩SIDを送り続けない）。
+- ログアウト: `sessions` レコード削除 + localStorage クリア。**プロフィール画面下部のボタンから「本当にログアウトしますか？→ いいえ/はい」の2段階確認**（`_logout_confirm`）。誤操作防止のためルーム選択画面には置かない。
+- **セッション TTL**: pg_cron `danran-session-cleanup`（毎朝4時）で30日以上前の `sessions` を削除。漏洩時の緊急対応は `DELETE FROM sessions`（全失効＝全員1回再ログイン）。
+- **Render 1 フラッシュ防止**: `_lp_result is None` かつ未ログイン時は空白画面（🏠スプラッシュ）を表示。JS が必ず restore_session を送るので Render 2 以降で正しい画面に遷移。`view=="register"`（招待リンク）時はスプラッシュをスキップして即フォーム。
+- **ログアウト後の blank screen 防止**: JS `handleSession(clearSession=true)` 時に `_sessionRestoreSent=false` なら `restore_session(session_id='')` を送って `_waiting_for_js` デッドロックを解除。
+
+### 招待リンク（家族のサインアップ導線）
+
+- `?invite=<招待コード>` で**未ログイン時に登録画面へ着地**（ログインもチャット表示もしない）。コードが `register_key` と一致すれば登録画面のコード入力をスキップ（`_invite_ok`）。
+- プロフィール画面「📨 家族を招待」で `_invite_url()` を `st.code`（ワンタップコピー）。`_invite_url()` = `{_app_url()}?invite={register_key}`。
+- 配布フロー: プロフィールで招待リンクをコピー → 家族に送る → サインアップ画面 → 登録 → 参加。**URL 共有でチャットが見える穴は塞いだので、配布はこのリンクで行う。**
 
 ### ルーム選択 ⇄ チャットの状態管理（`_show_rooms`）
 
@@ -104,6 +112,7 @@ stSetValue({ action: 'go_notifications', ts: Date.now() });
 stSetValue({ action: 'go_room',        room_name: '...', ts: Date.now() });
 stSetValue({ action: 'go_room_edit',   room_id: '...', ts: Date.now() });   // 歯車 or チャットヘッダー右上 👥(data-hdr-roomedit) から
 stSetValue({ action: 'go_room_create', ts: Date.now() });
+stSetValue({ action: 'refresh_chat',   ts: Date.now() });   // 削除後など: _chat_html 破棄→DBから再描画
 stSetValue({ action: 'restore_session', session_id: '...', ts: Date.now() });
 stSetValue({ action: 'save_push_subscription', subscription: '...', user_id: '...', ts: Date.now() });
 // 注: 'logout' アクションは廃止。ログアウトはプロフィール画面の Streamlit ボタン（2段階確認）に移動。
@@ -197,7 +206,7 @@ JS コンポーネントをブラウザにキャッシュさせないため、�
 
 ```python
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v66",   # ← v66, v67... と上げる（現在 v66）
+    "danran_lp_v74",   # ← v74, v75... と上げる（現在 v74）
     path=_LP_COMPONENT_DIR,
 )
 ```
@@ -687,7 +696,7 @@ uv run python run.py
 # → MCP ツール: mcp__supabase__get_logs
 
 # コンポーネントキャッシュが怪しいとき
-# → "danran_lp_v66" の数字をインクリメント（現在 v66）
+# → "danran_lp_v74" の数字をインクリメント（現在 v74）
 
 # iOS PWA など画面にログを出せない環境のデバッグ
 # → JS 側: 色付きの fixed div を一定時間表示する _dbg(color,msg) 方式、

@@ -134,6 +134,15 @@ flowchart LR
 - ルーム選択 ⇄ チャットは **view を変えず** `st.session_state["_show_rooms"]` で切替
   （URL を変えると iOS の戻るジェスチャーと競合するため）。
 
+### 認証・セッション（重要）
+
+- セッションIDは **session_state + localStorage のみ**。**URL（`?s=`）には絶対に載せない**
+  （載せると URL 共有で他人が共有者としてログイン状態になりチャットが見える重大な穴）。
+- 復元は同一端末のみ（JS が localStorage の SID を `restore_session` で送る）。無効/漏洩
+  SID は `_clear_session` で localStorage を消して自己修復。
+- **配布は招待リンク**（`?invite=<招待コード>`）で行う。開くとサインアップ画面に着地し、
+  ログインもチャット表示もしない。プロフィールの「📨 家族を招待」でリンクをコピー。
+
 ---
 
 ## 6. データモデル

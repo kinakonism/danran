@@ -145,6 +145,18 @@ def fetch_storage_bytes() -> int:
     except Exception:
         return 0
 
+@st.cache_data(ttl=8)
+def ai_online() -> bool:
+    """AI bridge が生きているか（ai_status のハートビートが30秒以内なら オンライン🟢）。"""
+    try:
+        r = supabase.table("ai_status").select("updated_at").eq("id", 1).limit(1).execute().data
+        if not r:
+            return False
+        dt = datetime.fromisoformat(str(r[0]["updated_at"]).replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).total_seconds() < 30
+    except Exception:
+        return False
+
 # ─────────────────────────────────────
 # ルームメンバー（招待制）
 # ─────────────────────────────────────
@@ -899,6 +911,10 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
 
+    # AI サポートルームなら、ボットアイコンにオンライン状態ランプを出す（🟢=応答可 / グレー=不在）
+    _ai_room = (selected_room == AI_ROOM_NAME)
+    _ai_up   = ai_online() if _ai_room else False
+
     # ── リアクション pills 生成（通常バブル・連投グリッド両方で共用）──
     def _build_pills(msg_reactions: dict) -> str:
         pills = ""
@@ -1049,6 +1065,14 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             else f'<span {_av_attr} style="font-size:1.8rem;line-height:40px;display:block;'
                  f'width:40px;text-align:center;flex-shrink:0;cursor:pointer">{avatar}</span>'
         )
+        # AI ボットのアイコン右下にオンライン状態ランプ（🟢 応答可 / グレー 不在）
+        if _ai_room and msg_uid == AI_BOT_UID:
+            _lamp = "#34c759" if _ai_up else "#8a8a8a"
+            av_html = (
+                f'<span style="position:relative;display:inline-block;flex-shrink:0">{av_html}'
+                f'<span style="position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;'
+                f'border-radius:50%;background:{_lamp};border:2px solid #1a1614"></span></span>'
+            )
         # ★ 自分のアバターはチャットに表示しない（LINE 同様）。プロフィール編集は
         #   ルーム選択ヘッダー右上のアバターから。
 

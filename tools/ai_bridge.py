@@ -102,6 +102,15 @@ def post_reply(text):
     })
 
 
+def heartbeat():
+    """生存記録。アプリ側はこの更新が最近なら『AI オンライン🟢』を表示する。"""
+    try:
+        from datetime import datetime, timezone
+        api("PATCH", "ai_status?id=eq.1", {"updated_at": datetime.now(timezone.utc).isoformat()})
+    except Exception:
+        pass
+
+
 def build_prompt(msgs):
     lines = []
     for m in msgs[-MAX_HIST:]:
@@ -149,6 +158,7 @@ def main():
     print(f"[danran-bridge] 既存 {len(msgs)} 件はスキップ。新着を待機中…（Ctrl+C で停止）")
     while True:
         try:
+            heartbeat()   # 生存記録（オンラインランプ用）
             msgs = fetch_recent()
             if msgs:
                 newest = msgs[-1]

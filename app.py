@@ -845,15 +845,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             else f'<span {_av_attr} style="font-size:1.8rem;line-height:40px;display:block;'
                  f'width:40px;text-align:center;flex-shrink:0;cursor:pointer">{avatar}</span>'
         )
-        mine_av_html = (
-            f'<img data-lp-my-avatar="1" src="{avatar}" '
-            f'style="width:40px;height:40px;border-radius:8px;'
-            f'object-fit:cover;flex-shrink:0;display:block;cursor:pointer">'
-            if avatar.startswith("http")
-            else f'<span data-lp-my-avatar="1" '
-                 f'style="font-size:1.8rem;line-height:40px;display:block;'
-                 f'width:40px;text-align:center;flex-shrink:0;cursor:pointer">{avatar}</span>'
-        )
+        # ★ 自分のアバターはチャットに表示しない（LINE 同様）。プロフィール編集は
+        #   ルーム選択ヘッダー右上のアバターから。
 
         # ── 連投画像グループ → コンパクトグリッドバブル ──
         _grp = _group_start.get(_mi)
@@ -866,12 +859,11 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             if is_mine:
                 bubble = (
                     f'<div style="display:flex;justify-content:flex-end;align-items:flex-start;'
-                    f'gap:8px;margin:4px 0 2px 48px">'
+                    f'margin:4px 0 2px 48px">'
                     f'<div style="text-align:right">'
                     f'<div style="font-size:0.7rem;color:#888;margin-bottom:3px">{fmt_ts(_last_ts)}</div>'
                     f'{grid_html}'
                     f'</div>'
-                    f'{mine_av_html}'
                     f'</div>'
                 )
             else:
@@ -931,7 +923,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'data-lp-name="{_html.escape(sender)}" '
                 f'data-lp-body="{_body_attr(body)}" style="'
                 f'display:flex;justify-content:flex-end;align-items:flex-end;'
-                f'gap:8px;margin:4px 0 2px 48px">'
+                f'margin:4px 0 2px 48px">'
                 f'<div style="text-align:right">'
                 f'<div style="font-size:0.7rem;color:#888;margin-bottom:3px">{fmt_ts(ts)}</div>'
                 f'<div style="{_mine_bstyle};'
@@ -939,7 +931,6 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'word-break:break-word;font-size:0.93rem">{content}</div>'
                 f'{pills_row}'
                 f'</div>'
-                f'{mine_av_html}'
                 f'</div>'
             )
         else:
@@ -981,7 +972,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 else:
                     _avs += f'<span style="font-size:0.78rem;margin-left:2px">{_html.escape(_ua)}</span>'
             _bubbles[_last_mine_bidx] += (
-                f'<div style="text-align:right;margin:0 48px 6px 0;font-size:0.66rem;'
+                f'<div style="text-align:right;margin:0 2px 6px 0;font-size:0.66rem;'
                 f'color:rgba(240,232,224,0.45);display:flex;justify-content:flex-end;'
                 f'align-items:center;gap:1px">既読 {len(_readers)}{_avs}</div>'
             )

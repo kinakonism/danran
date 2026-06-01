@@ -638,21 +638,13 @@
         }, true));
       }
 
-      // ✕ 閉じるボタンは無し（ポップアップ外タップで閉じる＝outsideHandler）
+      // ✕ 閉じるボタンは無し。外タップで閉じる判定は setupLongPressDelegation の onTs
+      // （毎 scan で「生きた iframe」に貼り直される）が担当する。
+      //   ★ 旧実装はここで outsideHandler を addEventListener していたが、ポップアップ
+      //     表示中に 2秒ポーリングの新着等で iframe が再生成されると、そのハンドラが
+      //     死んだ iframe 所有のまま凍結し「外タップしても消えない」原因になっていた。
+      pDoc._danranPopupAt = Date.now();   // 直後の合成タップで即閉じしない猶予判定に使う
       pDoc.body.appendChild(pop);
-
-      function outsideHandler(e) {
-        if (!pop.contains(e.target)) {
-          hidePopup();
-          pDoc.removeEventListener('click',      outsideHandler, true);
-          pDoc.removeEventListener('touchstart', outsideHandler, true);
-        }
-      }
-      // 350ms 後に登録：長押し解除の touchend/touchstart を巻き込まないため
-      setTimeout(function () {
-        pDoc.addEventListener('click',      outsideHandler, true);
-        pDoc.addEventListener('touchstart', outsideHandler, true);
-      }, 350);
     } catch (err) { console.error('[danran-lp] showPopup:', err); }
   }
 
@@ -733,6 +725,12 @@
     }
     var onTs = function (e) {
       clear(); resetSwipe(false);
+      // 開いているポップアップの外をタップしたら閉じる（生きた iframe が毎回判定）。
+      //   開いた直後（250ms以内）の合成タップでは閉じない。
+      var pop = pDoc.getElementById(POPUP_ID);
+      if (pop && !pop.contains(e.target) && Date.now() - (pDoc._danranPopupAt || 0) > 250) {
+        hidePopup();
+      }
       var el = e.target && e.target.closest ? e.target.closest('[data-lp-msg]') : null;
       curEl = el; moved = false;
       if (!el) return;

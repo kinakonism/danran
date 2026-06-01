@@ -624,7 +624,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v78",   # スワイプ戻りも委譲方式に（死んだiframeでたまに戻れない問題）+ グリッド2列固定
+    "danran_lp_v79",   # 入室カバーをchatReady(一覧消失+chat入力出現)まで保持＝ルーム選択チラ見え防止
     path=_LP_COMPONENT_DIR,
 )
 

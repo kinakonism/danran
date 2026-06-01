@@ -2098,7 +2098,8 @@
       }
       var cover = pDoc.createElement('div');
       cover.id = '_danran_enter_cover';
-      cover.setAttribute('data-cover-expire', String(Date.now() + 2500));
+      // 安全網。chatReady まで保持するため少し長め（通常は描画完了で即剥がれる）
+      cover.setAttribute('data-cover-expire', String(Date.now() + 3500));
       cover.setAttribute('data-cover-dir', 'enter');
       // z-index はヘッダーと同値。body 末尾に追加するので DOM 順でヘッダーの上に来る
       // → ヘッダーごと覆い、入室中のヘッダー中身の切り替わり(LINE で言う画面遷移)を隠す
@@ -2160,13 +2161,22 @@
       if (!ME) { _lastChatKey = ''; return; }
       if (SHOW_ROOMS || !ACTIVE_ROOM) { _lastChatKey = '__rooms__'; return; }
       if (ACTIVE_ROOM === _lastChatKey) return;   // 既に同じチャットを表示中＝何もしない
-      _lastChatKey = ACTIVE_ROOM;
 
       // タップ経由ならカバーは既にある。それ以外（復元/スワイプ）はここで用意。
       showEnterCover();
       var cover = pDoc.getElementById('_danran_enter_cover');
 
-      // 高さが安定したら（＝描画完了したら）すぐカバーを外す。最大 320ms で打ち切り。
+      // ★ チャットが本当に描画されるまでカバー(スプラッシュ)を剥がさない。
+      //   チャット時のみ stChatInput が出て、ルーム選択時のみ #_danran_room_list が出る。
+      //   「ルーム一覧が消え、チャット入力が現れた」状態になるまで待つことで、遷移途中の
+      //   ルーム選択画面が一瞬見える現象を防ぐ（スプラッシュ→チャットへ直行）。
+      //   条件未達なら _lastChatKey を確定させず return ＝ 次の scan で再判定（カバー保持）。
+      var chatReady = pDoc.querySelector('[data-testid="stChatInput"]')
+                      && !pDoc.getElementById('_danran_room_list');
+      if (!chatReady) return;
+      _lastChatKey = ACTIVE_ROOM;   // ここで初めて入室確定
+
+      // 最下部へ寄せて、高さが安定したら（＝描画完了したら）カバーを外す。最大 320ms で打ち切り。
       var startT = Date.now(), lastH = -1, stable = 0;
       function reveal() {
         if (!cover) return;

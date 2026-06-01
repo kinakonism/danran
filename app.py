@@ -624,7 +624,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v75",   # 連投画像を LINE 風コンパクトグリッドに（fillImageSlots に data-fit=cover 追加）
+    "danran_lp_v76",   # 画像削除のゴースト除去（プール掃除）+ 削除成否を件数で判定
     path=_LP_COMPONENT_DIR,
 )
 

@@ -340,8 +340,17 @@
       });
   }
   function deleteMsg(msgId) {
-    // user_id（UUID）で認可する。user_name（表示名）は変更可能なため認可に使わない
-    return sbDelete('messages?id=eq.' + msgId + '&user_id=eq.' + encodeURIComponent(ME_UID));
+    // user_id（UUID）で認可する。user_name（表示名）は変更可能なため認可に使わない。
+    // ★ return=representation で「実際に消えた行」を受け取り、0行なら失敗とみなす
+    //   （fetch は 4xx でも reject しないので、件数で成否を判定する）。
+    return fetch(
+      SB_URL + '/rest/v1/messages?id=eq.' + msgId + '&user_id=eq.' + encodeURIComponent(ME_UID),
+      { method: 'DELETE', headers: sbHeaders({ Prefer: 'return=representation', Accept: 'application/json' }) }
+    ).then(function (r) {
+      return r.json().then(function (rows) {
+        return { ok: r.ok, count: Array.isArray(rows) ? rows.length : 0 };
+      }).catch(function () { return { ok: r.ok, count: r.ok ? 1 : 0 }; });
+    });
   }
 
   /* ════════════════════════════════════════
@@ -492,6 +501,10 @@
     hidePopup();
     try {
       var pDoc  = window.parent.document;
+      // ★ 長押しでポップアップを開いた直後の合成 click が画像ビューアを開くのを抑止する目印。
+      //   グリッドセルは data-lp-image と data-lp-msg が同一要素なので、これが無いと
+      //   削除ポップアップに全画面ビューアが被さって削除操作できなくなる。
+      pDoc._danranLpAt = Date.now();
       var rect  = el.getBoundingClientRect();
       var topPx = rect.top - 68;
       if (topPx < 8) topPx = rect.bottom + 8;
@@ -541,10 +554,30 @@
             b.textContent = '✓ 削除';
             b.style.cssText += ';color:#ff4d4d;font-size:0.82rem;background:rgba(255,77,77,0.15);padding:4px 9px;';
           } else {
-            deleteMsg(msgId).then(function () {
+            deleteMsg(msgId).then(function (res) {
               hidePopup();
+              if (!res || res.count <= 0) {
+                // 実際には消えていない（認可ミス・通信失敗等）→ 成功と誤表示しない
+                showToast('⚠️ 削除できませんでした');
+                return;
+              }
+              // ★ 画像メッセージの場合: 永続プール(_danranImgPool)に残った img ノードを退避する。
+              //   退避しないと、再描画後もプールの img が古いスロットに残り「削除したのに残る」
+              //   ゴーストになる。JS が自前で append した img なので remove は React と競合しない。
+              try {
+                var pDoc2 = window.parent.document;
+                var slot  = (el.getAttribute && el.getAttribute('data-lp-image'))
+                  ? el
+                  : (el.querySelector && el.querySelector('[data-lp-image]'));
+                var url   = slot && (slot.getAttribute('data-lp-image') || slot.getAttribute('data-img'));
+                if (url && pDoc2._danranImgPool && pDoc2._danranImgPool[url]) {
+                  var im = pDoc2._danranImgPool[url];
+                  if (im && im.parentNode) im.parentNode.removeChild(im);
+                  delete pDoc2._danranImgPool[url];
+                }
+              } catch (e) {}
               showToast('🗑️ 削除しました');
-              // ★ DOM は手で触らない（display:none 等の部分操作は変化駆動描画のキャッシュと
+              // ★ バブル DOM は手で触らない（display:none 等の部分操作は変化駆動描画のキャッシュと
               //   競合し、別メッセージまで一時的に消える不具合の原因）。
               //   Python に refresh_chat を投げ、DB から綺麗に再描画させる。
               sendNav({ action: 'refresh_chat', ts: Date.now() });
@@ -1469,6 +1502,9 @@
           im.addEventListener('click', function (e) {
             e.preventDefault();
             e.stopPropagation();
+            // 長押しポップアップ直後の合成 click はビューアを開かない（削除操作を邪魔しない）
+            var pd = window.parent.document;
+            if (Date.now() - (pd._danranLpAt || 0) < 700) return;
             openImageViewer(im.getAttribute('data-lp-image') || im.getAttribute('src'));
           });
         })(imgs[j]);
@@ -2177,6 +2213,20 @@
           im._danranFit = fit;
         }
         if (im.parentNode !== slot) { slot.appendChild(im); }  // 既存ノードを移動（再ロード無し）
+      }
+      // ★ ゴースト掃除: 現在のスロットに存在しない url のプール img を DOM から外す。
+      //   削除済み画像の img が古い（再描画で残った）コンテナに残存して「削除したのに残る」
+      //   症状を確実に潰す。プール entry は残してよい（再出現時に再利用・detached は不可視）。
+      var present = {};
+      for (var s = 0; s < slots.length; s++) {
+        var su = slots[s].getAttribute('data-img');
+        if (su) present[su] = 1;
+      }
+      for (var k in pool) {
+        if (!present[k]) {
+          var pim = pool[k];
+          if (pim && pim.parentNode) pim.parentNode.removeChild(pim);
+        }
       }
     } catch (e) {}
   }

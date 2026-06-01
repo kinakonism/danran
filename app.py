@@ -974,20 +974,12 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
 
     # ── 軽い既読表示（自分の最新メッセージにだけ・既読した人だけ・圧をかけない）──
     if _last_mine_bidx is not None and my_id:
+        # 既読人数だけ表示（誰が読んだかは出さない＝アイコン無し）
         _readers = read_by_users(selected_room, my_id, _last_mine_created)
         if _readers:
-            _avs = ""
-            for _u in _readers[:5]:
-                _ua = _u.get("avatar", "🙂")
-                if _ua.startswith("http"):
-                    _avs += (f'<img src="{_html.escape(_ua)}" style="width:15px;height:15px;'
-                             f'border-radius:50%;object-fit:cover;margin-left:2px">')
-                else:
-                    _avs += f'<span style="font-size:0.78rem;margin-left:2px">{_html.escape(_ua)}</span>'
             _bubbles[_last_mine_bidx] += (
                 f'<div style="text-align:right;margin:0 2px 6px 0;font-size:0.66rem;'
-                f'color:rgba(240,232,224,0.45);display:flex;justify-content:flex-end;'
-                f'align-items:center;gap:1px">既読 {len(_readers)}{_avs}</div>'
+                f'color:rgba(240,232,224,0.45)">既読 {len(_readers)}</div>'
             )
 
     # 全バブルを 1 つの文字列で返す（呼び出し元が 1 回だけ st.markdown する）
@@ -1151,7 +1143,26 @@ def _invite_url() -> str:
 def show_register() -> None:
     _, col, _ = st.columns([1, 3, 1])
     with col:
-        st.markdown("<br>" * 2, unsafe_allow_html=True)
+        # ── iOS 向け「ホーム画面に追加」案内 ──
+        # 招待リンクは Safari タブに着地する。通知＆アプリ化にはホーム画面追加が必須なので、
+        # 登録前にまず追加させる。display-mode:standalone（＝ホーム画面アプリで起動）の
+        # ときは CSS メディアクエリで自動的に隠す。
+        st.html(
+            '<style>@media (display-mode: standalone){#_danran_a2hs{display:none!important;}}</style>'
+            '<div id="_danran_a2hs" style="background:#241f1c;border:1px solid rgba(240,168,104,0.45);'
+            'border-left:4px solid #f0a868;border-radius:12px;padding:12px 14px;margin:6px 0 4px 0;'
+            'color:#f0e8e0;font-size:0.9rem;line-height:1.65">'
+            '<div style="font-weight:700;color:#f0a868;margin-bottom:5px">'
+            '📲 先に「ホーム画面に追加」してください</div>'
+            'iPhone は <b>ホーム画面に追加したアプリ</b>からのみ通知が届きます。<br>'
+            '① Safari 下の<b>共有ボタン</b>（□に↑のアイコン）をタップ<br>'
+            '② <b>「ホーム画面に追加」</b>を選ぶ<br>'
+            '③ 追加された <b>danran アイコンから開いて</b>登録する<br>'
+            '<span style="color:rgba(240,232,224,0.6);font-size:0.82rem">'
+            '※ このまま登録してもOKですが、その場合はアプリ版でもう一度ログインしてください。</span>'
+            '</div>'
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
         if st.session_state.get("_invite_ok"):
             # 1行で収める（折り返し防止）
             st.markdown(

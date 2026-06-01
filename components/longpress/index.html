@@ -468,6 +468,39 @@
     } catch (e) { fallback(); }
   }
 
+  // 画像を保存（LINE 風）。iOS は共有シート経由で「画像を保存」、PC/Android は <a download>。
+  function saveImage(url) {
+    if (!url) return;
+    try {
+      var pDoc = window.parent.document;
+      var nav  = window.parent.navigator || navigator;
+      showToast('保存中…');
+      fetch(url).then(function (r) { return r.blob(); }).then(function (blob) {
+        var base = (url.split('?')[0].split('/').pop()) || 'danran';
+        if (!/\.(jpe?g|png|webp|gif)$/i.test(base)) base += '.jpg';
+        var file = null;
+        try { file = new File([blob], base, { type: blob.type || 'image/jpeg' }); } catch (e) {}
+        // iOS/モバイル: 共有シート → 「画像を保存」で写真に保存
+        if (file && nav.canShare && nav.canShare({ files: [file] }) && nav.share) {
+          nav.share({ files: [file] }).catch(function () {});
+          return;
+        }
+        // フォールバック: <a download>（PC / Android）
+        var a = pDoc.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = base;
+        pDoc.body.appendChild(a);
+        a.click();
+        setTimeout(function () { try { URL.revokeObjectURL(a.href); a.remove(); } catch (e) {} }, 1500);
+        showToast('📥 保存しました');
+      }).catch(function () {
+        // CORS 等で取得失敗 → 新規タブで開いて長押し保存を促す
+        try { window.parent.open(url, '_blank'); } catch (e) {}
+        showToast('長押しで保存してください');
+      });
+    } catch (e) { showToast('保存できませんでした'); }
+  }
+
   // URL を既定ブラウザで開く（一時 <a target=_blank> をクリック）
   function openUrlExternal(url) {
     try {
@@ -1938,6 +1971,18 @@
     scan();
     setTimeout(scan, 400);
     setTimeout(scan, 1200);
+    // ★ 入室カバー(スプラッシュ)の除去は scan→scrollToLatestOnEnter 駆動だが、scan は
+    //   DOM 変化駆動なので描画後に変化が止まると走らず、カバーが残る（=スプラッシュで
+    //   入れない）ことがある。タップした iframe のタイマーは再生成で死ぬので、
+    //   「現在ライブな iframe」で定期的にカバー除去を回す（pDoc 直操作なので死んだ
+    //   iframe でも実害なし。多重起動は pWin のフラグで防ぐ）。
+    try {
+      var pWin = window.parent;
+      if (pWin._danranCoverIv) clearInterval(pWin._danranCoverIv);
+      pWin._danranCoverIv = setInterval(function () {
+        try { scrollToLatestOnEnter(); } catch (e) {}
+      }, 500);
+    } catch (e) {}
   }
 
   /* ════════════════════════════════════════
@@ -2495,19 +2540,19 @@
       if (SHOW_ROOMS || !ACTIVE_ROOM) { _lastChatKey = '__rooms__'; return; }
       if (ACTIVE_ROOM === _lastChatKey) return;   // 既に同じチャットを表示中＝何もしない
 
-      // タップ経由ならカバーは既にある。それ以外（復元/スワイプ）はここで用意。
-      showEnterCover();
-      var cover = pDoc.getElementById('_danran_enter_cover');
-
-      // ★ チャットが本当に描画されるまでカバー(スプラッシュ)を剥がさない。
-      //   チャット時のみ stChatInput が出て、ルーム選択時のみ #_danran_room_list が出る。
-      //   「ルーム一覧が消え、チャット入力が現れた」状態になるまで待つことで、遷移途中の
-      //   ルーム選択画面が一瞬見える現象を防ぐ（スプラッシュ→チャットへ直行）。
-      //   条件未達なら _lastChatKey を確定させず return ＝ 次の scan で再判定（カバー保持）。
+      // ★ チャットが本当に描画完了(chatReady)するまでカバー(スプラッシュ)を保持。
+      //   chat 時のみ stChatInput、ルーム選択時のみ #_danran_room_list が出る点を利用。
       var chatReady = pDoc.querySelector('[data-testid="stChatInput"]')
                       && !pDoc.getElementById('_danran_room_list');
-      if (!chatReady) return;
-      _lastChatKey = ACTIVE_ROOM;   // ここで初めて入室確定
+      if (!chatReady) {
+        // 遷移中だけカバーを出す（タップ経由なら既にある）。次の tick/scan で再判定。
+        //   ※ chatReady の時はカバーを新規生成しない＝ライブ iframe 入替時のチラ見え防止。
+        showEnterCover();
+        return;
+      }
+      _lastChatKey = ACTIVE_ROOM;   // 入室確定
+      var cover = pDoc.getElementById('_danran_enter_cover');
+      if (!cover) return;   // カバーが無い（既に表示済み/interval初回）→ 何もしない
 
       // 最下部へ寄せて、高さが安定したら（＝描画完了したら）カバーを外す。最大 320ms で打ち切り。
       var startT = Date.now(), lastH = -1, stable = 0;
@@ -2731,6 +2776,21 @@
         }, 140);
       }
 
+      // ── 保存（ダウンロード）ボタン：右下 ──
+      var dl = pDoc.createElement('button');
+      dl.setAttribute('aria-label', '画像を保存');
+      dl.innerHTML =
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" ' +
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M5 21h14"/></svg>';
+      dl.style.cssText =
+        'position:fixed;right:16px;bottom:calc(env(safe-area-inset-bottom, 0px) + 22px);' +
+        'width:52px;height:52px;border-radius:50%;border:none;' +
+        'background:rgba(0,0,0,0.55);cursor:pointer;z-index:3;' +
+        'display:flex;align-items:center;justify-content:center;' +
+        '-webkit-tap-highlight-color:transparent;';
+      dl.addEventListener('click', function (e) { e.stopPropagation(); saveImage(list[idx]); });
+
       close.addEventListener('click', function (e) { e.stopPropagation(); closeViewer(); });
       ov.addEventListener('click', function (e) { if (e.target === ov) closeViewer(); });
 
@@ -2779,6 +2839,7 @@
 
       ov.appendChild(img);
       ov.appendChild(close);
+      ov.appendChild(dl);
       pDoc.body.appendChild(ov);
     } catch (e) {}
   }

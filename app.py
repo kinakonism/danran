@@ -658,7 +658,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v90",   # 入室スプラッシュが稀に残る対策（scan予約再実行＋3.8s強制解除フェイルセーフ）
+    "danran_lp_v91",   # 入室スプラッシュ残り対策を生きたiframeのsetIntervalで堅牢化 + 全画面画像に保存ボタン
     path=_LP_COMPONENT_DIR,
 )
 

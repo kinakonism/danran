@@ -624,7 +624,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v76",   # 画像削除のゴースト除去（プール掃除）+ 削除成否を件数で判定
+    "danran_lp_v77",   # 長押しを委譲方式に（死んだiframeでポップアップが出ない問題を解消）
     path=_LP_COMPONENT_DIR,
 )
 

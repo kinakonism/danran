@@ -661,6 +661,59 @@
   }
 
   /* ════════════════════════════════════════
+   *  長押し（削除/リアクション）をイベント委譲で検出する。
+   *  ★ 要素ごとに addEventListener する旧 attach() は「最初にバインドした iframe」が
+   *    ハンドラを所有する。refresh_chat 等で iframe が再生成されると、残った要素の
+   *    ハンドラ（setTimeout/showPopup）が死んだ iframe 所有のまま凍結し「長押ししても
+   *    ポップアップが出ない／部屋に入り直すと直る」症状になる（= 生きた iframe 問題）。
+   *  → scan() が毎回これを呼び、親 document の委譲ハンドラを「生きた iframe のもの」へ
+   *    貼り直す（_danranNav と同じ考え方）。closest('[data-lp-msg]') でバブルを特定。
+   * ════════════════════════════════════════ */
+  function setupLongPressDelegation() {
+    var pDoc = window.parent.document;
+    var prev = pDoc._danranLpDeleg;
+    if (prev) {   // 古い（死んだ iframe 由来かもしれない）委譲を外す
+      pDoc.removeEventListener('touchstart', prev.ts, true);
+      pDoc.removeEventListener('touchmove',  prev.tm, true);
+      pDoc.removeEventListener('touchend',   prev.te, true);
+      pDoc.removeEventListener('touchcancel',prev.te, true);
+      pDoc.removeEventListener('contextmenu',prev.cm, true);
+    }
+    var timer = null, moved = false, startX = 0, startY = 0, curEl = null;
+    function clear() { if (timer) { clearTimeout(timer); timer = null; } }
+    function fire(el) {
+      if (el) showPopup(el, el.getAttribute('data-lp-msg'), el.hasAttribute('data-lp-mine'));
+    }
+    var onTs = function (e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-lp-msg]') : null;
+      clear();
+      if (!el) { curEl = null; return; }
+      curEl = el; moved = false;
+      if (e.touches && e.touches[0]) { startX = e.touches[0].clientX; startY = e.touches[0].clientY; }
+      timer = setTimeout(function () { if (!moved) fire(curEl); }, LP_MS);
+    };
+    var onTm = function (e) {
+      if (!timer) return;
+      if (e.touches && e.touches[0]) {
+        var dx = Math.abs(e.touches[0].clientX - startX);
+        var dy = Math.abs(e.touches[0].clientY - startY);
+        if (dx > 6 || dy > 6) { moved = true; clear(); }
+      }
+    };
+    var onTe = function () { clear(); };
+    var onCm = function (e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-lp-msg]') : null;
+      if (el) { e.preventDefault(); fire(el); }
+    };
+    pDoc.addEventListener('touchstart', onTs, { capture: true, passive: true });
+    pDoc.addEventListener('touchmove',  onTm, { capture: true, passive: true });
+    pDoc.addEventListener('touchend',   onTe, { capture: true, passive: true });
+    pDoc.addEventListener('touchcancel',onTe, { capture: true, passive: true });
+    pDoc.addEventListener('contextmenu',onCm, true);
+    pDoc._danranLpDeleg = { ts: onTs, tm: onTm, te: onTe, cm: onCm };
+  }
+
+  /* ════════════════════════════════════════
    *  "Manage app" ボタンを非表示
    *
    *  【構造】
@@ -1485,12 +1538,8 @@
         if (isEdit) { injectEditHeader(VIEW); } else { injectHeader(ACTIVE_ROOM, SHOW_ROOMS); }
       }
     } catch (e) {}
-    try {
-      var els = window.parent.document.querySelectorAll('[data-lp-msg]');
-      for (var i = 0; i < els.length; i++) {
-        if (!els[i]._danranLp) attach(els[i], els[i].getAttribute('data-lp-msg'));
-      }
-    } catch (e) {}
+    // 長押し検出は委譲方式で「生きた iframe」に毎回貼り直す（死んだ iframe 問題対策）
+    try { setupLongPressDelegation(); } catch (e) {}
     fillImageSlots();   // 画像スロットに永続 img を流し込む（再描画でも再ロードしない）
     // チャット画像スロットに直接タップハンドラを付与（デリゲーションより iOS で確実）
     try {

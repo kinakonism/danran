@@ -115,6 +115,8 @@ stSetValue({ action: 'go_room_create', ts: Date.now() });
 stSetValue({ action: 'refresh_chat',   ts: Date.now() });   // 削除後など: _chat_html 破棄→DBから再描画
 stSetValue({ action: 'restore_session', session_id: '...', ts: Date.now() });
 stSetValue({ action: 'save_push_subscription', subscription: '...', user_id: '...', ts: Date.now() });
+stSetValue({ action: 'set_reply', reply_id: '...', reply_name: '...', reply_text: '...', ts: Date.now() });  // 長押し↩︎ / 左スワイプ→引用返信ターゲットをセット（入力欄上に引用バー）
+stSetValue({ action: 'clear_reply', ts: Date.now() });   // 引用バー(data-reply-cancel)の ✕→返信解除
 // 注: 'logout' アクションは廃止。ログアウトはプロフィール画面の Streamlit ボタン（2段階確認）に移動。
 //     旧 data-logout / data-profile-nav ハンドラは削除済み。
 ```
@@ -311,9 +313,14 @@ RLS: SELECT は全許可 / UPDATE は `true` ポリシーで全許可（家族�
 | user_avatar| text    | 送信時のアバタースナップショット |
 | content    | text    | メッセージ本文（空可）     |
 | image_url  | text    | 添付画像URL（任意）        |
+| reply_to_id   | uuid | 引用返信元のメッセージID（任意） |
+| reply_to_name | text | 引用元の送信者名スナップショット |
+| reply_to_text | text | 引用元本文スナップショット（120字まで・画像は"📷 写真"） |
 | created_at | timestamptz | |
 
 **`is_mine` 判定**: `user_id` で比較（名前変更後も正しく動く）。`user_id` が空の旧メッセージは `user_name` でフォールバック。
+
+**引用返信**: 長押しポップアップの ↩︎ / メッセージ左スワイプ → JS が `set_reply`（id/name/text）を送る → Python が `_reply_to` をセット → 入力欄の上に引用バー（`#_danran_reply_bar`・✕は `data-reply-cancel`→`clear_reply`）。次のテキスト送信時に `send_message(reply_to=…)` が `reply_to_*` を保存し消費。`build_messages_html` は `reply_to_id` があるバブル上部に引用ブロックを描画。引用は**スナップショット保存**（元が削除/範囲外でも表示）。テキスト送信のみ対応（画像送信＝JS経路は未対応）。バブル/グリッドセルに `data-lp-name`（送信者名）を付与して返信ターゲット名に使う。
 
 ### `reactions`
 

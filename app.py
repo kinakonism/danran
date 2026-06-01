@@ -447,17 +447,24 @@ def fetch_messages(room: str, limit: int = 100) -> list[dict] | None:
       呼び出し元は None のとき前回表示を維持する。"""
     try:
         return supabase.table("messages")\
-            .select("id, user_id, user_name, user_avatar, content, image_url, created_at")\
+            .select("id, user_id, user_name, user_avatar, content, image_url, created_at, "
+                    "reply_to_id, reply_to_name, reply_to_text")\
             .eq("room_name", room).order("created_at").limit(limit).execute().data or []
     except Exception:
         return None
 
-def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, image_url: str | None = None) -> bool:
+def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, image_url: str | None = None,
+                 reply_to: dict | None = None) -> bool:
     try:
-        supabase.table("messages").insert({
+        _row = {
             "room_name": room, "user_id": uid, "user_name": uname,
             "user_avatar": uavatar, "content": content, "image_url": image_url,
-        }).execute()
+        }
+        if reply_to and reply_to.get("id"):
+            _row["reply_to_id"]   = reply_to.get("id")
+            _row["reply_to_name"] = reply_to.get("name", "")
+            _row["reply_to_text"] = (reply_to.get("text", "") or "")[:120]
+        supabase.table("messages").insert(_row).execute()
         # ── プッシュ通知はバックグラウンドスレッドで送信（UI をブロックしない）──
         # VAPID 鍵だけメインスレッドで取得して渡す（スレッド内で st.secrets を呼ぶと
         # ScriptRunContext 不在で失敗しプッシュが静かに飛ばなくなるため）。
@@ -624,7 +631,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v79",   # 入室カバーをchatReady(一覧消失+chat入力出現)まで保持＝ルーム選択チラ見え防止
+    "danran_lp_v80",   # 引用返信（長押し↩︎ / 左スワイプ）+ 入力欄上の引用バー
     path=_LP_COMPONENT_DIR,
 )
 
@@ -769,7 +776,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             cells += (
                 f'<span class="lp-imgslot" data-fit="cover" '
                 f'data-img="{_html.escape(u)}" data-lp-image="{_html.escape(u)}" '
-                f'data-lp-msg="{mid}"{mine_attr} '
+                f'data-lp-msg="{mid}" data-lp-name="{_html.escape(im.get("user_name", "") or "")}"{mine_attr} '
                 f'style="position:relative;display:block;width:100%;aspect-ratio:1/1;'
                 f'background:rgba(255,255,255,0.06);cursor:pointer;overflow:hidden">'
                 f'{overlay}</span>'
@@ -778,6 +785,21 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             f'<div style="display:grid;grid-template-columns:repeat({cols},1fr);'
             f'gap:3px;width:210px;max-width:72vw;border-radius:12px;overflow:hidden;'
             f'{"margin-left:auto" if is_mine else ""}">{cells}</div>'
+        )
+
+    # ── 引用返信ブロック（バブル上部に元メッセージのスナップショットを表示）──
+    def _reply_quote_html(m: dict) -> str:
+        if not m.get("reply_to_id"):
+            return ""
+        rname = _html.escape(m.get("reply_to_name", "") or "")
+        rtext = _html.escape((m.get("reply_to_text", "") or "").strip()[:60]) or "画像"
+        return (
+            f'<div style="border-left:3px solid rgba(255,255,255,0.5);padding:1px 0 1px 8px;'
+            f'margin-bottom:5px;opacity:0.9;font-size:0.78rem;line-height:1.35;text-align:left">'
+            f'<div style="font-weight:700;opacity:0.85;margin-bottom:1px">{rname}</div>'
+            f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+            f'max-width:210px">{rtext}</div>'
+            f'</div>'
         )
 
     # メッセージごとに st.markdown を呼ぶと 2 秒ポーリングのたびに N 個の Streamlit
@@ -867,7 +889,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             f'cursor:pointer;background:rgba(255,255,255,0.06);'
             f'{"margin-bottom:6px" if body else ""}"></span>'
         ) if img_url else ""
-        content = img_piece + body_esc
+        content = _reply_quote_html(msg) + img_piece + body_esc
 
         # ── リアクション pills ──
         pills = _build_pills(msg_reactions)
@@ -890,6 +912,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             bubble = (
                 # data-lp-body: 楽観的バブルとの照合用に生テキストを保持
                 f'<div data-lp-msg="{msg_id}" data-lp-mine="1" '
+                f'data-lp-name="{_html.escape(sender)}" '
                 f'data-lp-body="{_body_attr(body)}" style="'
                 f'display:flex;justify-content:flex-end;align-items:flex-end;'
                 f'gap:8px;margin:4px 0 2px 48px">'
@@ -911,7 +934,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 'background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:10px 14px'
             )
             bubble = (
-                f'<div data-lp-msg="{msg_id}" data-lp-body="{_body_attr(body)}" style="'
+                f'<div data-lp-msg="{msg_id}" data-lp-name="{_html.escape(sender)}" '
+                f'data-lp-body="{_body_attr(body)}" style="'
                 f'display:flex;align-items:flex-end;gap:8px;margin:4px 0 2px 0">'
                 f'{av_html}'
                 f'<div>'
@@ -1822,12 +1846,36 @@ def show_chat(current_user: dict) -> None:
     render_chat_messages(current_user)
     poll_messages()
 
+    # ── 返信（引用）コンポーズバー: _reply_to がセットされていれば入力欄の上に出す ──
+    _reply = st.session_state.get("_reply_to")
+    if _reply and _reply.get("id"):
+        _q_name = _html.escape(_reply.get("name", "") or "メッセージ")
+        _q_text = _html.escape((_reply.get("text", "") or "").strip()[:60]) or "（画像）"
+        st.html(
+            f'<div id="_danran_reply_bar" style="display:flex;align-items:center;gap:10px;'
+            f'background:#241f1c;border-left:3px solid #f0a868;border-radius:10px;'
+            f'padding:8px 10px;margin:2px 0 6px 0">'
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="color:#f0a868;font-size:0.72rem;font-weight:700;margin-bottom:2px">'
+            f'↩︎ {_q_name} に返信</div>'
+            f'<div style="color:rgba(240,232,224,0.7);font-size:0.8rem;white-space:nowrap;'
+            f'overflow:hidden;text-overflow:ellipsis">{_q_text}</div>'
+            f'</div>'
+            f'<div data-reply-cancel="1" style="flex-shrink:0;width:28px;height:28px;'
+            f'border-radius:50%;background:rgba(255,255,255,0.1);color:#f0e8e0;'
+            f'display:flex;align-items:center;justify-content:center;font-size:0.9rem;'
+            f'cursor:pointer">✕</div>'
+            f'</div>'
+        )
+
     # ── テキスト入力 ──
     av_str2 = current_user["avatar"]
     # プレースホルダーは短く固定（名前を入れると折り返して最新メッセージが隠れるため）
     ph = "メッセージ" if av_str2.startswith("http") else f"{av_str2} メッセージ"
     if prompt := st.chat_input(ph, max_chars=2000):
-        send_message(selected_room, current_user["id"], current_user["name"], current_user["avatar"], prompt)
+        send_message(selected_room, current_user["id"], current_user["name"], current_user["avatar"], prompt,
+                     reply_to=_reply if (_reply and _reply.get("id")) else None)
+        st.session_state.pop("_reply_to", None)   # 返信ターゲットを消費
         # 送信した自分のメッセージを即描画するためキャッシュを破棄（次の描画で再ビルド）
         st.session_state.pop("_chat_html", None)
         st.rerun()
@@ -2353,6 +2401,20 @@ if isinstance(_lp_result, dict):
         elif _nav == "refresh_chat":
             # メッセージ削除後など: チャットHTMLキャッシュを捨ててDBから綺麗に再描画
             st.session_state.pop("_chat_html", None)
+            st.rerun()
+        elif _nav == "set_reply":
+            # メッセージ長押し/左スワイプ → 引用返信ターゲットをセット（入力欄上にバー表示）
+            _rid = _lp_result.get("reply_id", "")
+            if _rid:
+                st.session_state["_reply_to"] = {
+                    "id":   _rid,
+                    "name": _lp_result.get("reply_name", ""),
+                    "text": _lp_result.get("reply_text", ""),
+                }
+                st.rerun()
+        elif _nav == "clear_reply":
+            # 引用バーの ✕ → 返信ターゲット解除
+            st.session_state.pop("_reply_to", None)
             st.rerun()
         elif _nav == "restore_session":
             # JS コンポーネントが localStorage からセッションIDを読み取り postMessage で通知

@@ -354,6 +354,31 @@
   }
 
   /* ════════════════════════════════════════
+   *  引用返信（リプライ）
+   *  - [data-lp-msg] 要素から id / 送信者名 / 本文（画像なら "📷 写真"）を取り出し、
+   *    Python に set_reply を送る → 入力欄の上に引用バーが出る。
+   * ════════════════════════════════════════ */
+  function replyTargetFromEl(el) {
+    if (!el) return null;
+    var id   = el.getAttribute('data-lp-msg');
+    if (!id) return null;
+    var name = el.getAttribute('data-lp-name') || '';
+    var text = el.getAttribute('data-lp-body') || '';
+    if (!text || !text.trim()) {
+      var hasImg = el.getAttribute('data-lp-image')
+        || (el.querySelector && el.querySelector('[data-lp-image]'));
+      text = hasImg ? '📷 写真' : '';
+    }
+    return { id: id, name: name, text: text };
+  }
+  function startReply(el) {
+    var t = replyTargetFromEl(el);
+    if (!t) return;
+    sendNav({ action: 'set_reply', reply_id: t.id, reply_name: t.name,
+              reply_text: t.text, ts: Date.now() });
+  }
+
+  /* ════════════════════════════════════════
    *  長押しポップアップ（親ドキュメントに注入）
    * ════════════════════════════════════════ */
   var EMOJIS = ['👍', '❤️', '😂', '😲', '🙏'];
@@ -587,6 +612,13 @@
         pop.appendChild(makeSep());
       }
 
+      // ↩︎ リプライ（全メッセージ）
+      pop.appendChild(makeBtn('↩︎', function () {
+        hidePopup();
+        startReply(el);
+      }));
+      pop.appendChild(makeSep());
+
       // 📋 コピー（テキストがあるメッセージのみ）
       var bodyText = el.getAttribute('data-lp-body') || '';
       if (bodyText.trim()) {
@@ -676,31 +708,61 @@
       pDoc.removeEventListener('touchstart', prev.ts, true);
       pDoc.removeEventListener('touchmove',  prev.tm, true);
       pDoc.removeEventListener('touchend',   prev.te, true);
-      pDoc.removeEventListener('touchcancel',prev.te, true);
+      pDoc.removeEventListener('touchcancel',prev.tc, true);
       pDoc.removeEventListener('contextmenu',prev.cm, true);
     }
     var timer = null, moved = false, startX = 0, startY = 0, curEl = null;
+    var rSwipe = false, rEl = null;   // 左スワイプ返信の指追従状態
     function clear() { if (timer) { clearTimeout(timer); timer = null; } }
     function fire(el) {
       if (el) showPopup(el, el.getAttribute('data-lp-msg'), el.hasAttribute('data-lp-mine'));
     }
+    function resetSwipe(spring) {
+      if (rEl) {
+        var e2 = rEl;
+        e2.style.transition = spring ? 'transform 0.18s ease-out' : 'none';
+        e2.style.transform  = 'translateX(0)';
+        if (spring) setTimeout(function () {
+          try { e2.style.transition = ''; e2.style.transform = ''; } catch (e) {}
+        }, 200);
+      }
+      rSwipe = false; rEl = null;
+    }
     var onTs = function (e) {
+      clear(); resetSwipe(false);
       var el = e.target && e.target.closest ? e.target.closest('[data-lp-msg]') : null;
-      clear();
-      if (!el) { curEl = null; return; }
       curEl = el; moved = false;
+      if (!el) return;
       if (e.touches && e.touches[0]) { startX = e.touches[0].clientX; startY = e.touches[0].clientY; }
-      timer = setTimeout(function () { if (!moved) fire(curEl); }, LP_MS);
+      timer = setTimeout(function () { if (!moved && !rSwipe) fire(curEl); }, LP_MS);
     };
     var onTm = function (e) {
-      if (!timer) return;
-      if (e.touches && e.touches[0]) {
-        var dx = Math.abs(e.touches[0].clientX - startX);
-        var dy = Math.abs(e.touches[0].clientY - startY);
-        if (dx > 6 || dy > 6) { moved = true; clear(); }
+      if (!curEl || !e.touches || !e.touches[0]) return;
+      var dx = e.touches[0].clientX - startX;
+      var dy = e.touches[0].clientY - startY;
+      if (!moved && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) { moved = true; clear(); }
+      // 左スワイプ返信: 横方向が縦より優勢で左に動いたら指追従開始
+      if (!rSwipe && dx < -10 && Math.abs(dx) > Math.abs(dy) + 4) {
+        rSwipe = true; rEl = curEl;
+        if (rEl) rEl.style.transition = 'none';
+      }
+      if (rSwipe && rEl) {
+        var x = dx > 0 ? 0 : Math.max(dx, -72);    // 左へ最大72px
+        rEl.style.transform = 'translateX(' + x + 'px)';
       }
     };
-    var onTe = function () { clear(); };
+    var onTe = function (e) {
+      clear();
+      if (rSwipe && rEl) {
+        var t  = e.changedTouches && e.changedTouches[0];
+        var dx = t ? (t.clientX - startX) : 0;
+        var target = rEl;
+        resetSwipe(true);                 // 指を離したら必ずバネで戻す
+        if (dx < -48) { startReply(target); }   // 閾値を超えていれば返信
+      }
+      moved = false; curEl = null;
+    };
+    var onTc = function () { clear(); resetSwipe(true); moved = false; curEl = null; };
     var onCm = function (e) {
       var el = e.target && e.target.closest ? e.target.closest('[data-lp-msg]') : null;
       if (el) { e.preventDefault(); fire(el); }
@@ -708,9 +770,9 @@
     pDoc.addEventListener('touchstart', onTs, { capture: true, passive: true });
     pDoc.addEventListener('touchmove',  onTm, { capture: true, passive: true });
     pDoc.addEventListener('touchend',   onTe, { capture: true, passive: true });
-    pDoc.addEventListener('touchcancel',onTe, { capture: true, passive: true });
+    pDoc.addEventListener('touchcancel',onTc, { capture: true, passive: true });
     pDoc.addEventListener('contextmenu',onCm, true);
-    pDoc._danranLpDeleg = { ts: onTs, tm: onTm, te: onTe, cm: onCm };
+    pDoc._danranLpDeleg = { ts: onTs, tm: onTm, te: onTe, tc: onTc, cm: onCm };
   }
 
   /* ════════════════════════════════════════
@@ -1541,6 +1603,17 @@
     // 長押し検出・スワイプ戻りは委譲方式で「生きた iframe」に毎回貼り直す（死んだ iframe 対策）
     try { setupLongPressDelegation(); } catch (e) {}
     try { setupSwipeBack(); } catch (e) {}
+    // 引用返信バーの ✕ → 返信解除（バーは Python が rerun ごとに再描画＝要素も再生成される）
+    try {
+      var rcx = window.parent.document.querySelector('[data-reply-cancel]');
+      if (rcx && !rcx._danranRcHooked) {
+        rcx._danranRcHooked = true;
+        rcx.addEventListener('click', function (e) {
+          e.preventDefault(); e.stopPropagation();
+          sendNav({ action: 'clear_reply', ts: Date.now() });
+        });
+      }
+    } catch (e) {}
     fillImageSlots();   // 画像スロットに永続 img を流し込む（再描画でも再ロードしない）
     // チャット画像スロットに直接タップハンドラを付与（デリゲーションより iOS で確実）
     try {

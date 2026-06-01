@@ -2243,8 +2243,11 @@ if isinstance(_lp_result, dict):
                     st.session_state["_show_rooms"] = True   # 復元後はルーム選択画面から再開
                     st.rerun()
                 else:
-                    # 復元失敗（セッション期限切れ等）→ ユーザーに再ログインを促す
-                    st.toast("セッションの有効期限が切れました。再ログインしてください。", icon="⚠️")
+                    # 復元失敗（セッション失効・無効/漏洩SID 等）→ localStorage を消して
+                    # 古いSIDを送り続けないようにし、ログイン画面へ。
+                    st.session_state["_clear_session"] = True
+                    st.toast("再ログインしてください。", icon="⚠️")
+                    st.rerun()
         elif _nav == "save_push_subscription":
             # JS からの Web Push 購読情報を DB に保存（rerun 不要）
             _sub_json = _lp_result.get("subscription", "")

@@ -2698,8 +2698,34 @@
   }
 
   // 1枚アップロード＋messages挿入（btn/トーストは呼び出し側が管理）
+  // ★ アップロード前にリサイズ＆JPEG圧縮（長辺1600px・品質0.82）。
+  //   スマホ写真は 5〜12MB あり、無圧縮だと 4G で読み込めず「グレーのまま」になるため。
+  //   EXIF 回転は createImageBitmap({imageOrientation:'from-image'}) で補正。
+  async function compressImage(file) {
+    try {
+      if (!file || !file.type || file.type.indexOf('image/') !== 0 || file.type === 'image/gif') return file;
+      var MAX = 1600;
+      var bmp;
+      try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+      catch (e) { bmp = await createImageBitmap(file); }
+      var w = bmp.width, h = bmp.height;
+      var scale = Math.min(1, MAX / Math.max(w, h));
+      var nw = Math.max(1, Math.round(w * scale)), nh = Math.max(1, Math.round(h * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = nw; canvas.height = nh;
+      canvas.getContext('2d').drawImage(bmp, 0, 0, nw, nh);
+      try { bmp.close(); } catch (e) {}
+      var blob = await new Promise(function (res) {
+        canvas.toBlob(function (b) { res(b); }, 'image/jpeg', 0.82);
+      });
+      if (blob && blob.size > 0 && blob.size < file.size) return blob;  // 縮んだ時だけ採用
+      return file;
+    } catch (e) { return file; }
+  }
+
   async function uploadOneImage(file, room, avatar) {
-    var ext     = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    var up      = await compressImage(file);
+    var ext     = (up.type === 'image/jpeg') ? 'jpg' : ((file.name.split('.').pop() || 'jpg').toLowerCase());
     var objName = Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
     var uploadResp = await fetch(
       SB_URL + '/storage/v1/object/' + CHAT_IMG_BUCKET + '/' + objName,
@@ -2707,11 +2733,11 @@
         method: 'POST',
         headers: {
           'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY,
-          'Content-Type': file.type || 'image/jpeg', 'x-upsert': 'true',
+          'Content-Type': up.type || 'image/jpeg', 'x-upsert': 'true',
           // 長期キャッシュ（再描画時のブランク/再取得を減らす）
           'cache-control': 'max-age=31536000',
         },
-        body: file,
+        body: up,
       }
     );
     if (!uploadResp.ok) {
@@ -2789,20 +2815,16 @@
           // ★「写真が1枚だけ表示されない」対策：読み込み失敗(onerror)に加え、一定時間
           //   ロードできない（ストール）場合も最大3回まで再リクエストする（クエリ付与）。
           (function (image, u) {
-            function retry() {
+            // 読み込み「失敗」時のみ再試行（最大3回）。★ストール監視で src を貼り直すと
+            // 大きい画像のDLを途中で潰して永遠に終わらないため、onerror のみにする。
+            image.onerror = function () {
               var n = (image._danranTries || 0);
               if (n >= 3) return;
               image._danranTries = n + 1;
               setTimeout(function () {
                 try { image.src = u + (u.indexOf('?') >= 0 ? '&' : '?') + '_retry=' + Date.now(); } catch (e) {}
-              }, 500 * (n + 1));
-            }
-            image.onerror = retry;
-            image.onload  = function () { image._danranLoaded = true; };
-            // ストール監視（4秒・初回のみ）：完了していなければ再試行
-            setTimeout(function () {
-              if (!image._danranLoaded && (!image.complete || image.naturalWidth === 0)) retry();
-            }, 4000);
+              }, 800 * (n + 1));
+            };
           })(im, url);
           im.src = url;
           pool[url] = im;

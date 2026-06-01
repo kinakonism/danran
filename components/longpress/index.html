@@ -85,6 +85,7 @@
 
   var LP_MS           = 500;
   var STORAGE_KEY     = 'danran_session';
+  var ROOM_KEY        = 'danran_last_room';   // 直前にいた部屋（再接続で復帰するため）
   var CHAT_IMG_BUCKET = 'chat-images';
   var CFG_ID          = '_danran_cfg';
   var CAM_BTN_ID      = '_danran_cam_btn';
@@ -334,10 +335,29 @@
         var lsSid = localStorage.getItem(STORAGE_KEY);
         dlog('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '", _gotRender=' + _gotRender);
         _sessionRestoreSent = true;
-        dlog('[danran] → stSetValue restore_session firing, sid=' + (lsSid ? lsSid.slice(0, 8) + '…' : '(empty)'));
-        sendNav({ action: 'restore_session', session_id: lsSid || '', ts: Date.now() });
+        // 直前にいた部屋（120秒以内）を一緒に渡す → 復元時にその部屋へ戻す。
+        //   写真ピッカーでアプリがバックグラウンド→再接続した時に一覧へ飛ばされるのを防ぐ。
+        var er = '';
+        try {
+          var raw = localStorage.getItem(ROOM_KEY);
+          if (raw) { var o = JSON.parse(raw); if (o && o.r && (Date.now() - (o.t || 0) < 120000)) er = o.r; }
+        } catch (e) {}
+        dlog('[danran] → stSetValue restore_session firing, sid=' + (lsSid ? lsSid.slice(0, 8) + '…' : '(empty)') + ', room=' + er);
+        sendNav({ action: 'restore_session', session_id: lsSid || '', enter_room: er, ts: Date.now() });
       }
     } catch (e) { console.error('[danran] handleSession error:', e); }
+  }
+
+  // 直前にいた部屋を localStorage に記録（チャット表示中のみ）。一覧にいた時は消す。
+  function rememberRoom() {
+    try {
+      if (!ME) return;
+      if (!SHOW_ROOMS && ACTIVE_ROOM && (VIEW === 'chat' || VIEW === '')) {
+        localStorage.setItem(ROOM_KEY, JSON.stringify({ r: ACTIVE_ROOM, t: Date.now() }));
+      } else if (SHOW_ROOMS) {
+        localStorage.removeItem(ROOM_KEY);
+      }
+    } catch (e) {}
   }
 
   /* ════════════════════════════════════════
@@ -1646,6 +1666,7 @@
   function scan() {
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
+    rememberRoom(); // 直前にいた部屋を記録（再接続で復帰するため）
     // ── スワイプ用 nav 関数を親ドキュメントに登録（毎 scan で上書き）──
     //   スワイプハンドラは古い iframe が所有している可能性があるため、
     //   この「生きている iframe」の stSetValue を親に常に最新登録しておく。
@@ -2618,13 +2639,18 @@
       btn.textContent = total > 1 ? ('0/' + total) : '⏳';
     }
     for (var i = 0; i < list.length; i++) {
-      try {
-        await uploadOneImage(list[i], room, avatar);
-        done++;
-      } catch (err) {
-        console.error('[danran-cam] upload error:', err);
-        failed++;
+      // 各ファイル最大2回試行（一時的な通信エラーで連投が途切れにくくする）
+      var ok = false;
+      for (var attempt = 0; attempt < 2 && !ok; attempt++) {
+        try {
+          await uploadOneImage(list[i], room, avatar);
+          ok = true;
+        } catch (err) {
+          console.error('[danran-cam] upload error (try ' + (attempt + 1) + '):', err);
+          if (attempt === 0) { await new Promise(function (r) { setTimeout(r, 600); }); }
+        }
       }
+      if (ok) done++; else failed++;
       if (btn && total > 1) btn.textContent = (done + failed) + '/' + total;
     }
     if (btn) { btn.style.fontSize = ''; btn.style.pointerEvents = ''; }
@@ -2655,6 +2681,19 @@
         var im = pool[url];
         if (!im) {
           im = pDoc.createElement('img');
+          im.decoding = 'async';
+          // ★ 読み込み失敗（一時的なネットワーク等）時に最大3回まで再試行する。
+          //   「写真が1枚だけ表示されない」対策（クエリを足して確実に再リクエスト）。
+          (function (image, u) {
+            image.onerror = function () {
+              var n = (image._danranTries || 0);
+              if (n >= 3) return;
+              image._danranTries = n + 1;
+              setTimeout(function () {
+                try { image.src = u + (u.indexOf('?') >= 0 ? '&' : '?') + '_retry=' + Date.now(); } catch (e) {}
+              }, 700 * (n + 1));
+            };
+          })(im, url);
           im.src = url;
           pool[url] = im;
         }

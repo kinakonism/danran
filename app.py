@@ -658,7 +658,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v91",   # 入室スプラッシュ残り対策を生きたiframeのsetIntervalで堅牢化 + 全画面画像に保存ボタン
+    "danran_lp_v92",   # 再接続で直前の部屋へ復帰 + 連投アップロード再試行 + 画像読込リトライ
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2575,7 +2575,18 @@ if isinstance(_lp_result, dict):
                     #    最初の描画で view="select_user" がすでにセットされているため
                     #    setdefault は何もせず chat に遷移できないバグを修正
                     st.session_state["view"] = "chat"
-                    st.session_state["_show_rooms"] = True   # 復元後はルーム選択画面から再開
+                    # ★ 直前にいた部屋（120秒以内・JS から enter_room）が参加中なら、その部屋へ復帰。
+                    #   写真ピッカーでバックグラウンド→再接続した時に一覧へ飛ばされるのを防ぐ。
+                    #   無効/空（久しぶりの起動など）なら従来どおりルーム選択画面から再開。
+                    _er = (_lp_result.get("enter_room", "") or "").strip()
+                    _valid_room = bool(_er) and any(
+                        r["name"] == _er for r in fetch_rooms(_user.get("id", ""))
+                    )
+                    if _valid_room:
+                        st.session_state["active_room"] = _er
+                        st.session_state.pop("_show_rooms", None)
+                    else:
+                        st.session_state["_show_rooms"] = True   # 復元後はルーム選択画面から再開
                     st.rerun()
                 else:
                     # 復元失敗（セッション失効・無効/漏洩SID 等）→ localStorage を消して

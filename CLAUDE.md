@@ -159,6 +159,7 @@ var room = cfg.getAttribute('data-room');
 | `data-view` | 現在の view 名 |
 | `data-vapid-pub` | VAPID 公開鍵 |
 | `data-users-json` | 全ユーザーの名前・電話番号 JSON（FaceTime 用） |
+| `data-reply-id` / `-name` / `-text` / `-image` | 引用返信ターゲット（JS が固定引用バーを描画） |
 
 #### ヘッダーの構成（Python が `st.html` で描画）
 
@@ -316,11 +317,17 @@ RLS: SELECT は全許可 / UPDATE は `true` ポリシーで全許可（家族�
 | reply_to_id   | uuid | 引用返信元のメッセージID（任意） |
 | reply_to_name | text | 引用元の送信者名スナップショット |
 | reply_to_text | text | 引用元本文スナップショット（120字まで・画像は"📷 写真"） |
+| reply_to_image | text | 引用元が画像のときその URL スナップショット（引用にサムネ表示） |
 | created_at | timestamptz | |
 
 **`is_mine` 判定**: `user_id` で比較（名前変更後も正しく動く）。`user_id` が空の旧メッセージは `user_name` でフォールバック。
 
-**引用返信**: 長押しポップアップの ↩︎ / メッセージ左スワイプ → JS が `set_reply`（id/name/text）を送る → Python が `_reply_to` をセット → 入力欄の上に引用バー（`#_danran_reply_bar`・✕は `data-reply-cancel`→`clear_reply`）。次のテキスト送信時に `send_message(reply_to=…)` が `reply_to_*` を保存し消費。`build_messages_html` は `reply_to_id` があるバブル上部に引用ブロックを描画。引用は**スナップショット保存**（元が削除/範囲外でも表示）。テキスト送信のみ対応（画像送信＝JS経路は未対応）。バブル/グリッドセルに `data-lp-name`（送信者名）を付与して返信ターゲット名に使う。
+**引用返信**: 長押しポップアップの ↩︎ / メッセージ左スワイプ（指追従・閾値超えで発火）→ JS が `set_reply`（id/name/text/image）を送る → Python が `_reply_to` をセット → cfg の `data-reply-*` で JS に渡る。
+- **引用バーは JS が固定描画**（`#_danran_reply_bar`・`injectReplyBar`/`alignReplyBar`）。`position:fixed` で stChatInput の真上に貼り、`alignCamBtn` 経由でスクロール・キーボードに追従（Python フロー描画だと一緒にスクロールしてしまうため）。✕（`#_danran_reply_x`）→ `clear_reply`。
+- 次のテキスト送信時に `send_message(reply_to=…)` が `reply_to_*` を保存し消費。`build_messages_html` は `reply_to_id` があるバブル上部に引用ブロックを描画（`data-lp-jump` 付き）。
+- **引用タップ → 元メッセージへ `scrollIntoView` + `danranJumpPulse`（ぷるぷる強調）**（`jumpToMessage`）。
+- **写真への返信**: `reply_to_image` に元画像 URL を保存し、引用バー・引用ブロックに 34–36px のサムネを表示。
+- 引用は**スナップショット保存**（元が削除/範囲外でも表示）。返信のトリガーは全メッセージ可だが、送信はテキストのみ（画像送信＝JS経路は reply 未付与）。バブル/グリッドセルに `data-lp-name`（送信者名）を付与。
 
 ### `reactions`
 

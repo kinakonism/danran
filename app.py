@@ -448,7 +448,7 @@ def fetch_messages(room: str, limit: int = 100) -> list[dict] | None:
     try:
         return supabase.table("messages")\
             .select("id, user_id, user_name, user_avatar, content, image_url, created_at, "
-                    "reply_to_id, reply_to_name, reply_to_text")\
+                    "reply_to_id, reply_to_name, reply_to_text, reply_to_image")\
             .eq("room_name", room).order("created_at").limit(limit).execute().data or []
     except Exception:
         return None
@@ -461,9 +461,10 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
             "user_avatar": uavatar, "content": content, "image_url": image_url,
         }
         if reply_to and reply_to.get("id"):
-            _row["reply_to_id"]   = reply_to.get("id")
-            _row["reply_to_name"] = reply_to.get("name", "")
-            _row["reply_to_text"] = (reply_to.get("text", "") or "")[:120]
+            _row["reply_to_id"]    = reply_to.get("id")
+            _row["reply_to_name"]  = reply_to.get("name", "")
+            _row["reply_to_text"]  = (reply_to.get("text", "") or "")[:120]
+            _row["reply_to_image"] = reply_to.get("image", "") or None
         supabase.table("messages").insert(_row).execute()
         # ── プッシュ通知はバックグラウンドスレッドで送信（UI をブロックしない）──
         # VAPID 鍵だけメインスレッドで取得して渡す（スレッド内で st.secrets を呼ぶと
@@ -631,7 +632,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v80",   # 引用返信（長押し↩︎ / 左スワイプ）+ 入力欄上の引用バー
+    "danran_lp_v81",   # 引用バーを入力欄上に固定追従 + 引用タップで元へジャンプ&強調 + 写真サムネ引用
     path=_LP_COMPONENT_DIR,
 )
 
@@ -788,17 +789,29 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         )
 
     # ── 引用返信ブロック（バブル上部に元メッセージのスナップショットを表示）──
+    #   data-lp-jump: タップで元メッセージへスクロール＋ぷるぷる強調（JS）
     def _reply_quote_html(m: dict) -> str:
-        if not m.get("reply_to_id"):
+        rid = m.get("reply_to_id")
+        if not rid:
             return ""
         rname = _html.escape(m.get("reply_to_name", "") or "")
-        rtext = _html.escape((m.get("reply_to_text", "") or "").strip()[:60]) or "画像"
+        rimg  = m.get("reply_to_image") or ""
+        rtext = _html.escape((m.get("reply_to_text", "") or "").strip()[:60]) or ("写真" if rimg else "")
+        thumb = (
+            f'<img src="{_html.escape(rimg)}" loading="lazy" '
+            f'style="width:34px;height:34px;border-radius:6px;object-fit:cover;flex-shrink:0">'
+        ) if rimg else ""
         return (
-            f'<div style="border-left:3px solid rgba(255,255,255,0.5);padding:1px 0 1px 8px;'
-            f'margin-bottom:5px;opacity:0.9;font-size:0.78rem;line-height:1.35;text-align:left">'
+            f'<div data-lp-jump="{rid}" style="display:flex;align-items:center;gap:7px;'
+            f'border-left:3px solid rgba(255,255,255,0.5);padding:1px 0 1px 8px;'
+            f'margin-bottom:5px;opacity:0.9;font-size:0.78rem;line-height:1.35;text-align:left;'
+            f'cursor:pointer">'
+            f'<div style="flex:1;min-width:0">'
             f'<div style="font-weight:700;opacity:0.85;margin-bottom:1px">{rname}</div>'
             f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
-            f'max-width:210px">{rtext}</div>'
+            f'max-width:180px">{rtext}</div>'
+            f'</div>'
+            f'{thumb}'
             f'</div>'
         )
 
@@ -1846,27 +1859,8 @@ def show_chat(current_user: dict) -> None:
     render_chat_messages(current_user)
     poll_messages()
 
-    # ── 返信（引用）コンポーズバー: _reply_to がセットされていれば入力欄の上に出す ──
+    # ── 返信（引用）ターゲット（バー自体は JS が入力欄の上に固定描画する＝スクロール追従）──
     _reply = st.session_state.get("_reply_to")
-    if _reply and _reply.get("id"):
-        _q_name = _html.escape(_reply.get("name", "") or "メッセージ")
-        _q_text = _html.escape((_reply.get("text", "") or "").strip()[:60]) or "（画像）"
-        st.html(
-            f'<div id="_danran_reply_bar" style="display:flex;align-items:center;gap:10px;'
-            f'background:#241f1c;border-left:3px solid #f0a868;border-radius:10px;'
-            f'padding:8px 10px;margin:2px 0 6px 0">'
-            f'<div style="flex:1;min-width:0">'
-            f'<div style="color:#f0a868;font-size:0.72rem;font-weight:700;margin-bottom:2px">'
-            f'↩︎ {_q_name} に返信</div>'
-            f'<div style="color:rgba(240,232,224,0.7);font-size:0.8rem;white-space:nowrap;'
-            f'overflow:hidden;text-overflow:ellipsis">{_q_text}</div>'
-            f'</div>'
-            f'<div data-reply-cancel="1" style="flex-shrink:0;width:28px;height:28px;'
-            f'border-radius:50%;background:rgba(255,255,255,0.1);color:#f0e8e0;'
-            f'display:flex;align-items:center;justify-content:center;font-size:0.9rem;'
-            f'cursor:pointer">✕</div>'
-            f'</div>'
-        )
 
     # ── テキスト入力 ──
     av_str2 = current_user["avatar"]
@@ -2310,7 +2304,12 @@ st.html(
     f'data-view="{_html.escape(_cur_view)}" '
     f'data-vapid-pub="{_html.escape(_vapid_pub)}" '
     f'data-uid="{_html.escape(_cu.get("id",""))}" '
-    f'data-push-resub="{str(_push_resub).lower()}">'
+    f'data-push-resub="{str(_push_resub).lower()}" '
+    # ── 引用返信ターゲット（JS が入力欄の上に固定バーを描画する）──
+    f'data-reply-id="{_html.escape((st.session_state.get("_reply_to") or {}).get("id","") or "")}" '
+    f'data-reply-name="{_html.escape((st.session_state.get("_reply_to") or {}).get("name","") or "")}" '
+    f'data-reply-text="{_html.escape((st.session_state.get("_reply_to") or {}).get("text","") or "")}" '
+    f'data-reply-image="{_html.escape((st.session_state.get("_reply_to") or {}).get("image","") or "")}">'
     f'</div>'
     # ── Python レンダリングヘッダー ──
     # ログイン済み: チャットヘッダー or 編集ヘッダー
@@ -2407,9 +2406,10 @@ if isinstance(_lp_result, dict):
             _rid = _lp_result.get("reply_id", "")
             if _rid:
                 st.session_state["_reply_to"] = {
-                    "id":   _rid,
-                    "name": _lp_result.get("reply_name", ""),
-                    "text": _lp_result.get("reply_text", ""),
+                    "id":    _rid,
+                    "name":  _lp_result.get("reply_name", ""),
+                    "text":  _lp_result.get("reply_text", ""),
+                    "image": _lp_result.get("reply_image", ""),
                 }
                 st.rerun()
         elif _nav == "clear_reply":

@@ -103,6 +103,7 @@
   var ACTIVE_ROOM = '';
   var SHOW_ROOMS  = false;
   var VIEW        = '';     // 現在の画面（'chat'|'profile'|'room_edit'|...）
+  var REPLY_ID    = '', REPLY_NAME = '', REPLY_TEXT = '', REPLY_IMG = '';  // 引用返信ターゲット
   var _embedFixed          = false;  // embed=true 除去リダイレクトを1回のみ実行
   var _sessionRestoreSent = false;  // restore_session postMessage を1回のみ送る
   var _gotRender          = false;  // streamlit:render を受信済みかどうか
@@ -162,6 +163,10 @@
       var newVapidPub = cfg.getAttribute('data-vapid-pub')  || '';
       var newUid      = cfg.getAttribute('data-uid')        || '';
       var pushResub   = cfg.getAttribute('data-push-resub') === 'true';
+      REPLY_ID   = cfg.getAttribute('data-reply-id')    || '';
+      REPLY_NAME = cfg.getAttribute('data-reply-name')  || '';
+      REPLY_TEXT = cfg.getAttribute('data-reply-text')  || '';
+      REPLY_IMG  = cfg.getAttribute('data-reply-image') || '';
 
       if (newSbUrl)    SB_URL      = newSbUrl;
       if (newSbKey)    SB_KEY      = newSbKey;
@@ -364,18 +369,18 @@
     if (!id) return null;
     var name = el.getAttribute('data-lp-name') || '';
     var text = el.getAttribute('data-lp-body') || '';
-    if (!text || !text.trim()) {
-      var hasImg = el.getAttribute('data-lp-image')
-        || (el.querySelector && el.querySelector('[data-lp-image]'));
-      text = hasImg ? '📷 写真' : '';
-    }
-    return { id: id, name: name, text: text };
+    // 画像メッセージなら元画像 URL も取得（引用にサムネイルを埋めるため）
+    var imgEl = el.getAttribute('data-lp-image') ? el
+              : (el.querySelector ? el.querySelector('[data-lp-image]') : null);
+    var img   = imgEl ? (imgEl.getAttribute('data-lp-image') || '') : '';
+    if (!text || !text.trim()) { text = img ? '📷 写真' : ''; }
+    return { id: id, name: name, text: text, image: img };
   }
   function startReply(el) {
     var t = replyTargetFromEl(el);
     if (!t) return;
     sendNav({ action: 'set_reply', reply_id: t.id, reply_name: t.name,
-              reply_text: t.text, ts: Date.now() });
+              reply_text: t.text, reply_image: t.image, ts: Date.now() });
   }
 
   /* ════════════════════════════════════════
@@ -1603,17 +1608,8 @@
     // 長押し検出・スワイプ戻りは委譲方式で「生きた iframe」に毎回貼り直す（死んだ iframe 対策）
     try { setupLongPressDelegation(); } catch (e) {}
     try { setupSwipeBack(); } catch (e) {}
-    // 引用返信バーの ✕ → 返信解除（バーは Python が rerun ごとに再描画＝要素も再生成される）
-    try {
-      var rcx = window.parent.document.querySelector('[data-reply-cancel]');
-      if (rcx && !rcx._danranRcHooked) {
-        rcx._danranRcHooked = true;
-        rcx.addEventListener('click', function (e) {
-          e.preventDefault(); e.stopPropagation();
-          sendNav({ action: 'clear_reply', ts: Date.now() });
-        });
-      }
-    } catch (e) {}
+    // 引用返信バー（入力欄の真上に固定描画・スクロール/キーボード追従）
+    try { injectReplyBar(); } catch (e) {}
     fillImageSlots();   // 画像スロットに永続 img を流し込む（再描画でも再ロードしない）
     // チャット画像スロットに直接タップハンドラを付与（デリゲーションより iOS で確実）
     try {
@@ -1646,6 +1642,21 @@
             showLinkMenu(a.getAttribute('data-lp-link') || a.href);
           });
         })(links[L]);
+      }
+    } catch (e) {}
+    // 引用ブロックタップ → 元メッセージへジャンプ＋ぷるぷる
+    try {
+      var jumps = window.parent.document.querySelectorAll('[data-lp-jump]');
+      for (var Q = 0; Q < jumps.length; Q++) {
+        (function (q) {
+          if (q._danranJumpHooked) return;
+          q._danranJumpHooked = true;
+          q.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            jumpToMessage(q.getAttribute('data-lp-jump'));
+          });
+        })(jumps[Q]);
       }
     } catch (e) {}
   }
@@ -2099,6 +2110,110 @@
 
       // 最低 6px（画面端から落ちないように）
       btn.style.bottom = Math.max(bottomPx, 6) + 'px';
+    } catch (e) {}
+    alignReplyBar();   // 引用バーも入力欄に追従
+  }
+
+  function _escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  /* ════════════════════════════════════════
+   *  引用返信バー（入力欄の真上に固定。スクロール・キーボードに追従）
+   *  ★ Python フロー描画だとチャットと一緒にスクロールしてしまうため、JS が
+   *    position:fixed で stChatInput の真上に貼り付け、alignReplyBar() で追従させる。
+   * ════════════════════════════════════════ */
+  var REPLY_BAR_ID = '_danran_reply_bar';
+  function removeReplyBar() {
+    try { var b = window.parent.document.getElementById(REPLY_BAR_ID); if (b) b.remove(); } catch (e) {}
+  }
+  function alignReplyBar() {
+    try {
+      var pDoc = window.parent.document, pWin = window.parent;
+      var bar = pDoc.getElementById(REPLY_BAR_ID);
+      if (!bar) return;
+      var ref = pDoc.querySelector('[data-testid="stChatInput"]')
+             || pDoc.querySelector('[data-testid="stBottom"]');
+      if (!ref) return;
+      var rect = ref.getBoundingClientRect();
+      // バーの下端を入力欄の上端の少し上に置く
+      bar.style.bottom = Math.max(Math.round(pWin.innerHeight - rect.top + 4), 56) + 'px';
+    } catch (e) {}
+  }
+  function injectReplyBar() {
+    try {
+      var pDoc = window.parent.document;
+      // チャット画面で返信ターゲットがある時だけ表示
+      if (!ME || !REPLY_ID || SHOW_ROOMS || (VIEW && VIEW !== 'chat')) { removeReplyBar(); return; }
+      if (!(pDoc.querySelector('[data-testid="stChatInput"]') || pDoc.querySelector('[data-testid="stBottom"]'))) {
+        removeReplyBar(); return;
+      }
+      var bar = pDoc.getElementById(REPLY_BAR_ID);
+      if (!bar) {
+        bar = pDoc.createElement('div');
+        bar.id = REPLY_BAR_ID;
+        bar.style.cssText =
+          'position:fixed;left:8px;right:8px;z-index:9997;' +
+          'background:#241f1c;border-left:3px solid #f0a868;border-radius:10px;' +
+          'box-shadow:0 -2px 14px rgba(0,0,0,0.5);' +
+          'display:flex;align-items:center;gap:10px;padding:8px 10px;';
+        pDoc.body.appendChild(bar);
+      }
+      // 内容はターゲットが変わった時だけ作り直す
+      if (bar.getAttribute('data-rid') !== REPLY_ID) {
+        bar.setAttribute('data-rid', REPLY_ID);
+        var thumb = REPLY_IMG
+          ? '<img src="' + _escHtml(REPLY_IMG) + '" style="width:36px;height:36px;border-radius:6px;'
+            + 'object-fit:cover;flex-shrink:0">'
+          : '';
+        var txt = (REPLY_TEXT || '').trim() || (REPLY_IMG ? '写真' : '');
+        bar.innerHTML =
+          '<div style="flex:1;min-width:0">' +
+            '<div style="color:#f0a868;font-size:0.72rem;font-weight:700;margin-bottom:2px">↩︎ ' +
+              _escHtml(REPLY_NAME || 'メッセージ') + ' に返信</div>' +
+            '<div style="color:rgba(240,232,224,0.7);font-size:0.82rem;white-space:nowrap;' +
+              'overflow:hidden;text-overflow:ellipsis">' + _escHtml(txt) + '</div>' +
+          '</div>' + thumb +
+          '<div id="_danran_reply_x" style="flex-shrink:0;width:28px;height:28px;border-radius:50%;' +
+            'background:rgba(255,255,255,0.1);color:#f0e8e0;display:flex;align-items:center;' +
+            'justify-content:center;font-size:0.9rem;cursor:pointer">✕</div>';
+        var x = bar.querySelector('#_danran_reply_x');
+        if (x) x.addEventListener('click', function (e) {
+          e.preventDefault(); e.stopPropagation();
+          sendNav({ action: 'clear_reply', ts: Date.now() });
+        });
+      }
+      alignReplyBar();
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
+   *  引用タップ → 元メッセージへスクロール＋ぷるぷる強調（LINE 風）
+   * ════════════════════════════════════════ */
+  function jumpToMessage(id) {
+    try {
+      var pDoc = window.parent.document;
+      if (!pDoc.getElementById('_danran_jump_css')) {
+        var s = pDoc.createElement('style');
+        s.id = '_danran_jump_css';
+        s.textContent =
+          '@keyframes danranJumpPulse{' +
+          '0%{box-shadow:0 0 0 0 rgba(240,168,104,0)}' +
+          '15%{box-shadow:0 0 0 4px rgba(240,168,104,0.9)}' +
+          '30%{box-shadow:0 0 0 0 rgba(240,168,104,0)}' +
+          '45%{box-shadow:0 0 0 4px rgba(240,168,104,0.9)}' +
+          '60%{box-shadow:0 0 0 0 rgba(240,168,104,0)}' +
+          '100%{box-shadow:0 0 0 0 rgba(240,168,104,0)}}';
+        (pDoc.head || pDoc.body).appendChild(s);
+      }
+      var target = pDoc.querySelector('[data-lp-msg="' + id + '"]');
+      if (!target) { showToast('元のメッセージは見つかりませんでした'); return; }
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.style.borderRadius = target.style.borderRadius || '12px';
+      target.style.animation = 'danranJumpPulse 1.1s ease';
+      setTimeout(function () { try { target.style.animation = ''; } catch (e) {} }, 1250);
     } catch (e) {}
   }
 

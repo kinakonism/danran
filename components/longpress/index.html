@@ -1538,8 +1538,9 @@
         if (isEdit) { injectEditHeader(VIEW); } else { injectHeader(ACTIVE_ROOM, SHOW_ROOMS); }
       }
     } catch (e) {}
-    // 長押し検出は委譲方式で「生きた iframe」に毎回貼り直す（死んだ iframe 問題対策）
+    // 長押し検出・スワイプ戻りは委譲方式で「生きた iframe」に毎回貼り直す（死んだ iframe 対策）
     try { setupLongPressDelegation(); } catch (e) {}
+    try { setupSwipeBack(); } catch (e) {}
     fillImageSlots();   // 画像スロットに永続 img を流し込む（再描画でも再ロードしない）
     // チャット画像スロットに直接タップハンドラを付与（デリゲーションより iOS で確実）
     try {
@@ -1592,14 +1593,7 @@
    *  ★ show_rooms は Python 側で st.session_state 管理（URL を変えない）。
    *    URL を変えると iOS Safari のネイティブ戻るジェスチャーと競合するため。
    * ════════════════════════════════════════ */
-  var _swipeSX = null, _swipeSY = null, _swipeST = null;
-  var _swipeLastFire = 0;   // pDoc 共有ではなくこの iframe だけのデバウンス
-  var _swipeSetupDone = false;
-
   function setupSwipeBack() {
-    if (_swipeSetupDone) return;
-    _swipeSetupDone = true;
-
     var pDoc, outerWin;
     try {
       pDoc     = window.parent.document;
@@ -1607,9 +1601,23 @@
                  ? window.parent.parent : window.parent;
     } catch (e) { return; }
 
-    // バージョン付きフラグで二重登録防止（旧バージョンのフラグとは別）
-    if (pDoc._danranSwipeV47) return;
-    pDoc._danranSwipeV47 = true;
+    // ★ ドラッグ中は付け替えない（ジェスチャー途中で状態が飛ぶのを防ぐ）
+    if (pDoc._danranSwipeDragging) return;
+
+    // ★ 既存（古い＝死んだ iframe 由来かもしれない）リスナーを外し、この生きた iframe で
+    //   貼り直す。一度だけ登録する旧方式だと iframe 再生成後にハンドラが凍結し
+    //   「たまにスワイプで戻れない」原因になっていた（= 長押しと同じ生きた iframe 問題）。
+    var prev = pDoc._danranSwipeReg;
+    if (prev) {
+      try {
+        pDoc.removeEventListener('touchstart', prev.ts);
+        pDoc.removeEventListener('touchmove',  prev.tm);
+        pDoc.removeEventListener('touchend',   prev.te);
+        pDoc.removeEventListener('touchcancel',prev.tc);
+        pDoc.removeEventListener('click',      prev.ck, true);
+        pDoc.removeEventListener('visibilitychange', prev.vc);
+      } catch (e) {}
+    }
 
     function screenWidth() {
       return outerWin.innerWidth || pDoc.documentElement.clientWidth || 375;
@@ -1618,11 +1626,12 @@
       return pDoc.querySelector('[data-testid="stApp"]') || pDoc.querySelector('.stApp');
     }
 
-    // nav 送信（生きた iframe 経由・800ms デバウンス）
+    // nav 送信（生きた iframe 経由・800ms デバウンス。デバウンス値は pDoc 共有で
+    // 付け替え直後の二重発火も防ぐ）
     function fireNav(action) {
       var now = Date.now();
-      if (now - _swipeLastFire < 800) return;
-      _swipeLastFire = now;
+      if (now - (pDoc._danranSwipeLastFire || 0) < 800) return;
+      pDoc._danranSwipeLastFire = now;
       if (action === 'go_rooms') { try { showBackCover(); } catch (e) {} }  // 戻り遷移を覆う
       if (pDoc._danranNav) { pDoc._danranNav(action, now); }
       else { stSetValue({ action: action, ts: now }); }
@@ -1645,87 +1654,11 @@
       }
     }
 
-    var _swipeAt  = 0;       // 合成クリック抑制用
+    // 状態はこの関数のローカル（＝この生きた iframe 所有）。付け替えごとに新規。
+    var _sx = null, _sy = null, _st = 0;
     var _dragEl   = null;    // ドラッグ中の .stApp
     var _dragging = false;   // 横ドラッグ確定
     var _canDrag  = false;   // チャット画面（ルーム選択でない）で開始したか
-
-    // ── touchstart: 開始点記録 + ドラッグ可否判定 ──
-    pDoc.addEventListener('touchstart', function (e) {
-      _swipeSX = null; _dragging = false; _canDrag = false; _dragEl = null;
-      if (e.touches.length !== 1) return;
-      if (pDoc.getElementById(IMG_VIEWER_ID)) return;   // 画像ビューア表示中はスワイプ戻り無効
-      var t = e.touches[0];
-      if (t.clientX > screenWidth() * 0.5) return;   // 左 50% 以内で開始
-      _swipeSX = t.clientX; _swipeSY = t.clientY; _swipeST = Date.now();
-      var view = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
-      var sr   = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
-      // 指追従ドラッグはチャット画面のみ（ルーム選択＝トップ画面では無効）
-      _canDrag = (view === 'chat' || view === '') && !sr;
-    }, { passive: true });
-
-    // ── touchmove: 横ドラッグ確定後に .stApp を指追従 ──
-    pDoc.addEventListener('touchmove', function (e) {
-      if (_swipeSX === null) return;
-      if (e.touches.length !== 1) return;
-      var t  = e.touches[0];
-      var dx = t.clientX - _swipeSX;
-      var dy = t.clientY - _swipeSY;
-      if (!_dragging) {
-        if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { _swipeSX = null; return; } // 縦スクロール
-        if (dx > 12) {
-          _dragging = true;
-          if (_canDrag) {
-            _dragEl = getAppEl();
-            if (_dragEl) _dragEl.style.transition = 'none';
-          }
-        } else { return; }
-      }
-      if (_canDrag && _dragEl) {
-        if (e.cancelable) e.preventDefault();          // 縦スクロール・iOS戻りを抑止
-        var x = dx < 0 ? 0 : dx;                        // 右方向のみ
-        _dragEl.style.transform = 'translateX(' + x + 'px)';
-        _dragEl.style.boxShadow = '-14px 0 28px rgba(0,0,0,0.45)';
-      }
-    }, { passive: false });   // preventDefault するため passive:false 必須
-
-    // ── touchend: 完了/キャンセル判定 ──
-    pDoc.addEventListener('touchend', function (e) {
-      if (_swipeSX === null) { _dragging = false; return; }
-      if (e.changedTouches.length !== 1) { _swipeSX = null; _dragging = false; return; }
-      var t  = e.changedTouches[0];
-      var dx = t.clientX - _swipeSX;
-      var dy = Math.abs(t.clientY - _swipeSY);
-      var dt = Date.now() - _swipeST;
-      _swipeSX = null;
-      var sw = screenWidth();
-
-      // 指追従ドラッグ（チャット → ルーム選択）
-      if (_dragging && _canDrag && _dragEl) {
-        var vel = dx / Math.max(dt, 1);                 // px/ms
-        var complete = (dx > sw * 0.32) || (dx > 60 && vel > 0.5);
-        // 完了/キャンセルとも .stApp は必ず translateX(0) に戻す（画面外固着を防ぐ）。
-        //   完了時: アニメなしで瞬時に戻す（「バネで戻る」動きを見せない）→
-        //           直後にルーム選択が CSS スライドインで入るので前進感だけ残る。
-        //   キャンセル時: バネ戻し（指を離したら元に吸い戻る自然な挙動）。
-        if (complete) {
-          clearDrag(_dragEl, false);   // 瞬時クリア（戻るアニメなし）
-          _swipeAt = Date.now();
-          fireNav('go_rooms');
-        } else {
-          clearDrag(_dragEl, true);    // バネ戻し
-        }
-        _dragging = false; _dragEl = null;
-        return;
-      }
-      _dragging = false;
-
-      // 非ドラッグ: 編集画面の戻る等（しきい値判定）
-      if (dx > 80 && dy < dx * 0.6 && dt < 700) {
-        _swipeAt = Date.now();
-        execSwipeFallback();
-      }
-    }, { passive: true });
 
     function execSwipeFallback() {
       var view = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
@@ -1739,24 +1672,108 @@
       // ルーム選択中(sr=true)はトップ画面のため何もしない
     }
 
+    // ── touchstart: 開始点記録 + ドラッグ可否判定 ──
+    var onTs = function (e) {
+      _sx = null; _dragging = false; _canDrag = false; _dragEl = null;
+      pDoc._danranSwipeDragging = false;
+      if (e.touches.length !== 1) return;
+      if (pDoc.getElementById(IMG_VIEWER_ID)) return;   // 画像ビューア表示中はスワイプ戻り無効
+      var t = e.touches[0];
+      if (t.clientX > screenWidth() * 0.5) return;   // 左 50% 以内で開始
+      _sx = t.clientX; _sy = t.clientY; _st = Date.now();
+      var view = pDoc._danranView !== undefined ? pDoc._danranView : VIEW;
+      var sr   = pDoc._danranSR   !== undefined ? pDoc._danranSR   : SHOW_ROOMS;
+      // 指追従ドラッグはチャット画面のみ（ルーム選択＝トップ画面では無効）
+      _canDrag = (view === 'chat' || view === '') && !sr;
+    };
+
+    // ── touchmove: 横ドラッグ確定後に .stApp を指追従 ──
+    var onTm = function (e) {
+      if (_sx === null) return;
+      if (e.touches.length !== 1) return;
+      var t  = e.touches[0];
+      var dx = t.clientX - _sx;
+      var dy = t.clientY - _sy;
+      if (!_dragging) {
+        if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { _sx = null; return; } // 縦スクロール
+        if (dx > 12) {
+          _dragging = true;
+          pDoc._danranSwipeDragging = true;   // ドラッグ中は scan の付け替えを止める
+          if (_canDrag) {
+            _dragEl = getAppEl();
+            if (_dragEl) _dragEl.style.transition = 'none';
+          }
+        } else { return; }
+      }
+      if (_canDrag && _dragEl) {
+        if (e.cancelable) e.preventDefault();          // 縦スクロール・iOS戻りを抑止
+        var x = dx < 0 ? 0 : dx;                        // 右方向のみ
+        _dragEl.style.transform = 'translateX(' + x + 'px)';
+        _dragEl.style.boxShadow = '-14px 0 28px rgba(0,0,0,0.45)';
+      }
+    };
+
+    // ── touchend: 完了/キャンセル判定 ──
+    var onTe = function (e) {
+      pDoc._danranSwipeDragging = false;
+      if (_sx === null) { _dragging = false; return; }
+      if (e.changedTouches.length !== 1) { _sx = null; _dragging = false; return; }
+      var t  = e.changedTouches[0];
+      var dx = t.clientX - _sx;
+      var dy = Math.abs(t.clientY - _sy);
+      var dt = Date.now() - _st;
+      _sx = null;
+      var sw = screenWidth();
+
+      // 指追従ドラッグ（チャット → ルーム選択）
+      if (_dragging && _canDrag && _dragEl) {
+        var vel = dx / Math.max(dt, 1);                 // px/ms
+        var complete = (dx > sw * 0.32) || (dx > 60 && vel > 0.5);
+        // 完了/キャンセルとも .stApp は必ず translateX(0) に戻す（画面外固着を防ぐ）。
+        if (complete) {
+          clearDrag(_dragEl, false);   // 瞬時クリア（戻るアニメなし）
+          pDoc._danranSwipeAt = Date.now();
+          fireNav('go_rooms');
+        } else {
+          clearDrag(_dragEl, true);    // バネ戻し
+        }
+        _dragging = false; _dragEl = null;
+        return;
+      }
+      _dragging = false;
+
+      // 非ドラッグ: 編集画面の戻る等（しきい値判定）
+      if (dx > 80 && dy < dx * 0.6 && dt < 700) {
+        pDoc._danranSwipeAt = Date.now();
+        execSwipeFallback();
+      }
+    };
+
     // touchcancel: 通話・通知等でジェスチャー中断時も必ず .stApp を元に戻す
-    pDoc.addEventListener('touchcancel', function () {
+    var onTc = function () {
+      pDoc._danranSwipeDragging = false;
       if (_dragEl) clearDrag(_dragEl, true);
-      _swipeSX = null; _dragging = false; _dragEl = null;
-    }, { passive: true });
+      _sx = null; _dragging = false; _dragEl = null;
+    };
 
     // 合成クリック抑制（スワイプ後 700ms）
-    pDoc.addEventListener('click', function (e) {
-      if (Date.now() - _swipeAt < 700) {
+    var onCk = function (e) {
+      if (Date.now() - (pDoc._danranSwipeAt || 0) < 700) {
         e.stopImmediatePropagation();
         e.preventDefault();
       }
-    }, { capture: true });
+    };
 
     // アプリ復帰時にバッジをクリア
-    pDoc.addEventListener('visibilitychange', function () {
-      if (!pDoc.hidden && ME) { danranClearBadge(); }
-    });
+    var onVc = function () { if (!pDoc.hidden && ME) { danranClearBadge(); } };
+
+    pDoc.addEventListener('touchstart', onTs, { passive: true });
+    pDoc.addEventListener('touchmove',  onTm, { passive: false });   // preventDefault するため
+    pDoc.addEventListener('touchend',   onTe, { passive: true });
+    pDoc.addEventListener('touchcancel',onTc, { passive: true });
+    pDoc.addEventListener('click',      onCk, { capture: true });
+    pDoc.addEventListener('visibilitychange', onVc);
+    pDoc._danranSwipeReg = { ts: onTs, tm: onTm, te: onTe, tc: onTc, ck: onCk, vc: onVc };
   }
 
   function setupObs() {

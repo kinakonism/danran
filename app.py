@@ -624,7 +624,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v77",   # 長押しを委譲方式に（死んだiframeでポップアップが出ない問題を解消）
+    "danran_lp_v78",   # スワイプ戻りも委譲方式に（死んだiframeでたまに戻れない問題）+ グリッド2列固定
     path=_LP_COMPONENT_DIR,
 )
 
@@ -753,8 +753,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
 
     # ── 連投グリッド HTML（各セル = 正方形・object-fit:cover・個別 data-lp-msg）──
     def _img_grid_html(run: list, is_mine: bool) -> str:
-        n = len(run)
-        cols = 2 if n in (2, 4) else (3 if n >= 3 else 1)
+        # ★ 常に2列固定（枚数が増えても3列にせず、下に行が増えていく）
+        cols = 2
         cells = ""
         for im in run:
             u   = im.get("image_url") or ""

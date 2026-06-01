@@ -441,13 +441,16 @@ def delete_room(room_id: str, room_name: str) -> None:
 # ─────────────────────────────────────
 # メッセージ DB
 # ─────────────────────────────────────
-def fetch_messages(room: str, limit: int = 100) -> list[dict]:
+def fetch_messages(room: str, limit: int = 100) -> list[dict] | None:
+    """メッセージ取得。成功時はリスト（空可）、通信エラー時は None を返す。
+    ★ 一時的なエラーで [] を返すと「0件」描画でチャットが一瞬空になるため、
+      呼び出し元は None のとき前回表示を維持する。"""
     try:
         return supabase.table("messages")\
             .select("id, user_id, user_name, user_avatar, content, image_url, created_at")\
             .eq("room_name", room).order("created_at").limit(limit).execute().data or []
-    except Exception as e:
-        st.error(f"❌ {e}"); return []
+    except Exception:
+        return None
 
 def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, image_url: str | None = None) -> bool:
     try:
@@ -666,7 +669,7 @@ def linkify_body(body: str) -> str:
 # ★ リアルタイムタイムライン
 #   変化検知ポーラー（poll_messages）が変化時のみ再描画する。
 # ─────────────────────────────────────
-def build_messages_html(selected_room: str, current_user: dict) -> str:
+def build_messages_html(selected_room: str, current_user: dict) -> str | None:
     """チャットの全メッセージ HTML（バブル＋軽い既読）を 1 つの文字列で返す。
     副作用なし（fetch のみ）。静的描画と変化検知ポーラーの両方から共用する。
     ★ この出力が前回と同一なら再描画しない＝画像チカチカ防止の要。"""
@@ -674,6 +677,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str:
     my_id = current_user.get("id", "")
 
     messages = fetch_messages(selected_room)
+    if messages is None:
+        return None   # 取得失敗（通信エラー）→ 呼び出し元が前回表示を維持
     if not messages:
         return ('<div style="padding:22px 16px;text-align:center;'
                 'color:rgba(255,255,255,0.5);font-size:0.9rem;line-height:1.7">'
@@ -839,9 +844,11 @@ def render_chat_messages(current_user: dict) -> None:
     キャッシュ済み HTML があればそれを使い、無ければ build して保存する。"""
     room = st.session_state.get("active_room", "")
     if st.session_state.get("_chat_html_room") != room or "_chat_html" not in st.session_state:
-        st.session_state["_chat_html"] = build_messages_html(room, current_user)
-        st.session_state["_chat_html_room"] = room
-    st.markdown(st.session_state.get("_chat_html", ""), unsafe_allow_html=True)
+        _html = build_messages_html(room, current_user)
+        if _html is not None:   # None=取得失敗。前回の _chat_html を維持（空表示で消さない）
+            st.session_state["_chat_html"] = _html
+            st.session_state["_chat_html_room"] = room
+    st.markdown(st.session_state.get("_chat_html", "") or "", unsafe_allow_html=True)
 
 
 @st.fragment(run_every="2s")
@@ -863,6 +870,8 @@ def poll_messages() -> None:
 
     # 新着トースト（他人のメッセージのみ）
     _msgs = fetch_messages(selected_room)
+    if _msgs is None:
+        return   # 取得失敗（通信エラー）→ 今回はスキップ（前回表示を維持）
     count_key = f"cnt_{selected_room}"
     prev = st.session_state.get(count_key, -1)
     if prev >= 0 and len(_msgs) > prev:
@@ -874,6 +883,8 @@ def poll_messages() -> None:
 
     # 内容（バブルHTML）が前回と変わっていれば再描画。同じなら何もしない。
     _html_now = build_messages_html(selected_room, current_user)
+    if _html_now is None:
+        return   # 取得失敗 → 前回表示を維持
     if _html_now != st.session_state.get("_chat_html") \
             or st.session_state.get("_chat_html_room") != selected_room:
         st.session_state["_chat_html"]      = _html_now

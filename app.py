@@ -170,16 +170,17 @@ def add_room_member(room_id: str, user_id: str) -> None:
     except Exception:
         pass
 
-DEFAULT_ROOM_NAME = "main"   # 新規登録時に自動参加させる既定ルーム
+DEFAULT_ROOM_NAME = "main"          # 新規登録時に自動参加させる既定ルーム
+AI_ROOM_NAME      = "🤖 AIサポート"   # AI と対話するルーム（全員自動参加）
 
 def add_to_default_room(user_id: str) -> None:
-    """新規登録ユーザーを既定ルーム（main）へ自動参加させる。
-    招待リンクから来た家族がすぐチャットを使えるようにするため。"""
+    """新規登録ユーザーを既定ルーム（main）と AI サポートルームへ自動参加させる。"""
     try:
         _rooms = fetch_rooms()  # user_id 無し＝全ルーム
-        _main = next((r for r in _rooms if r.get("name") == DEFAULT_ROOM_NAME), None)
-        if _main:
-            add_room_member(_main["id"], user_id)
+        for _nm in (DEFAULT_ROOM_NAME, AI_ROOM_NAME):
+            _r = next((r for r in _rooms if r.get("name") == _nm), None)
+            if _r:
+                add_room_member(_r["id"], user_id)
     except Exception:
         pass
 
@@ -521,9 +522,114 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
             },
             daemon=True,
         ).start()
+        # ── AI サポートルームならボットが自動返信（バックグラウンド）──
+        if room == AI_ROOM_NAME and uid != AI_BOT_UID:
+            _ai = _ai_cfg()
+            if _ai.get("api_key"):
+                threading.Thread(
+                    target=_generate_ai_reply,
+                    args=(_ai["api_key"], _ai.get("model", "")),
+                    daemon=True,
+                ).start()
         return True
     except Exception as e:
         st.error(f"❌ {e}"); return False
+
+# ─────────────────────────────────────
+# AI サポートボット（Anthropic Claude）
+# ─────────────────────────────────────
+AI_BOT_UID    = "00000000-0000-0000-0000-0000000000a1"
+AI_BOT_NAME   = "🤖 アシスタント"
+AI_BOT_AVATAR = "🤖"
+AI_SYSTEM_PROMPT = (
+    "あなたは家族専用チャットアプリ「danran（団欒）」のサポート用 AI アシスタントです。"
+    "ここは家族みんなが見る『🤖 AIサポート』ルームで、使い方の質問やバグ報告に日本語でやさしく簡潔に答えます。\n\n"
+    "【danran の使い方の要点】\n"
+    "- 写真送信: 入力欄左の📷ボタン。複数選択して一気に送れる（連投はコンパクトなグリッド表示）。\n"
+    "- リアクション/返信/コピー: 相手のメッセージを長押しでメニュー。メッセージを左スワイプでも返信できる。\n"
+    "- 画像: タップで全画面表示、右下のボタンで保存。\n"
+    "- 部屋の切り替え: 画面左上の『＜』でルーム選択へ。\n"
+    "- 通知(iPhone): Safari でアプリを開き『共有→ホーム画面に追加』し、そのアイコンから開くと通知が届く。\n"
+    "- デカ絵文字: 絵文字だけのメッセージは大きく表示される。\n\n"
+    "【方針】\n"
+    "- バグ報告には、まず受け止めて、必要なら『どの画面で・何をしたら・どうなったか』を1つだけ簡潔に質問する。"
+    "開発者（まさと）もこのルームを見て対応します、と伝えてよい。\n"
+    "- 添付画像の中身は見られないので、必要なら文章で説明してもらう。\n"
+    "- 返答は短め（数行）で、家族向けの親しみやすい口調。絵文字は控えめに。"
+)
+
+def _ai_cfg() -> dict:
+    """AI 設定（Anthropic API キー・モデル）。st.secrets → 環境変数 の順。"""
+    try:
+        cfg = dict(st.secrets.get("ai", {}))
+    except Exception:
+        cfg = {}
+    return {
+        "api_key": cfg.get("api_key") or os.environ.get("ANTHROPIC_API_KEY", ""),
+        "model":   cfg.get("model")   or "claude-sonnet-4-6",
+    }
+
+def _build_ai_messages(history: list[dict]) -> list[dict]:
+    """履歴を Claude Messages 形式へ。bot=assistant / それ以外=user（名前を前置）。
+    連続する同roleは結合し、先頭が user になるよう整える。"""
+    msgs: list[dict] = []
+    for m in history:
+        role = "assistant" if m.get("user_id") == AI_BOT_UID else "user"
+        text = (m.get("content") or "").strip()
+        if not text:
+            text = "（画像を送信）" if m.get("image_url") else ""
+        if not text:
+            continue
+        if role == "user":
+            text = f"{m.get('user_name','家族')}: {text}"
+        if msgs and msgs[-1]["role"] == role:
+            msgs[-1]["content"] += "\n" + text
+        else:
+            msgs.append({"role": role, "content": text})
+    while msgs and msgs[0]["role"] != "user":
+        msgs.pop(0)
+    return msgs
+
+def _insert_ai_message(text: str) -> None:
+    try:
+        supabase.table("messages").insert({
+            "room_name": AI_ROOM_NAME, "user_id": AI_BOT_UID,
+            "user_name": AI_BOT_NAME, "user_avatar": AI_BOT_AVATAR,
+            "content": (text or "")[:4000],
+        }).execute()
+    except Exception:
+        pass
+
+def _generate_ai_reply(api_key: str, model: str) -> None:
+    """AI サポートルームの直近履歴を読み、Claude の返信を投稿する（別スレッド）。"""
+    try:
+        history = fetch_messages(AI_ROOM_NAME, limit=20) or []
+        conv = _build_ai_messages(history)
+        if not conv:
+            return
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model or "claude-sonnet-4-6",
+                "max_tokens": 700,
+                "system": AI_SYSTEM_PROMPT,
+                "messages": conv,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        reply = "".join(
+            p.get("text", "") for p in data.get("content", []) if p.get("type") == "text"
+        ).strip()
+        _insert_ai_message(reply or "うまく応答できませんでした。もう一度試してください。")
+    except Exception:
+        _insert_ai_message("⚠️ 今ちょっと応答できませんでした。少し待ってからもう一度試してください。")
 
 def delete_message(msg_id: str, user_id: str) -> bool:
     """メッセージを削除する。user_id（UUID）で認可するため名前変更後も安全。"""

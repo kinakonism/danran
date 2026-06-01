@@ -501,6 +501,21 @@ vapid_private_key = "..."   # バックエンド（pywebpush）専用、絶対�
 vapid_subject     = "mailto:..."
 ```
 
+---
+
+## AI サポートルーム（Claude）
+
+- **ルーム名 `🤖 AIサポート`**（`AI_ROOM_NAME`）。全ユーザーが自動参加（登録時 `add_to_default_room` が main と共にメンバー追加）。
+- このルームにユーザーが投稿すると `send_message` が**別スレッドで `_generate_ai_reply`** を起動し、Anthropic Claude（`httpx` で `/v1/messages`）に直近20件を渡して返信を生成、**ボットユーザー**（`AI_BOT_UID=…a1` / 名前 `🤖 アシスタント` / 🤖）として messages に insert → 2秒ポーラーが拾う。
+- ボットの user_id は users 表に無い固定 UUID（is_mine で他人扱い＝左側表示）。ボット投稿は send_message を通さないので無限ループしない。
+- **secrets `[ai]`**（未設定ならボットは沈黙＝普通の部屋）:
+  ```toml
+  [ai]
+  api_key = "sk-ant-..."        # Anthropic API キー（env ANTHROPIC_API_KEY でも可）
+  model   = "claude-sonnet-4-6" # 任意。未指定はこの既定
+  ```
+- システムプロンプト `AI_SYSTEM_PROMPT` に danran の使い方要点を内蔵。画像の中身は見ない（テキストのみ）。バグ報告はこのルームに残るので管理者(まさと)も読める。
+
 キーを再生成する場合:
 ```python
 from py_vapid import Vapid

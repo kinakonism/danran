@@ -780,6 +780,45 @@
    *  Streamlit app iframe に対してのみ効くため、外側シェルには届かなかった。
    *  → window.parent.parent.document を直接操作する必要がある。
    * ════════════════════════════════════════ */
+  /* ════════════════════════════════════════
+   *  iOS「ホーム画面に追加」用メタを最上位(外側シェル)の <head> に注入する。
+   *  ★ st.set_page_config / st.html の apple-touch-icon は「アプリ iframe」内にしか効かず、
+   *    Safari が追加時に読むのは最上位ドキュメントの <head>。そこは Streamlit 既定の
+   *    アイコン/タイトルなので「Streamlit」になってしまう。JS で最上位 head に注入して
+   *    アイコン=danran、名前="danran" にする（同一オリジンなので操作可能）。
+   * ════════════════════════════════════════ */
+  function ensureIosMeta() {
+    try {
+      var docs = [];
+      try { if (window.parent && window.parent.document) docs.push(window.parent.document); } catch (e) {}
+      try {
+        var pp = window.parent && window.parent.parent;
+        if (pp && pp !== window.parent && pp.document && pp.document !== window.parent.document) docs.push(pp.document);
+      } catch (e) {}
+      docs.forEach(function (doc) {
+        var head = doc.head || (doc.getElementsByTagName('head')[0]);
+        if (!head) return;
+        function add(sel, make) { if (!doc.querySelector(sel)) head.appendChild(make()); }
+        add('link[rel="apple-touch-icon"][data-danran]', function () {
+          var l = doc.createElement('link'); l.rel = 'apple-touch-icon';
+          l.setAttribute('href', '/icons/icon-192.png'); l.setAttribute('data-danran', '1'); return l;
+        });
+        add('meta[name="apple-mobile-web-app-title"][data-danran]', function () {
+          var m = doc.createElement('meta'); m.setAttribute('name', 'apple-mobile-web-app-title');
+          m.setAttribute('content', 'danran'); m.setAttribute('data-danran', '1'); return m;
+        });
+        add('meta[name="apple-mobile-web-app-capable"][data-danran]', function () {
+          var m = doc.createElement('meta'); m.setAttribute('name', 'apple-mobile-web-app-capable');
+          m.setAttribute('content', 'yes'); m.setAttribute('data-danran', '1'); return m;
+        });
+        add('link[rel="manifest"][data-danran]', function () {
+          var l = doc.createElement('link'); l.rel = 'manifest';
+          l.setAttribute('href', '/manifest.json'); l.setAttribute('data-danran', '1'); return l;
+        });
+      });
+    } catch (e) {}
+  }
+
   function hideManageApp() {
     try {
       // ── A. 外側シェル (window.parent.parent) の管理ボタンを消す ──
@@ -1568,6 +1607,7 @@
       removeCameraUI();
     }
     hideManageApp();
+    ensureIosMeta();  // 最上位 head に apple-touch-icon / app タイトルを注入（ホーム画面追加用）
     fixStBottom();   // stBottom の display:none を強制解除
     alignCamBtn();   // 📷 ボタンを stChatInput の垂直中央に追従させる
     attachHdrButtons();     // Python レンダリングヘッダーのクリックハンドラを付与

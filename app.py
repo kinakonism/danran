@@ -645,7 +645,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v87",   # リアクション二重表示を修正（JS renderPills廃止→refresh_chatでPython単一描画）
+    "danran_lp_v88",   # 最上位headにapple-touch-icon/title注入（ホーム画面アイコンをdanranに）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1153,29 +1153,28 @@ def show_register() -> None:
             'border-left:4px solid #f0a868;border-radius:12px;padding:13px 15px;margin:6px 0 4px 0;'
             'color:#f0e8e0;font-size:0.9rem;line-height:1.7">'
             '<div style="font-weight:700;color:#f0a868;margin-bottom:6px;font-size:0.95rem">'
-            '📲 先に「ホーム画面に追加」してください</div>'
+            '📲 通知を使うには「ホーム画面に追加」してください</div>'
             '<div style="margin-bottom:8px;color:rgba(240,232,224,0.85)">'
             'iPhone は<b>ホーム画面に追加したアプリ</b>からのみ通知が届きます。'
-            '下の手順で追加してから登録するのがおすすめです👇</div>'
+            '下の順番がおすすめです👇</div>'
             '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px">'
             '<span style="color:#f0a868;font-weight:700">①</span>'
-            '<span>Safari の<b>右下の「・・・」</b>（メニュー）ボタンをタップ</span></div>'
+            '<span>まず<b>この画面で登録を完了</b>する（下のフォーム）</span></div>'
             '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px">'
             '<span style="color:#f0a868;font-weight:700">②</span>'
-            '<span>出てきたメニューの<b>「共有」</b>をタップ</span></div>'
+            '<span>Safari <b>右下の「・・・」</b>（メニュー）をタップ → <b>「共有」</b></span></div>'
             '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px">'
             '<span style="color:#f0a868;font-weight:700">③</span>'
-            '<span>共有メニューを<b>下にスクロール</b>して<b>「ホーム画面に追加」</b>をタップ</span></div>'
-            '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px">'
-            '<span style="color:#f0a868;font-weight:700">④</span>'
-            '<span>右上の<b>「追加」</b>をタップ</span></div>'
+            '<span><b>下にスクロール</b>して<b>「ホーム画面に追加」</b> → 右上の<b>「追加」</b></span></div>'
             '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">'
-            '<span style="color:#f0a868;font-weight:700">⑤</span>'
-            '<span>ホーム画面にできた <b>danran アイコン</b>から開いて登録する</span></div>'
+            '<span style="color:#f0a868;font-weight:700">④</span>'
+            '<span>ホーム画面の <b>danran アイコン</b>から開き、'
+            '<b>①で作ったアカウントでログイン</b></span></div>'
             '<div style="color:rgba(240,232,224,0.6);font-size:0.82rem;line-height:1.55">'
+            '※ ホーム画面アプリは最初ログイン画面が出ます。①で決めた<b>名前/電話番号＋パスワード</b>で'
+            'ログインしてください（チャットはそのまま見えます）。<br>'
             '※ LINE などから開いた場合は、まず<b>「Safari で開く」</b>を選んでください'
-            '（アプリ内ブラウザではホーム画面に追加できません）。<br>'
-            '※ このまま登録してもOKですが、その場合はアプリ版でもう一度ログインが必要です。</div>'
+            '（アプリ内ブラウザではホーム画面に追加できません）。</div>'
             '</div>'
         )
         st.markdown("<br>", unsafe_allow_html=True)

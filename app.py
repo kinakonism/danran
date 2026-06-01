@@ -700,6 +700,60 @@ def linkify_body(body: str) -> str:
     return ''.join(out).replace("\n", "<br>")
 
 # ─────────────────────────────────────
+# デカ絵文字判定（絵文字のみのメッセージを大きく表示する）
+# ─────────────────────────────────────
+def _is_emoji_cp(cp: int) -> bool:
+    return (
+        0x1F300 <= cp <= 0x1FAFF or   # 顔・物・記号など大半の絵文字
+        0x2600  <= cp <= 0x27BF  or   # 記号・装飾記号(❤や✨等)
+        0x1F000 <= cp <= 0x1F0FF or   # 麻雀・トランプ
+        0x2190  <= cp <= 0x21FF  or   # 矢印
+        0x2300  <= cp <= 0x23FF  or   # ⌚⏰等
+        0x25A0  <= cp <= 0x25FF  or   # 幾何記号
+        0x2B00  <= cp <= 0x2BFF  or   # ⭐等
+        cp in (0x00A9, 0x00AE, 0x2122, 0x2139, 0x3030, 0x303D)
+    )
+
+def _is_emoji_mod(cp: int) -> bool:
+    # 異体字セレクタ / ZWJ / キーキャップ / 肌色トーン（前の絵文字に付随）
+    return (cp in (0xFE0F, 0xFE0E, 0x200D, 0x20E3) or 0x1F3FB <= cp <= 0x1F3FF)
+
+def _emoji_only_info(text: str) -> tuple[bool, int]:
+    """text が「絵文字のみ（＋空白）」なら (True, 絵文字数) を返す。
+    ZWJ 連結（家族絵文字等）と国旗（地域指示子2つ=1）をまとめて1個と数える。"""
+    t = (text or "").strip()
+    if not t:
+        return (False, 0)
+    count = 0
+    ri_run = 0          # 地域指示子（国旗）の連続数
+    join_next = False   # 直前が ZWJ → 次の絵文字は連結扱い（数えない）
+    for ch in t:
+        cp = ord(ch)
+        if cp in (0x20, 0x09, 0x0A, 0x0D, 0x3000):  # 空白類は無視
+            ri_run = 0
+            continue
+        if _is_emoji_mod(cp):
+            if cp == 0x200D:
+                join_next = True
+            continue
+        if 0x1F1E6 <= cp <= 0x1F1FF:  # 地域指示子（国旗）
+            ri_run += 1
+            if ri_run >= 2:
+                count += 1
+                ri_run = 0
+            join_next = False
+            continue
+        ri_run = 0
+        if _is_emoji_cp(cp):
+            if join_next:
+                join_next = False   # 連結（前のクラスタに付く）→ 数えない
+            else:
+                count += 1
+            continue
+        return (False, 0)   # 絵文字以外（文字・数字・記号）が混ざる＝通常メッセージ
+    return (count > 0, count)
+
+# ─────────────────────────────────────
 # ★ リアルタイムタイムライン
 #   変化検知ポーラー（poll_messages）が変化時のみ再描画する。
 # ─────────────────────────────────────
@@ -925,6 +979,13 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         ) if img_url else ""
         content = _reply_quote_html(msg) + img_piece + body_esc
 
+        # ── デカ絵文字: 絵文字のみ1〜3個は背景なしで大きく表示（LINE 風）──
+        #   1個=大 / 2〜3個=中 / 4個以上=通常。画像付き・引用付きは対象外。
+        _emoji_only, _emoji_n = _emoji_only_info(body)
+        _big_emoji = (_emoji_only and 1 <= _emoji_n <= 3
+                      and not img_url and not msg.get("reply_to_id"))
+        _content_fs = ("3.8rem" if _emoji_n == 1 else "2.4rem") if _big_emoji else "0.93rem"
+
         # ── リアクション pills ──
         pills = _build_pills(msg_reactions)
         # data-lp-react: JS がリアルタイムで書き換えるためのコンテナ（常に出力）
@@ -937,10 +998,10 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         # data-lp-mine="1"   → JS が「自分のメッセージ」と判別して削除ボタン表示
         # data-lp-my-avatar  → JS が「自分のアバター」と判別してタップでプロフィール遷移
         if is_mine:
-            # 画像のみなら透明バブル（緑背景・パディング不要）
+            # 画像のみ/デカ絵文字なら透明バブル（緑背景・パディング不要）
             _mine_bstyle = (
                 'background:transparent;padding:0;border-radius:0'
-                if is_img_only else
+                if (is_img_only or _big_emoji) else
                 'background:#e8915b;color:#fff;border-radius:18px 18px 4px 18px;padding:10px 14px'
             )
             bubble = (
@@ -954,16 +1015,16 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'<div style="font-size:0.7rem;color:#888;margin-bottom:3px">{fmt_ts(ts)}</div>'
                 f'<div style="{_mine_bstyle};'
                 f'display:inline-block;max-width:100%;text-align:left;'
-                f'word-break:break-word;font-size:0.93rem">{content}</div>'
+                f'word-break:break-word;line-height:1.15;font-size:{_content_fs}">{content}</div>'
                 f'{pills_row}'
                 f'</div>'
                 f'</div>'
             )
         else:
-            # 画像のみなら透明バブル（グレー背景・パディング不要）
+            # 画像のみ/デカ絵文字なら透明バブル（グレー背景・パディング不要）
             _other_bstyle = (
                 'background:transparent;padding:0;border-radius:0'
-                if is_img_only else
+                if (is_img_only or _big_emoji) else
                 'background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:10px 14px'
             )
             bubble = (
@@ -976,7 +1037,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'margin-bottom:3px">{sender}</div>'
                 f'<div style="{_other_bstyle};'
                 f'display:inline-block;max-width:100%;text-align:left;'
-                f'word-break:break-word;font-size:0.93rem">{content}</div>'
+                f'word-break:break-word;line-height:1.15;font-size:{_content_fs}">{content}</div>'
                 f'<div style="font-size:0.7rem;color:#888;margin-top:3px">{fmt_ts(ts)}</div>'
                 f'{pills_row}'
                 f'</div>'

@@ -407,7 +407,8 @@ def upload_photo(bucket: str, file_id: str, f) -> str:
 # ─────────────────────────────────────
 def fetch_all_users() -> list[dict]:
     try:
-        return supabase.table("users").select("id, name, avatar").order("created_at").execute().data or []
+        rows = supabase.table("users").select("id, name, avatar").order("created_at").execute().data or []
+        return [u for u in rows if u.get("id") != AI_BOT_UID]   # ボットは候補に出さない
     except Exception:
         return []
 
@@ -542,8 +543,12 @@ AI_BOT_UID    = "00000000-0000-0000-0000-0000000000a1"
 AI_BOT_NAME   = "🤖 アシスタント"
 AI_BOT_AVATAR = "🤖"
 AI_SYSTEM_PROMPT = (
-    "あなたは家族専用チャットアプリ「danran（団欒）」のサポート用 AI アシスタントです。"
+    "あなたは家族専用チャットアプリ「danran」のサポート用 AI アシスタントです。"
     "ここは家族みんなが見る『🤖 AIサポート』ルームで、使い方の質問やバグ報告に日本語でやさしく簡潔に答えます。\n\n"
+    "【書き方のルール（重要）】\n"
+    "- アプリ名は必ず半角で『danran』と書く（『danラン』等にしない）。\n"
+    "- マークダウン記法は使わない（`**`太字・`#`見出し等を出さない）。チャットでは記号がそのまま"
+    "表示され読みにくいので、プレーンな文章で。箇条書きは行頭『・』だけでよい。\n\n"
     "【danran の使い方の要点】\n"
     "- 写真送信: 入力欄左の📷ボタン。複数選択して一気に送れる（連投はコンパクトなグリッド表示）。\n"
     "- リアクション/返信/コピー: 相手のメッセージを長押しでメニュー。メッセージを左スワイプでも返信できる。\n"

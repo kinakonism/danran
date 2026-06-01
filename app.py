@@ -645,7 +645,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v86",   # 相手アバタータップ→全画面プロフィール + sendNav併送で起動直後の入室不可を解消
+    "danran_lp_v87",   # リアクション二重表示を修正（JS renderPills廃止→refresh_chatでPython単一描画）
     path=_LP_COMPONENT_DIR,
 )
 

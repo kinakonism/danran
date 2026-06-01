@@ -403,50 +403,19 @@
     } catch (e) {}
   }
 
-  /* ════════════════════════════════════════
-   *  リアクション pill をリアルタイムで DOM 更新
-   *  [data-lp-react="msgId"] コンテナを書き換える
-   * ════════════════════════════════════════ */
-  function renderPills(msgId, reactMap) {
-    try {
-      var container = window.parent.document.querySelector('[data-lp-react="' + msgId + '"]');
-      if (!container) return;
-      var isMine = !!window.parent.document.querySelector('[data-lp-msg="' + msgId + '"][data-lp-mine]');
-      var align  = isMine ? 'right' : 'left';
-      container.style.textAlign = align;
-      var html = '';
-      EMOJIS.forEach(function (emoji) {
-        var users = reactMap[emoji] || [];
-        if (!users.length) return;
-        var my  = users.indexOf(ME) >= 0;
-        var bg  = my ? 'rgba(232,145,91,0.32)' : 'rgba(255,255,255,0.08)';
-        var bdr = my ? 'rgba(240,168,104,0.9)' : 'rgba(255,255,255,0.2)';
-        html +=
-          '<span style="display:inline-flex;align-items:center;gap:2px;' +
-          'background:' + bg + ';border:1px solid ' + bdr + ';border-radius:20px;' +
-          'padding:1px 7px;font-size:0.8rem;margin-right:3px">' +
-          emoji + '&nbsp;' + users.length + '</span>';
-      });
-      container.innerHTML = html;
-    } catch (e) {}
-  }
+  // （旧 renderPills は削除：React(st.markdown)管理下の data-lp-react を直接書き換えて
+  //   いたためピル二重表示の原因になっていた。リアクション描画は Python 単一ソースに統一。）
 
-  /* リアクション toggle → 即座に DB 再取得して pill を更新 */
+  /* リアクション toggle → Python に refresh_chat させて DB から綺麗に再描画。
+     ★ 以前は renderPills で data-lp-react コンテナの innerHTML を直接書き換えていたが、
+       それは React(st.markdown) 管理下の DOM を手で触る行為で、後続の変化駆動再描画と
+       競合して「同じ絵文字のピルが二重表示」される不具合の原因だった（削除で別メッセージが
+       消えたのと同種）。DOM は触らず Python 単一ソースで描画する。 */
   function toggleReactionAndUpdate(msgId, emoji) {
     hidePopup();
-    toggleReaction(msgId, emoji)
-      .then(function () {
-        return sbGet('reactions?message_id=eq.' + msgId + '&select=emoji,user_name');
-      })
-      .then(function (rows) {
-        if (!Array.isArray(rows)) return;
-        var map = {};
-        rows.forEach(function (r) {
-          if (!map[r.emoji]) map[r.emoji] = [];
-          map[r.emoji].push(r.user_name);
-        });
-        renderPills(msgId, map);
-      });
+    toggleReaction(msgId, emoji).then(function () {
+      sendNav({ action: 'refresh_chat', ts: Date.now() });
+    });
   }
 
   // クリップボードへコピー（iframe/PWA でも確実なよう execCommand フォールバック付き）

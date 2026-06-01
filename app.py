@@ -1131,7 +1131,10 @@ def _app_url() -> str:
         u = (st.secrets.get("app") or {}).get("url")
     except Exception:
         u = None
-    u = u or os.environ.get("APP_URL", "") or "https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/"
+    # 既定は Cloudflare Worker URL。Worker は HTML の <head> に apple-touch-icon を
+    # 注入するため「ホーム画面に追加」でアイコン/名前が danran になる
+    # （streamlit.app 直アクセスは Streamlit のラッパーHTMLが最上位で、アイコンを差し替えられない）。
+    u = u or os.environ.get("APP_URL", "") or "https://danran-chat.kinakonism.workers.dev/"
     return u if u.endswith("/") else u + "/"
 
 def _invite_url() -> str:

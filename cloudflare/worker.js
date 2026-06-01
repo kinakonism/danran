@@ -198,6 +198,35 @@ async function proxyHttp(request, url) {
     } catch (_) {}
   }
 
+  // ── HTML 応答は <head> に iOS「ホーム画面に追加」用メタを注入する ──
+  //   ★ Safari はホーム画面追加時に「最上位HTMLの<head>」を読む。Worker が配信する
+  //     この HTML に静的に埋め込むことで、アイコン=danran / 名前="danran" を確実に反映。
+  //     （アプリ内 JS で後挿入しても iOS では無視されがちなのでここで行う。）
+  const ctype = (newHeaders.get('content-type') || '').toLowerCase();
+  if (ctype.includes('text/html')) {
+    // HTMLRewriter は本文を解凍して再出力するため、圧縮/長さ系ヘッダを除去
+    newHeaders.delete('content-encoding');
+    newHeaders.delete('content-length');
+    const baseResp = new Response(res.body, {
+      status: res.status, statusText: res.statusText, headers: newHeaders,
+    });
+    return new HTMLRewriter()
+      // Streamlit 既定の apple-touch-icon は除去（ロゴが赤い船になるのを防ぐ）
+      .on('link[rel="apple-touch-icon"]', { element(el) { el.remove(); } })
+      .on('title', { element(el) { el.setInnerContent('danran'); } })
+      .on('head', {
+        element(el) {
+          el.append('<link rel="apple-touch-icon" href="/icons/icon-192.png">', { html: true });
+          el.append('<link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png">', { html: true });
+          el.append('<meta name="apple-mobile-web-app-capable" content="yes">', { html: true });
+          el.append('<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">', { html: true });
+          el.append('<meta name="apple-mobile-web-app-title" content="danran">', { html: true });
+          el.append('<link rel="manifest" href="/manifest.json">', { html: true });
+        },
+      })
+      .transform(baseResp);
+  }
+
   return new Response(res.body, {
     status:     res.status,
     statusText: res.statusText,

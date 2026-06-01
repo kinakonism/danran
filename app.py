@@ -632,7 +632,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v84",   # ポップアップ外タップ判定を生きたiframe(長押し委譲onTs)に移管＝消えない問題を解消
+    "danran_lp_v85",   # ポップアップに透明バックドロップ＝外タップで確実に閉じる（onTsと二重化）
     path=_LP_COMPONENT_DIR,
 )
 

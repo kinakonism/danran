@@ -388,8 +388,13 @@
    * ════════════════════════════════════════ */
   var EMOJIS = ['👍', '❤️', '😂', '😲', '🙏'];
 
+  var POPUP_BACK_ID = '_danran_lp_back';
   function hidePopup() {
-    try { var o = window.parent.document.getElementById(POPUP_ID); if (o) o.remove(); } catch (e) {}
+    try {
+      var pDoc = window.parent.document;
+      var o = pDoc.getElementById(POPUP_ID);      if (o) o.remove();
+      var b = pDoc.getElementById(POPUP_BACK_ID); if (b) b.remove();
+    } catch (e) {}
   }
 
   /* ════════════════════════════════════════
@@ -638,13 +643,22 @@
         }, true));
       }
 
-      // ✕ 閉じるボタンは無し。外タップで閉じる判定は setupLongPressDelegation の onTs
-      // （毎 scan で「生きた iframe」に貼り直される）が担当する。
-      //   ★ 旧実装はここで outsideHandler を addEventListener していたが、ポップアップ
-      //     表示中に 2秒ポーリングの新着等で iframe が再生成されると、そのハンドラが
-      //     死んだ iframe 所有のまま凍結し「外タップしても消えない」原因になっていた。
-      pDoc._danranPopupAt = Date.now();   // 直後の合成タップで即閉じしない猶予判定に使う
-      pDoc.body.appendChild(pop);
+      // ✕ 閉じるボタンは無し。外タップで閉じる：
+      //  ① 透明バックドロップ（画面全体を覆うモーダル背面）への「新規タップ」で閉じる。
+      //     長押しを開いた指の touchstart はバックドロップ生成前なので拾わず、離した時の
+      //     合成 click も touchstart ではないので誤発火しない（猶予タイマー不要）。
+      //  ② 念のため、生きた iframe の onTs（setupLongPressDelegation）でも外タップを判定。
+      //     →「2秒ポーリングで iframe 再生成 → 旧ハンドラ凍結」でも確実に閉じる二重化。
+      pDoc._danranPopupAt = Date.now();
+      var back = pDoc.createElement('div');
+      back.id = POPUP_BACK_ID;
+      back.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:transparent;';
+      back.addEventListener('touchstart', function (e) {
+        e.preventDefault(); e.stopPropagation(); hidePopup();
+      }, { passive: false });
+      back.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); hidePopup(); });
+      pDoc.body.appendChild(back);
+      pDoc.body.appendChild(pop);   // pop(z:max) は back(z:max-1) の上＝ボタンはタップ可
     } catch (err) { console.error('[danran-lp] showPopup:', err); }
   }
 

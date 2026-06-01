@@ -15,3 +15,4 @@ Thumbs.db
 
 # ローカルMCP設定（Supabase PAT を含むため追跡しない）
 .mcp.json
+tools/ai_bridge.log

@@ -18,9 +18,11 @@ danran AIサポート bridge — Claude Code CLI（Max プラン）をチャッ�
   - クラウド側(app.py)は secrets[ai].api_key が未設定なら返信しないので、bridge と二重返信しない。
     → bridge を使う場合は [ai] api_key を設定しないこと。
 """
+import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 import tomllib
@@ -107,10 +109,26 @@ def build_prompt(msgs):
             "\n\n--- 指示 ---\n上の最後の発言に対する、アシスタントとしての返信だけを出力してください。")
 
 
+def _claude_bin():
+    """launchd 等の最小 PATH でも claude を見つけられるよう実体パスを解決。"""
+    p = shutil.which("claude")
+    if p:
+        return p
+    cands = sorted(glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/claude")), reverse=True)
+    cands += ["/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+              os.path.expanduser("~/.claude/local/claude"),
+              os.path.expanduser("~/.local/bin/claude")]
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    return "claude"
+
+CLAUDE_BIN = _claude_bin()
+
 def run_claude(prompt):
     try:
         r = subprocess.run(
-            ["claude", "-p", prompt, "--max-turns", "1"],
+            [CLAUDE_BIN, "-p", prompt, "--max-turns", "1"],
             cwd=WORKDIR, capture_output=True, text=True, timeout=180,
         )
         return (r.stdout or "").strip()

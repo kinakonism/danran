@@ -148,6 +148,29 @@
   }
 
   /* ════════════════════════════════════════
+   *  招待リンク ?invite=CODE の転送
+   *  ★ Cloudflare Worker は Streamlit を /~/+/ 配下でプロキシするため、フロントの
+   *    baseUrlPath とズレて st.query_params に invite が乗らないことがある。
+   *    そこで JS が「ブラウザ実URL」から invite を読み取り、Python に直接渡す。
+   *    （ログイン前のみ・1回だけ。pDoc フラグで iframe 再生成をまたいでも多重送信しない）
+   * ════════════════════════════════════════ */
+  function forwardInviteIfAny() {
+    try {
+      if (ME) return;                       // ログイン済みなら不要
+      var pd = window.parent.document;
+      if (pd._danranInviteSent) return;     // 既に送信済み
+      var search = '';
+      try { search = window.top.location.search || ''; } catch (e) {}
+      if (!search) { try { search = window.parent.parent.location.search || ''; } catch (e) {} }
+      if (!search) { try { search = window.parent.location.search || ''; } catch (e) {} }
+      var m = /[?&]invite=([^&]+)/.exec(search);
+      if (!m) return;
+      pd._danranInviteSent = true;
+      sendNav({ action: 'set_invite', invite_code: decodeURIComponent(m[1]), ts: Date.now() });
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
    *  DOM config 要素から設定を読み込む
    *  Python が <div id="_danran_cfg" data-sb-url="..." ...> を
    *  st.html() で書き込む → window.parent.document から取得
@@ -1608,6 +1631,7 @@
     }
     hideManageApp();
     ensureIosMeta();  // 最上位 head に apple-touch-icon / app タイトルを注入（ホーム画面追加用）
+    forwardInviteIfAny();  // ?invite=CODE を実URLから読み取り Python へ（Worker 経由対策）
     fixStBottom();   // stBottom の display:none を強制解除
     alignCamBtn();   // 📷 ボタンを stChatInput の垂直中央に追従させる
     attachHdrButtons();     // Python レンダリングヘッダーのクリックハンドラを付与

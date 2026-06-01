@@ -645,7 +645,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v88",   # 最上位headにapple-touch-icon/title注入（ホーム画面アイコンをdanranに）
+    "danran_lp_v89",   # Worker経由で招待コードが要求される問題（JSが実URLのinviteを転送）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2475,6 +2475,19 @@ if isinstance(_lp_result, dict):
             # 引用バーの ✕ → 返信ターゲット解除
             st.session_state.pop("_reply_to", None)
             st.rerun()
+        elif _nav == "set_invite":
+            # 招待リンク ?invite=CODE を JS が実URLから読み取って通知（Worker 経由で
+            # st.query_params に乗らないケースの保険）。未ログイン時のみ登録画面へ。
+            if "current_user" not in st.session_state:
+                _code = _lp_result.get("invite_code", "")
+                _rk = _get_register_key()
+                _need = (st.session_state.get("view") != "register"
+                         or (bool(_rk and _code == _rk) and not st.session_state.get("_invite_ok")))
+                st.session_state["view"] = "register"
+                if _rk and _code == _rk:
+                    st.session_state["_invite_ok"] = True
+                if _need:
+                    st.rerun()
         elif _nav == "restore_session":
             # JS コンポーネントが localStorage からセッションIDを読み取り postMessage で通知
             # sandbox の allow-top-navigation がないため location.href が使えないための代替手段

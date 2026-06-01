@@ -2436,6 +2436,23 @@
         var inner = pDoc.getElementById('_danran_splash_inner');
         if (inner) inner.style.opacity = '1';
       }, 160);
+      // ★ 強制解除フェイルセーフ: カバー除去は通常 scan()→scrollToLatestOnEnter() 駆動だが、
+      //   チャット描画後に DOM 変化が止まると scan が再実行されず「スプラッシュのまま進まない」
+      //   ことがある。scan に依存しないこのタイマーで最大 3.8 秒後に必ず剥がす（この iframe は
+      //   タップで生きているので発火する）。chatReady 経路が先に剥がせば no-op。
+      var _coverEl = cover;
+      setTimeout(function () {
+        try {
+          if (_coverEl && _coverEl.parentNode) {
+            _coverEl.style.opacity = '0';
+            setTimeout(function () { if (_coverEl.parentNode) _coverEl.remove(); }, 200);
+          }
+        } catch (e) {}
+      }, 3800);
+      // 入室遷移中は DOM 変化が途切れても chatReady を再判定できるよう scan を複数回予約
+      [250, 600, 1000, 1600, 2400].forEach(function (ms) {
+        setTimeout(function () { try { scan(); } catch (e) {} }, ms);
+      });
     } catch (e) {}
   }
 

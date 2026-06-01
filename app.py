@@ -645,7 +645,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v89",   # Worker経由で招待コードが要求される問題（JSが実URLのinviteを転送）
+    "danran_lp_v90",   # 入室スプラッシュが稀に残る対策（scan予約再実行＋3.8s強制解除フェイルセーフ）
     path=_LP_COMPONENT_DIR,
 )
 

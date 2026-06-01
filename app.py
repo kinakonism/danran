@@ -157,6 +157,19 @@ def add_room_member(room_id: str, user_id: str) -> None:
     except Exception:
         pass
 
+DEFAULT_ROOM_NAME = "main"   # 新規登録時に自動参加させる既定ルーム
+
+def add_to_default_room(user_id: str) -> None:
+    """新規登録ユーザーを既定ルーム（main）へ自動参加させる。
+    招待リンクから来た家族がすぐチャットを使えるようにするため。"""
+    try:
+        _rooms = fetch_rooms()  # user_id 無し＝全ルーム
+        _main = next((r for r in _rooms if r.get("name") == DEFAULT_ROOM_NAME), None)
+        if _main:
+            add_room_member(_main["id"], user_id)
+    except Exception:
+        pass
+
 def remove_room_member(room_id: str, user_id: str) -> None:
     try:
         supabase.table("room_members").delete()\
@@ -1136,11 +1149,16 @@ def _invite_url() -> str:
     return f"{base}?invite={rk}" if rk else f"{base}?invite=1"
 
 def show_register() -> None:
-    _, col, _ = st.columns([1, 2, 1])
+    _, col, _ = st.columns([1, 3, 1])
     with col:
         st.markdown("<br>" * 2, unsafe_allow_html=True)
         if st.session_state.get("_invite_ok"):
-            st.markdown("## 🏠 danran へようこそ！")
+            # 1行で収める（折り返し防止）
+            st.markdown(
+                "<div style='font-size:1.5rem;font-weight:700;white-space:nowrap;"
+                "text-align:center'>🏠 danran へようこそ！</div>",
+                unsafe_allow_html=True,
+            )
             st.caption("家族から招待されました。アカウントを作成して参加しましょう。")
         else:
             st.markdown("## 👋 新しいメンバー登録")
@@ -1202,6 +1220,8 @@ def show_register() -> None:
             )
             with st.spinner("登録中…"):
                 user = register_user(name.strip(), final_av, pw, uid=new_uid, phone=normalize_phone(phone))
+                # ★ 新規登録は既定ルーム（main）へ自動参加（招待リンクの家族がすぐ使える）
+                add_to_default_room(new_uid)
             do_login(user); st.rerun()
         if st.button("← 戻る", use_container_width=True):
             st.session_state["view"] = "select_user"; st.rerun()

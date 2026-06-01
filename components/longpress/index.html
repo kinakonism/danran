@@ -134,11 +134,17 @@
   //   scan() が毎回ライブ iframe の stSetValue を pDoc._danranSend に登録するので、
   //   ナビ送信は必ずこれ経由にする。未登録時のみ自分の stSetValue にフォールバック。
   function sendNav(val) {
+    // ★ 「生きた iframe」経由(_danranSend) と 自分の stSetValue の両方で併送する。
+    //   どちらの iframe が現在 active でも確実に1つは届く。active でない iframe の
+    //   postMessage は Streamlit が event.source 不一致で無視し、同一 ts のため
+    //   Python 側 dedup(_last_nav_ts) で1回だけ処理される＝二重実行はしない。
+    //   （以前は _danranSend が古い iframe を指していると go_room が握り潰され、
+    //     起動直後にルームへ入れず一覧へ戻る原因になっていた。）
     try {
       var pd = window.parent.document;
-      if (pd._danranSend) { pd._danranSend(val); return; }
+      if (pd._danranSend) pd._danranSend(val);
     } catch (e) {}
-    stSetValue(val);
+    try { stSetValue(val); } catch (e) {}
   }
 
   /* ════════════════════════════════════════
@@ -1669,6 +1675,23 @@
         })(jumps[Q]);
       }
     } catch (e) {}
+    // 相手アバタータップ → 全画面プロフィール
+    try {
+      var senders = window.parent.document.querySelectorAll('[data-lp-sender]');
+      for (var S = 0; S < senders.length; S++) {
+        (function (a) {
+          if (a._danranSenderHooked) return;
+          a._danranSenderHooked = true;
+          a.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            // 長押し直後の合成クリックでは開かない
+            if (Date.now() - (window.parent.document._danranLpAt || 0) < 700) return;
+            openUserProfile(a.getAttribute('data-lp-sender'), a.getAttribute('data-lp-avatar'));
+          });
+        })(senders[S]);
+      }
+    } catch (e) {}
   }
 
   /* ════════════════════════════════════════
@@ -1772,6 +1795,7 @@
       pDoc._danranSwipeDragging = false;
       if (e.touches.length !== 1) return;
       if (pDoc.getElementById(IMG_VIEWER_ID)) return;   // 画像ビューア表示中はスワイプ戻り無効
+      if (pDoc.getElementById('_danran_user_profile')) return;   // プロフィール全画面中も無効
       var t = e.touches[0];
       if (t.clientX > screenWidth() * 0.5) return;   // 左 50% 以内で開始
       _sx = t.clientX; _sy = t.clientY; _st = Date.now();
@@ -2230,6 +2254,61 @@
           setTimeout(function () { try { target.style.animation = ''; } catch (e) {} }, 700);
         } catch (e) {}
       }, 320);
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
+   *  相手アバタータップ → 全画面プロフィール（写真＋名前）。LINE 風。
+   *  背景タップ / ✕ で閉じる。（将来: FaceTime ボタンを足す余地あり）
+   * ════════════════════════════════════════ */
+  var USER_PROFILE_ID = '_danran_user_profile';
+  function openUserProfile(name, avatar) {
+    try {
+      var pDoc = window.parent.document;
+      if (pDoc.getElementById(USER_PROFILE_ID)) return;
+      var isImg = avatar && avatar.indexOf('http') === 0;
+      var ov = pDoc.createElement('div');
+      ov.id = USER_PROFILE_ID;
+      ov.style.cssText =
+        'position:fixed;inset:0;z-index:2147483647;overflow:hidden;' +
+        'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;' +
+        'background:#100d0b;animation:_danranFadeIn 0.18s ease;-webkit-tap-highlight-color:transparent;';
+      if (isImg) {
+        var bg = pDoc.createElement('div');
+        bg.style.cssText =
+          'position:absolute;inset:0;background-image:url("' + _escHtml(avatar) + '");' +
+          'background-size:cover;background-position:center;filter:blur(30px) brightness(0.4);transform:scale(1.25);';
+        ov.appendChild(bg);
+      }
+      var av;
+      if (isImg) {
+        av = pDoc.createElement('img');
+        av.src = avatar;
+        av.style.cssText = 'width:200px;height:200px;border-radius:50%;object-fit:cover;position:relative;' +
+          'box-shadow:0 10px 34px rgba(0,0,0,0.6);';
+      } else {
+        av = pDoc.createElement('div');
+        av.textContent = avatar || '🙂';
+        av.style.cssText = 'width:200px;height:200px;border-radius:50%;display:flex;align-items:center;' +
+          'justify-content:center;font-size:6rem;background:rgba(255,255,255,0.08);position:relative;';
+      }
+      var nm = pDoc.createElement('div');
+      nm.textContent = name || '';
+      nm.style.cssText = 'color:#fff;font-size:1.4rem;font-weight:700;position:relative;' +
+        'text-shadow:0 2px 8px rgba(0,0,0,0.7);';
+      var close = pDoc.createElement('button');
+      close.textContent = '✕';
+      close.style.cssText =
+        'position:fixed;top:calc(env(safe-area-inset-top,0px) + 12px);left:14px;width:40px;height:40px;' +
+        'border-radius:50%;border:none;background:rgba(0,0,0,0.45);color:#fff;font-size:1.2rem;cursor:pointer;' +
+        'z-index:2;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;';
+      function done() { try { ov.remove(); } catch (e) {} }
+      close.addEventListener('click', function (e) { e.stopPropagation(); done(); });
+      ov.addEventListener('click', function () { done(); });   // 背景タップで閉じる
+      ov.appendChild(av);
+      ov.appendChild(nm);
+      ov.appendChild(close);
+      pDoc.body.appendChild(ov);
     } catch (e) {}
   }
 

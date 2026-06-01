@@ -572,7 +572,9 @@ facetime-audio:{phone_or_email}  # 音声のみ
 | 対象 | 属性 | 動作 |
 |------|------|------|
 | 自分のアバター | `data-lp-my-avatar="1"` | → プロフィール編集画面へ |
-| 他人のアバター | `data-lp-sender="{name}"` | → FaceTime ポップアップ |
+| 他人のアバター | `data-lp-sender="{name}"` ＋ `data-lp-avatar="{avatar}"` | → **全画面プロフィール**（`openUserProfile`：大アバター＋名前・背景ぼかし・✕/背景タップで閉じる）。将来 FaceTime ボタンを足す余地あり |
+
+> **★ sendNav は併送方式（重要）**: `sendNav` は `pDoc._danranSend`（scan が毎回ライブ iframe に登録）**と**自分の `stSetValue` の**両方**で送る。`_danranSend` が一瞬古い（死んだ）iframe を指していると `go_room` 等が握り潰され、**起動直後にルームへ入れず一覧へ戻る**バグの原因だった。両送＋ Python の `_last_nav_ts` dedup で「確実に1回だけ」届く。
 
 ### fetch_all_users()（追加する関数）
 

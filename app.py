@@ -632,7 +632,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v85",   # ポップアップに透明バックドロップ＝外タップで確実に閉じる（onTsと二重化）
+    "danran_lp_v86",   # 相手アバタータップ→全画面プロフィール + sendNav併送で起動直後の入室不可を解消
     path=_LP_COMPONENT_DIR,
 )
 
@@ -835,12 +835,15 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         is_mine  = (msg_uid == my_id) if (msg_uid and my_id) else (sender == uname)
 
         # ── アバター HTML（他人用・自分用）──
+        # 他人アバターは data-lp-sender/data-lp-avatar 付き → タップで全画面プロフィール
+        _av_attr = (f'data-lp-sender="{_html.escape(sender)}" '
+                    f'data-lp-avatar="{_html.escape(avatar)}"')
         av_html = (
-            f'<img src="{avatar}" style="width:40px;height:40px;border-radius:8px;'
-            f'object-fit:cover;flex-shrink:0;display:block">'
+            f'<img {_av_attr} src="{avatar}" style="width:40px;height:40px;border-radius:8px;'
+            f'object-fit:cover;flex-shrink:0;display:block;cursor:pointer">'
             if avatar.startswith("http")
-            else f'<span style="font-size:1.8rem;line-height:40px;display:block;'
-                 f'width:40px;text-align:center;flex-shrink:0">{avatar}</span>'
+            else f'<span {_av_attr} style="font-size:1.8rem;line-height:40px;display:block;'
+                 f'width:40px;text-align:center;flex-shrink:0;cursor:pointer">{avatar}</span>'
         )
         mine_av_html = (
             f'<img data-lp-my-avatar="1" src="{avatar}" '

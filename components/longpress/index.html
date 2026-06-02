@@ -1038,52 +1038,41 @@
    *  [data-room-gear]   → go_room_edit（ルーム編集画面へ）
    *  [data-room-create] → go_room_create（新規ルーム作成へ）
    * ════════════════════════════════════════ */
+  // ★ ルームタップ等は委譲方式（document の capture click）で、毎 scan に「生きた iframe」へ
+  //   貼り直す。旧方式（要素ごとに1回 addEventListener）だと、要素が古い iframe に取り残されると
+  //   sendNav が死んだ iframe 経由になり go_room が届かず「スプラッシュ→一覧へ戻る」原因になった。
   function attachRoomHandlers() {
     try {
       var pDoc = window.parent.document;
-
-      // ルーム名ボタン
-      var navBtns = pDoc.querySelectorAll('[data-room-nav]');
-      for (var i = 0; i < navBtns.length; i++) {
-        (function (el) {
-          if (el._danranRoomNav) return;
-          el._danranRoomNav = true;
-          el.addEventListener('click', function (e) {
-            e.stopPropagation();
-            // ★ タップした瞬間にカバーを出して遷移全体（一覧消去→rerun→チャット描画）を
-            //   覆い隠す。これでルーム選択時のチカチカが見えなくなる。
-            showEnterCover();
-            sendNav({ action: 'go_room', room_name: el.getAttribute('data-room-name'), ts: Date.now() });
-          });
-        })(navBtns[i]);
-      }
-
-      // 歯車ボタン
-      var gearBtns = pDoc.querySelectorAll('[data-room-gear]');
-      for (var i = 0; i < gearBtns.length; i++) {
-        (function (el) {
-          if (el._danranRoomGear) return;
-          el._danranRoomGear = true;
-          el.addEventListener('click', function (e) {
-            e.stopPropagation();
-            sendNav({ action: 'go_room_edit', room_id: el.getAttribute('data-room-gear'), ts: Date.now() });
-          });
-        })(gearBtns[i]);
-      }
-
-      // 新規ルーム作成ボタン（data-room-create）
-      var createBtns = pDoc.querySelectorAll('[data-room-create]');
-      for (var i = 0; i < createBtns.length; i++) {
-        (function (el) {
-          if (el._danranRoomCreate) return;
-          el._danranRoomCreate = true;
-          el.addEventListener('click', function (e) {
-            e.stopPropagation();
-            sendNav({ action: 'go_room_create', ts: Date.now() });
-          });
-        })(createBtns[i]);
-      }
-
+      var prev = pDoc._danranRoomDeleg;
+      if (prev) pDoc.removeEventListener('click', prev, true);
+      var onClick = function (e) {
+        var t = e.target;
+        if (!t || !t.closest) return;
+        // 歯車・作成はルームボタン内側にあり得るので先に判定
+        var gear = t.closest('[data-room-gear]');
+        if (gear) {
+          e.preventDefault(); e.stopPropagation();
+          sendNav({ action: 'go_room_edit', room_id: gear.getAttribute('data-room-gear'), ts: Date.now() });
+          return;
+        }
+        var create = t.closest('[data-room-create]');
+        if (create) {
+          e.preventDefault(); e.stopPropagation();
+          sendNav({ action: 'go_room_create', ts: Date.now() });
+          return;
+        }
+        var nav = t.closest('[data-room-nav]');
+        if (nav) {
+          e.preventDefault(); e.stopPropagation();
+          try { nav.classList.add('dr-selected'); } catch (e2) {}   // 即フィードバック（琥珀）
+          showEnterCover();   // 遷移全体を覆ってチラつき隠し
+          sendNav({ action: 'go_room', room_name: nav.getAttribute('data-room-name'), ts: Date.now() });
+          return;
+        }
+      };
+      pDoc.addEventListener('click', onClick, true);
+      pDoc._danranRoomDeleg = onClick;
     } catch (e) {}
   }
 

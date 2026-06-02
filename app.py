@@ -794,7 +794,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v95",   # 画像をアップ前にリサイズ圧縮（長辺1600/JPEG0.82）＝グレー(巨大画像で読めない)を解消
+    "danran_lp_v96",   # ルームタップを委譲方式に（go_room が死んだiframeで届かず一覧へ戻る問題を解消）
     path=_LP_COMPONENT_DIR,
 )
 

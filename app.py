@@ -849,7 +849,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v98",   # Enter＝改行（送信は➤ボタン/Cmd+Enter）。IME確定Enterは通す
+    "danran_lp_v99",   # 画像タップ等を委譲化＋ビューア/プロフィールを生きたiframeで確実に閉じる（写真開くと操作不能を解消）
     path=_LP_COMPONENT_DIR,
 )
 

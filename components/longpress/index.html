@@ -1729,70 +1729,57 @@
     // 引用返信バー（入力欄の真上に固定描画・スクロール/キーボード追従）
     try { injectReplyBar(); } catch (e) {}
     fillImageSlots();   // 画像スロットに永続 img を流し込む（再描画でも再ロードしない）
-    // チャット画像スロットに直接タップハンドラを付与（デリゲーションより iOS で確実）
+    // ★ タップ系は document capture の委譲方式で「生きた iframe」に毎 scan 貼り直す。
+    //   旧方式（要素ごとに addEventListener）だと、画像ビューアを開いた後の再描画で
+    //   iframe が再生成されると閉じるハンドラが死んだ iframe 所有になり「写真を開いたら
+    //   閉じられず操作不能」になっていた。委譲なら開く/閉じるが常に生きた iframe で動く。
     try {
-      var imgs = window.parent.document.querySelectorAll('[data-lp-image]');
-      for (var j = 0; j < imgs.length; j++) {
-        (function (im) {
-          if (im._danranImgHooked) return;
-          im._danranImgHooked = true;
-          im.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            // 長押しポップアップ直後の合成 click はビューアを開かない（削除操作を邪魔しない）
-            var pd = window.parent.document;
-            if (Date.now() - (pd._danranLpAt || 0) < 700) return;
-            openImageViewer(im.getAttribute('data-lp-image') || im.getAttribute('src'));
-          });
-        })(imgs[j]);
-      }
-    } catch (e) {}
-    // リンクタップを横取り → アクションメニュー（開く/コピー/共有）
-    try {
-      var links = window.parent.document.querySelectorAll('[data-lp-link]');
-      for (var L = 0; L < links.length; L++) {
-        (function (a) {
-          if (a._danranLinkHooked) return;
-          a._danranLinkHooked = true;
-          a.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            showLinkMenu(a.getAttribute('data-lp-link') || a.href);
-          });
-        })(links[L]);
-      }
-    } catch (e) {}
-    // 引用ブロックタップ → 元メッセージへジャンプ＋ぷるぷる
-    try {
-      var jumps = window.parent.document.querySelectorAll('[data-lp-jump]');
-      for (var Q = 0; Q < jumps.length; Q++) {
-        (function (q) {
-          if (q._danranJumpHooked) return;
-          q._danranJumpHooked = true;
-          q.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            jumpToMessage(q.getAttribute('data-lp-jump'));
-          });
-        })(jumps[Q]);
-      }
-    } catch (e) {}
-    // 相手アバタータップ → 全画面プロフィール
-    try {
-      var senders = window.parent.document.querySelectorAll('[data-lp-sender]');
-      for (var S = 0; S < senders.length; S++) {
-        (function (a) {
-          if (a._danranSenderHooked) return;
-          a._danranSenderHooked = true;
-          a.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            // 長押し直後の合成クリックでは開かない
-            if (Date.now() - (window.parent.document._danranLpAt || 0) < 700) return;
-            openUserProfile(a.getAttribute('data-lp-sender'), a.getAttribute('data-lp-avatar'));
-          });
-        })(senders[S]);
-      }
+      var pDocT = window.parent.document;
+      var prevTap = pDocT._danranTapDeleg;
+      if (prevTap) pDocT.removeEventListener('click', prevTap, true);
+      var onTap = function (e) {
+        var t = e.target; if (!t) return;
+        var pd = window.parent.document;
+        // 画像ビューア表示中：✕/背景タップで確実に閉じる（開いた iframe が死んでいても閉じる）
+        var viewer = pd.getElementById(IMG_VIEWER_ID);
+        if (viewer) {
+          if ((t.closest && t.closest('#_danran_img_close')) || t === viewer) {
+            e.preventDefault(); e.stopPropagation();
+            try { viewer.remove(); } catch (x) {}
+          }
+          return;   // 表示中は他のタップ処理をしない
+        }
+        // 全画面プロフィール表示中：同様に閉じる
+        var prof = pd.getElementById(USER_PROFILE_ID);
+        if (prof) {
+          if ((t.closest && t.closest('#_danran_profile_close')) || t === prof) {
+            e.preventDefault(); e.stopPropagation();
+            try { prof.remove(); } catch (x) {}
+          }
+          return;
+        }
+        if (!t.closest) return;
+        var lk = t.closest('[data-lp-link]');
+        if (lk) { e.preventDefault(); e.stopPropagation(); showLinkMenu(lk.getAttribute('data-lp-link') || lk.href); return; }
+        var jp = t.closest('[data-lp-jump]');
+        if (jp) { e.preventDefault(); e.stopPropagation(); jumpToMessage(jp.getAttribute('data-lp-jump')); return; }
+        var im = t.closest('[data-lp-image]');
+        if (im) {
+          e.preventDefault(); e.stopPropagation();
+          if (Date.now() - (pd._danranLpAt || 0) < 700) return;   // 長押し直後の合成clickは無視
+          openImageViewer(im.getAttribute('data-lp-image') || im.getAttribute('src'));
+          return;
+        }
+        var sd = t.closest('[data-lp-sender]');
+        if (sd) {
+          e.preventDefault(); e.stopPropagation();
+          if (Date.now() - (pd._danranLpAt || 0) < 700) return;
+          openUserProfile(sd.getAttribute('data-lp-sender'), sd.getAttribute('data-lp-avatar'));
+          return;
+        }
+      };
+      pDocT.addEventListener('click', onTap, true);
+      pDocT._danranTapDeleg = onTap;
     } catch (e) {}
   }
 
@@ -2515,6 +2502,7 @@
       nm.style.cssText = 'color:#fff;font-size:1.4rem;font-weight:700;position:relative;' +
         'text-shadow:0 2px 8px rgba(0,0,0,0.7);';
       var close = pDoc.createElement('button');
+      close.id = '_danran_profile_close';
       close.textContent = '✕';
       close.style.cssText =
         'position:fixed;top:calc(env(safe-area-inset-top,0px) + 12px);left:14px;width:40px;height:40px;' +
@@ -2905,6 +2893,7 @@
         'min-width:120px;min-height:120px;background:rgba(255,255,255,0.05);border-radius:6px;';
       img.src = list[idx];
       var close = pDoc.createElement('button');
+      close.id = '_danran_img_close';
       close.textContent = '✕';
       close.style.cssText =
         'position:fixed;top:calc(env(safe-area-inset-top, 0px) + 12px);left:14px;' +

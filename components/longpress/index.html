@@ -460,9 +460,51 @@
        それは React(st.markdown) 管理下の DOM を手で触る行為で、後続の変化駆動再描画と
        競合して「同じ絵文字のピルが二重表示」される不具合の原因だった（削除で別メッセージが
        消えたのと同種）。DOM は触らず Python 単一ソースで描画する。 */
+  // 実際にスクロールしている要素（window or インナーコンテナ）を特定。
+  function danScroller(pDoc) {
+    var cands = [
+      pDoc.querySelector('section.main'),
+      pDoc.querySelector('[data-testid="stMain"]'),
+      pDoc.querySelector('[data-testid="stAppViewContainer"]'),
+      pDoc.scrollingElement, pDoc.documentElement,
+    ];
+    for (var i = 0; i < cands.length; i++) {
+      var el = cands[i];
+      if (el && el.scrollHeight > el.clientHeight + 4) return el;
+    }
+    return pDoc.scrollingElement || pDoc.documentElement;
+  }
+
+  // リアクションのトグル等で refresh_chat（full rerun）が走るとスクロール位置が
+  // 飛ぶ。タップ時点の scrollTop を一定時間 rAF でピン留めして「動かない」ようにする。
+  function startScrollHold(pDoc) {
+    try {
+      var sc = danScroller(pDoc);
+      var already = !!pDoc._danranHoldScroll;
+      pDoc._danranHoldScroll = { y: sc ? sc.scrollTop : 0, until: Date.now() + 1500 };
+      if (already) return;   // ピンループは1本だけ
+      var win = pDoc.defaultView || window.parent;
+      (function pin() {
+        try {
+          var h = pDoc._danranHoldScroll;
+          if (!h || Date.now() > h.until) { pDoc._danranHoldScroll = null; return; }
+          var s = danScroller(pDoc);
+          if (s && Math.abs(s.scrollTop - h.y) > 1) s.scrollTop = h.y;
+        } catch (e) {}
+        win.requestAnimationFrame(pin);
+      })();
+    } catch (e) {}
+  }
+  function extendScrollHold(pDoc) {
+    try { if (pDoc._danranHoldScroll) pDoc._danranHoldScroll.until = Date.now() + 1200; } catch (e) {}
+  }
+
   function toggleReactionAndUpdate(msgId, emoji) {
     hidePopup();
+    var pDoc = window.parent.document;
+    startScrollHold(pDoc);   // タップ時点の位置を保持（rerun で飛ばさない）
     toggleReaction(msgId, emoji).then(function () {
+      extendScrollHold(pDoc);   // 再描画完了までピンを延長
       sendNav({ action: 'refresh_chat', ts: Date.now() });
     });
   }

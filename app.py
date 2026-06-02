@@ -887,7 +887,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v107",   # リアクションのピルをタップで自分のリアクションをトグル（他人のメッセージのみ）
+    "danran_lp_v108",   # リアクショントグル時のスクロール飛びを防止（rAFでスクロール位置をピン留め）
     path=_LP_COMPONENT_DIR,
 )
 

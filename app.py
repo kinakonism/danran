@@ -863,16 +863,24 @@ def _body_attr(body: str) -> str:
     Markdown 処理が HTML タグを壊すため &#10; に変換（getAttribute では \\n に復元される）。"""
     return _html.escape(body).replace("\r", "").replace("\n", "&#10;")
 
+_MENTION_RE = re.compile(r"[@＠][Aa][Ii](?![A-Za-z])")
+
 def linkify_body(body: str) -> str:
     """本文を HTML エスケープしつつ URL を <a> 化して返す（改行は <br>）。
     URL タップで target=_blank → iOS PWA では既定ブラウザ(Safari)で開く。
     エスケープは URL/非URL を分けて行い XSS を防ぐ。"""
     def esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    def esc_text(s: str) -> str:
+        # 非URLテキスト用。エスケープ後に @AI/＠AI を青字ハイライト（href には適用しない＝XSS安全）。
+        e = esc(s)
+        return _MENTION_RE.sub(
+            lambda mm: f'<span style="color:#4ea1ff;font-weight:700">{mm.group(0)}</span>', e
+        )
     out: list[str] = []
     last = 0
     for m in _URL_RE.finditer(body):
-        out.append(esc(body[last:m.start()]))
+        out.append(esc_text(body[last:m.start()]))
         url = m.group(1)
         trail = ""                       # 末尾の句読点・閉じ括弧はリンクから除外
         while url and url[-1] in '.,!?。、）)」』】':
@@ -885,9 +893,9 @@ def linkify_body(body: str) -> str:
             f'<a href="{u}" data-lp-link="{u}" target="_blank" rel="noopener noreferrer" '
             f'style="color:inherit;text-decoration:underline;word-break:break-all">{u}</a>'
         )
-        out.append(esc(trail))
+        out.append(esc_text(trail))
         last = m.end()
-    out.append(esc(body[last:]))
+    out.append(esc_text(body[last:]))
     return ''.join(out).replace("\n", "<br>")
 
 # ─────────────────────────────────────

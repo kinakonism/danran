@@ -901,7 +901,25 @@ def _body_attr(body: str) -> str:
     Markdown 処理が HTML タグを壊すため &#10; に変換（getAttribute では \\n に復元される）。"""
     return _html.escape(body).replace("\r", "").replace("\n", "&#10;")
 
-_MENTION_RE = re.compile(r"[@＠][Aa][Ii](?![A-Za-z])")
+@st.cache_data(ttl=300)
+def _mention_tokens() -> list[str]:
+    """メンション候補トークン（青ハイライト対象）。AI＋全ユーザー名。"""
+    names = [u.get("name", "") for u in fetch_all_users() if u.get("name")]
+    return ["AI"] + names
+
+# トークンが変わったときだけ正規表現を作り直す（メッセージ毎の再コンパイルを避ける）
+_MENTION_RE_CACHE: dict = {"key": None, "re": None}
+
+def _mention_regex():
+    toks = tuple(_mention_tokens())
+    if _MENTION_RE_CACHE["key"] != toks:
+        # 長い名前を優先（部分一致を防ぐ）。後続が英字なら除外（@AIxx / @air 誤爆防止）
+        parts = sorted((re.escape(t) for t in toks if t), key=len, reverse=True)
+        _MENTION_RE_CACHE["re"] = (
+            re.compile(r"[@＠](?:" + "|".join(parts) + r")(?![A-Za-z])") if parts else None
+        )
+        _MENTION_RE_CACHE["key"] = toks
+    return _MENTION_RE_CACHE["re"]
 
 def linkify_body(body: str) -> str:
     """本文を HTML エスケープしつつ URL を <a> 化して返す（改行は <br>）。
@@ -909,10 +927,14 @@ def linkify_body(body: str) -> str:
     エスケープは URL/非URL を分けて行い XSS を防ぐ。"""
     def esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    _mre = _mention_regex()
     def esc_text(s: str) -> str:
-        # 非URLテキスト用。エスケープ後に @AI/＠AI を青字ハイライト（href には適用しない＝XSS安全）。
+        # 非URLテキスト用。エスケープ後に @メンション（AI＋家族名）を青字ハイライト
+        # （href には適用しない＝XSS安全）。
         e = esc(s)
-        return _MENTION_RE.sub(
+        if _mre is None:
+            return e
+        return _mre.sub(
             lambda mm: f'<span style="color:#4ea1ff;font-weight:700">{mm.group(0)}</span>', e
         )
     out: list[str] = []

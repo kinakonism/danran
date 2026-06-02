@@ -887,7 +887,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v103",   # 編集系画面に入った瞬間トップへスクロール（変なスクロール継承を修正）
+    "danran_lp_v104",   # ☰→編集は遷移カバーで跳ね隠蔽＋戻りは元のチャットへ（origin=chat）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2857,6 +2857,11 @@ if isinstance(_lp_result, dict):
                 _reset_profile_widgets()
             elif cur == "room_edit":
                 _reset_room_edit_widgets()
+                # ☰メニュー（チャット）から開いた編集は、元のチャットへ戻す
+                if st.session_state.pop("_room_edit_from_chat", False):
+                    st.session_state["view"] = "chat"
+                    st.session_state.pop("_show_rooms", None)
+                    st.rerun()
             st.session_state["view"] = "chat"
             st.session_state["_show_rooms"] = True
             st.session_state["_nav_anim"] = "left"
@@ -2872,13 +2877,15 @@ if isinstance(_lp_result, dict):
                 st.session_state.pop("_show_rooms", None)
                 st.rerun()
         elif _nav == "go_room_edit":
-            # JS ルームリストの ⚙️ クリック → ルーム編集画面
+            # ルームリストの ⚙️ / チャットヘッダー ☰ メニュー → ルーム編集画面
             _room_id = _lp_result.get("room_id", "")
             if _room_id:
                 _found = [r for r in fetch_rooms(_cu.get("id", "")) if r["id"] == _room_id]
                 if _found:
                     _reset_room_edit_widgets()
                     st.session_state["editing_room"] = _found[0]
+                    # origin=='chat'（☰メニュー由来）なら戻り先は元のチャット、それ以外は一覧
+                    st.session_state["_room_edit_from_chat"] = (_lp_result.get("origin") == "chat")
                     st.session_state["view"] = "room_edit"
                     st.rerun()
         elif _nav == "go_room_create":

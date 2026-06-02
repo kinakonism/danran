@@ -2719,12 +2719,22 @@
       if (editViews[VIEW]) {
         if (_lastViewForScroll !== VIEW) {
           _lastViewForScroll = VIEW;
-          var pWin = window.parent;
+          var pWin = window.parent, pDoc = pWin.document;
           var top = function () { try { pWin.scrollTo(0, 0); } catch (e) {} };
           top();
           // Streamlit が遅れて高さ確定するので数回押さえる（smooth にせず瞬時に）
           setTimeout(top, 60);
           setTimeout(top, 200);
+          // 遷移カバー(dir='edit')があれば、トップ移動後に剥がす（跳ねを見せない）
+          setTimeout(function () {
+            try {
+              var c = pDoc.getElementById('_danran_enter_cover');
+              if (c && c.getAttribute('data-cover-dir') === 'edit') {
+                c.style.opacity = '0';
+                setTimeout(function () { if (c.parentNode) c.remove(); }, 180);
+              }
+            } catch (e) {}
+          }, 110);
         }
       } else {
         _lastViewForScroll = VIEW;   // chat 等に戻ったらリセット（次に編集へ入ると再度トップへ）
@@ -3138,6 +3148,24 @@
       try { if (pDoc._danranSend) pDoc._danranSend(v); } catch (e) {}
       try { stSetValue(v); } catch (e) {}   // 併送（ts dedup で1回だけ処理）
     }
+    // チャット→編集画面の遷移スクロール跳ねを隠す地色カバー（編集描画＆トップ移動後に剥がす）
+    function showEditTransitionCover() {
+      try {
+        if (pDoc.getElementById('_danran_enter_cover')) return;
+        var c = pDoc.createElement('div');
+        c.id = '_danran_enter_cover';
+        c.setAttribute('data-cover-expire', String(Date.now() + 2000));
+        c.setAttribute('data-cover-dir', 'edit');
+        c.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#1a1614;'
+          + 'pointer-events:none;opacity:1;transition:opacity 0.16s ease;';
+        pDoc.body.appendChild(c);
+        // フェイルセーフ（scrollTopOnEditEnter が剥がせなかった場合）
+        setTimeout(function () {
+          try { if (c.parentNode) { c.style.opacity = '0';
+            setTimeout(function () { if (c.parentNode) c.remove(); }, 200); } } catch (e) {}
+        }, 1400);
+      } catch (e) {}
+    }
     function getMenu() {
       var m = pDoc.getElementById(RMENU_ID);
       if (!m) {
@@ -3197,8 +3225,10 @@
         var act = item.getAttribute('data-rmenu');
         hide();
         if (!rid) return;
+        showEditTransitionCover();   // 遷移スクロールの跳ねを隠す
+        // origin:'chat' → 戻るときルーム一覧でなく元のチャットへ戻す（Python が判定）
         if (act === 'album') send({ action: 'go_album',     room_id: rid, ts: Date.now() });
-        else                 send({ action: 'go_room_edit', room_id: rid, ts: Date.now() });
+        else                 send({ action: 'go_room_edit', room_id: rid, origin: 'chat', ts: Date.now() });
         return;
       }
       // メニュー外タップ → 閉じる

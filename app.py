@@ -1147,8 +1147,11 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         # data-lp-my-avatar  → JS が「自分のアバター」と判別してタップでプロフィール遷移
         if is_mine:
             # 画像のみ/デカ絵文字なら透明バブル（緑背景・パディング不要）
+            # ★ デカ絵文字は -webkit-text-fill-color:initial で文字色の継承を切る
+            #   （継承するとカラー絵文字が文字色で塗られてモノクロ化＝💩が白くなる）
             _mine_bstyle = (
                 'background:transparent;padding:0;border-radius:0'
+                + (';-webkit-text-fill-color:initial' if _big_emoji else '')
                 if (is_img_only or _big_emoji) else
                 'background:#e8915b;color:#fff;border-radius:18px 18px 4px 18px;padding:10px 14px'
             )
@@ -1172,6 +1175,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             # 画像のみ/デカ絵文字なら透明バブル（グレー背景・パディング不要）
             _other_bstyle = (
                 'background:transparent;padding:0;border-radius:0'
+                + (';-webkit-text-fill-color:initial' if _big_emoji else '')
                 if (is_img_only or _big_emoji) else
                 'background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:10px 14px'
             )

@@ -849,7 +849,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v99",   # 画像タップ等を委譲化＋ビューア/プロフィールを生きたiframeで確実に閉じる（写真開くと操作不能を解消）
+    "danran_lp_v100",   # @ メンション補完ドロップダウン（AI＋家族を候補表示→選択で @名前 を挿入）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2619,6 +2619,18 @@ else:
 _show_rooms  = st.session_state.get("_show_rooms", False)
 _cur_view    = st.session_state.get("view", "")
 _vapid_pub = _vapid_cfg().get("vapid_public_key", "")
+
+# ── メンション候補（@ を打つと出る補完ドロップダウン用）──
+# 先頭に AI アシスタント、その後に自分以外の家族。tag = 実際に挿入される文字（@{tag}）。
+# AI は bridge が「@AI/＠AI」で拾うため tag を "AI" 固定にする。
+_mention_list = [{"name": "AI アシスタント", "avatar": "🤖", "tag": "AI"}]
+for _mu in fetch_all_users():
+    if _mu.get("id") == _cu.get("id"):
+        continue   # 自分はメンション候補に出さない
+    _nm = _mu.get("name", "")
+    if _nm:
+        _mention_list.append({"name": _nm, "avatar": _mu.get("avatar", "🙂"), "tag": _nm})
+_mentions_json = json.dumps(_mention_list, ensure_ascii=False)
 # Supabase URL/key: st.secrets → 環境変数 の順でフォールバック（Render 対応）
 _sb_url = ((st.secrets.get("supabase") or {}).get("url") or os.environ.get("SUPABASE_URL", ""))
 _sb_key = ((st.secrets.get("supabase") or {}).get("anon_key") or os.environ.get("SUPABASE_ANON_KEY", ""))
@@ -2731,6 +2743,7 @@ st.html(
     f'data-vapid-pub="{_html.escape(_vapid_pub)}" '
     f'data-uid="{_html.escape(_cu.get("id",""))}" '
     f'data-push-resub="{str(_push_resub).lower()}" '
+    f'data-mentions-json="{_html.escape(_mentions_json, quote=True)}" '
     # ── 引用返信ターゲット（JS が入力欄の上に固定バーを描画する）──
     f'data-reply-id="{_html.escape((st.session_state.get("_reply_to") or {}).get("id","") or "")}" '
     f'data-reply-name="{_html.escape((st.session_state.get("_reply_to") or {}).get("name","") or "")}" '

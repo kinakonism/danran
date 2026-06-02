@@ -105,6 +105,7 @@
   var SHOW_ROOMS  = false;
   var VIEW        = '';     // 現在の画面（'chat'|'profile'|'room_edit'|...）
   var REPLY_ID    = '', REPLY_NAME = '', REPLY_TEXT = '', REPLY_IMG = '';  // 引用返信ターゲット
+  var MENTIONS    = [];     // メンション候補 [{name, avatar, tag}] （data-mentions-json 由来）
   var _embedFixed          = false;  // embed=true 除去リダイレクトを1回のみ実行
   var _sessionRestoreSent = false;  // restore_session postMessage を1回のみ送る
   var _gotRender          = false;  // streamlit:render を受信済みかどうか
@@ -197,6 +198,7 @@
       REPLY_NAME = cfg.getAttribute('data-reply-name')  || '';
       REPLY_TEXT = cfg.getAttribute('data-reply-text')  || '';
       REPLY_IMG  = cfg.getAttribute('data-reply-image') || '';
+      try { MENTIONS = JSON.parse(cfg.getAttribute('data-mentions-json') || '[]'); } catch (e) { MENTIONS = []; }
 
       if (newSbUrl)    SB_URL      = newSbUrl;
       if (newSbKey)    SB_KEY      = newSbKey;
@@ -1710,6 +1712,7 @@
     injectNotifSettings();  // 通知設定画面の UI（VIEW=notifications のときのみ）
     attachPushBannerClick(); // Python 描画バナーのクリックイベント付与
     setupInstallPrompt();   // Android: beforeinstallprompt キャプチャ（iOS は不可）
+    try { setupMentionAutocomplete(window.parent.document); } catch (e) {}  // @ メンション補完（SendHook より先に張る）
     try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
     reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
     sweepToast();           // 期限切れトーストの掃除（死んだ iframe タイマー対策）
@@ -3091,6 +3094,169 @@
   }
 
   // チャット入力の送信検知（rerun で作り直されるため document に委譲）
+  /* ════════════════════════════════════════
+   *  @ メンション補完ドロップダウン
+   *  入力欄で「@」を打つと候補（AI＋家族）を出し、選ぶと「@名前 」を挿入する。
+   *  textarea は親ドキュメント所有で安定。pDoc に1回だけリスナを張る（SendHook より先）。
+   *  ★ Streamlit(React) 管理の textarea は native setter + input イベントで値を反映する。
+   * ════════════════════════════════════════ */
+  var POP_ID = '_danran_mention_pop';
+  function setupMentionAutocomplete(pDoc) {
+    if (pDoc._danranMentionHook) return;
+    pDoc._danranMentionHook = true;
+
+    var state = { at: -1, caret: -1, list: [], idx: 0 };
+
+    function getTa() {
+      var el = pDoc.querySelector('[data-testid="stChatInput"] textarea');
+      return (el && el.closest('[data-testid="stChatInput"]')) ? el : null;
+    }
+    function getPop() {
+      var p = pDoc.getElementById(POP_ID);
+      if (!p) {
+        p = pDoc.createElement('div');
+        p.id = POP_ID;
+        p.style.cssText = 'position:fixed;z-index:2147483646;display:none;'
+          + 'max-height:230px;overflow-y:auto;background:#241f1c;'
+          + 'border:1px solid rgba(240,168,104,0.35);border-radius:14px;'
+          + 'box-shadow:0 8px 28px rgba(0,0,0,0.5);padding:6px;'
+          + '-webkit-overflow-scrolling:touch;';
+        pDoc.body.appendChild(p);
+        // tap で選択。mousedown/touchstart で preventDefault → textarea のフォーカスを奪わない
+        var onPick = function (e) {
+          var row = e.target && e.target.closest ? e.target.closest('[data-mtag]') : null;
+          if (!row) return;
+          e.preventDefault(); e.stopPropagation();
+          applyMention(row.getAttribute('data-mtag'));
+        };
+        p.addEventListener('mousedown', onPick, true);
+        p.addEventListener('touchstart', onPick, true);
+      }
+      return p;
+    }
+    function hide() {
+      state.at = -1; state.list = [];
+      var p = pDoc.getElementById(POP_ID);
+      if (p) p.style.display = 'none';
+    }
+    function setNativeValue(ta, val) {
+      try {
+        var proto = window.parent.HTMLTextAreaElement.prototype;
+        var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+        setter.call(ta, val);
+      } catch (e) { ta.value = val; }
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    function applyMention(tag) {
+      var ta = getTa();
+      if (!ta || state.at < 0) { hide(); return; }
+      var val = ta.value || '';
+      var before = val.slice(0, state.at);
+      var after  = val.slice(state.caret);
+      var insert = '@' + tag + ' ';
+      setNativeValue(ta, before + insert + after);
+      var pos = (before + insert).length;
+      try { ta.setSelectionRange(pos, pos); } catch (e) {}
+      ta.focus();
+      hide();
+    }
+    function avatarHtml(av) {
+      av = av || '🙂';
+      if (/^https?:\/\//.test(av)) {
+        return '<img src="' + av + '" style="width:28px;height:28px;border-radius:50%;'
+             + 'object-fit:cover;flex:0 0 auto">';
+      }
+      return '<span style="width:28px;height:28px;border-radius:50%;flex:0 0 auto;'
+           + 'display:flex;align-items:center;justify-content:center;font-size:18px;'
+           + 'background:rgba(255,255,255,0.06)">' + av + '</span>';
+    }
+    function render() {
+      var ta = getTa(); if (!ta) { hide(); return; }
+      var p = getPop();
+      var html = '';
+      for (var i = 0; i < state.list.length; i++) {
+        var u = state.list[i];
+        var on = (i === state.idx);
+        html += '<div data-mtag="' + (u.tag || '').replace(/"/g, '&quot;') + '" '
+          + 'style="display:flex;align-items:center;gap:10px;padding:8px 10px;'
+          + 'border-radius:10px;cursor:pointer;'
+          + (on ? 'background:rgba(240,168,104,0.22);' : '') + '">'
+          + avatarHtml(u.avatar)
+          + '<span style="color:#f0e8e0;font-size:15px;white-space:nowrap;overflow:hidden;'
+          + 'text-overflow:ellipsis">' + (u.name || u.tag || '') + '</span></div>';
+      }
+      p.innerHTML = html;
+      // 入力欄の真上に配置（キーボード表示時も追従）
+      var box = (pDoc.querySelector('[data-testid="stChatInput"]') || ta).getBoundingClientRect();
+      var pw  = window.parent.innerWidth || 380;
+      p.style.left   = Math.max(8, box.left) + 'px';
+      p.style.width  = Math.min(box.width || pw - 16, 340) + 'px';
+      p.style.bottom = Math.max(8, (window.parent.innerHeight || 700) - box.top + 8) + 'px';
+      p.style.display = 'block';
+    }
+    function update() {
+      var ta = getTa();
+      if (!ta || !MENTIONS.length) { hide(); return; }
+      var caret = ta.selectionStart || 0;
+      var upto = (ta.value || '').slice(0, caret);
+      var m = upto.match(/[@＠]([^\s@＠]*)$/);
+      if (!m) { hide(); return; }
+      var at = upto.length - m[0].length;
+      var prev = at > 0 ? upto[at - 1] : '';
+      if (prev && !/\s/.test(prev)) { hide(); return; }   // メアド等(xxx@)は除外
+      var q = (m[1] || '').toLowerCase();
+      var list = MENTIONS.filter(function (u) {
+        if (!q) return true;
+        return ((u.tag || '').toLowerCase().indexOf(q) >= 0)
+            || ((u.name || '').toLowerCase().indexOf(q) >= 0);
+      });
+      if (!list.length) { hide(); return; }
+      state.at = at; state.caret = caret; state.list = list;
+      if (state.idx >= list.length) state.idx = 0;
+      render();
+    }
+    var NAV = { ArrowDown: 1, ArrowUp: 1, Enter: 1, Tab: 1, Escape: 1 };
+    // キーボード操作（pop が開いている間だけ横取り。SendHook より先に登録＝先に発火）
+    pDoc.addEventListener('keydown', function (e) {
+      var ta = e.target;
+      if (!ta || !ta.closest || !ta.closest('[data-testid="stChatInput"]')) return;
+      var p = pDoc.getElementById(POP_ID);
+      if (!p || p.style.display === 'none' || !state.list.length) return;
+      if (!NAV[e.key]) return;
+      if (e.isComposing || e.keyCode === 229) return;   // IME 変換中はそのまま
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); hide(); return; }
+      if (e.key === 'ArrowDown') { e.stopImmediatePropagation(); e.preventDefault();
+        state.idx = (state.idx + 1) % state.list.length; render(); return; }
+      if (e.key === 'ArrowUp')   { e.stopImmediatePropagation(); e.preventDefault();
+        state.idx = (state.idx - 1 + state.list.length) % state.list.length; render(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.stopImmediatePropagation(); e.preventDefault();
+        var u = state.list[state.idx]; if (u) applyMention(u.tag);
+        return;
+      }
+    }, true);
+    // 入力・カーソル移動で候補を更新
+    pDoc.addEventListener('input', function (e) {
+      if (e.target && e.target.closest && e.target.closest('[data-testid="stChatInput"]')) update();
+    }, true);
+    pDoc.addEventListener('keyup', function (e) {
+      if (NAV[e.key]) return;
+      if (e.target && e.target.closest && e.target.closest('[data-testid="stChatInput"]')) update();
+    }, true);
+    pDoc.addEventListener('click', function (e) {
+      if (e.target && e.target.closest && e.target.closest('[data-testid="stChatInput"]')) {
+        setTimeout(update, 0);
+      } else if (!e.target || !e.target.closest || !e.target.closest('#' + POP_ID)) {
+        hide();   // 入力欄/候補以外をタップ → 閉じる
+      }
+    }, true);
+    pDoc.addEventListener('focusout', function (e) {
+      if (e.target && e.target.closest && e.target.closest('[data-testid="stChatInput"]')) {
+        setTimeout(hide, 200);   // タップ確定の余地を残して閉じる
+      }
+    }, true);
+  }
+
   function setupChatSendHook(pDoc) {
     if (pDoc._danranSendHook) return;
     pDoc._danranSendHook = true;

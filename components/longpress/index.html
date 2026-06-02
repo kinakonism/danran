@@ -1716,6 +1716,7 @@
     injectNotifSettings();  // 通知設定画面の UI（VIEW=notifications のときのみ）
     attachPushBannerClick(); // Python 描画バナーのクリックイベント付与
     setupInstallPrompt();   // Android: beforeinstallprompt キャプチャ（iOS は不可）
+    try { setupRoomMenu(window.parent.document); } catch (e) {}            // チャットヘッダー ☰ メニュー
     try { setupMentionAutocomplete(window.parent.document); } catch (e) {}  // @ メンション補完（SendHook より先に張る）
     try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
     reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
@@ -3098,6 +3099,90 @@
   }
 
   // チャット入力の送信検知（rerun で作り直されるため document に委譲）
+  /* ════════════════════════════════════════
+   *  チャットヘッダー ☰ メニュー（写真アルバム / ルーム編集）
+   *  ☰(data-hdr-roommenu="{room_id}") タップで下にメニューを開き、選ぶと nav。
+   *  delegated（pDoc に1回張る）＋ pDoc._danranSend 経由で死んだ iframe でも動く。
+   * ════════════════════════════════════════ */
+  var RMENU_ID = '_danran_room_menu';
+  function setupRoomMenu(pDoc) {
+    if (pDoc._danranRoomMenuHook) return;
+    pDoc._danranRoomMenuHook = true;
+
+    function pWin() { return pDoc.defaultView || window.parent; }
+    function send(v) {
+      try { if (pDoc._danranSend) pDoc._danranSend(v); } catch (e) {}
+      try { stSetValue(v); } catch (e) {}   // 併送（ts dedup で1回だけ処理）
+    }
+    function getMenu() {
+      var m = pDoc.getElementById(RMENU_ID);
+      if (!m) {
+        m = pDoc.createElement('div');
+        m.id = RMENU_ID;
+        m.style.cssText = 'position:fixed;z-index:2147483647;display:none;'
+          + 'min-width:190px;background:#241f1c;'
+          + 'border:1px solid rgba(240,168,104,0.35);border-radius:14px;'
+          + 'box-shadow:0 10px 30px rgba(0,0,0,0.55);padding:6px;'
+          + 'opacity:0;transform:translateY(-6px);transition:opacity .12s,transform .12s;';
+        m.innerHTML =
+            '<div data-rmenu="album" style="display:flex;align-items:center;gap:10px;'
+          + 'padding:11px 12px;border-radius:10px;cursor:pointer;color:#f0e8e0;font-size:15px">'
+          + '<span style="font-size:18px">🖼</span>写真アルバム</div>'
+          + '<div data-rmenu="edit" style="display:flex;align-items:center;gap:10px;'
+          + 'padding:11px 12px;border-radius:10px;cursor:pointer;color:#f0e8e0;font-size:15px">'
+          + '<span style="font-size:18px">⚙️</span>ルーム編集</div>';
+        pDoc.body.appendChild(m);
+      }
+      return m;
+    }
+    function hide() {
+      var m = pDoc.getElementById(RMENU_ID);
+      if (m) { m.style.opacity = '0'; m.style.transform = 'translateY(-6px)';
+        setTimeout(function () { if (m.style.opacity === '0') m.style.display = 'none'; }, 120); }
+    }
+    function show(btn) {
+      var m = getMenu();
+      m._danranRoomId = btn.getAttribute('data-hdr-roommenu') || '';
+      var r = btn.getBoundingClientRect();
+      var win = pWin();
+      m.style.display = 'block';
+      // 右上ボタンの下・右寄せ
+      m.style.right = Math.max(8, (win.innerWidth || 380) - r.right) + 'px';
+      m.style.left  = 'auto';
+      m.style.top   = (r.bottom + 6) + 'px';
+      // reflow してからフェードイン
+      void m.offsetWidth;
+      m.style.opacity = '1'; m.style.transform = 'translateY(0)';
+    }
+    pDoc.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var hb = t.closest('[data-hdr-roommenu]');
+      if (hb) {
+        e.preventDefault(); e.stopPropagation();
+        var m = pDoc.getElementById(RMENU_ID);
+        if (m && m.style.display === 'block' && m.style.opacity === '1') hide();
+        else show(hb);
+        return;
+      }
+      var item = t.closest('[data-rmenu]');
+      if (item) {
+        e.preventDefault(); e.stopPropagation();
+        var m2 = pDoc.getElementById(RMENU_ID);
+        var rid = m2 ? (m2._danranRoomId || '') : '';
+        var act = item.getAttribute('data-rmenu');
+        hide();
+        if (!rid) return;
+        if (act === 'album') send({ action: 'go_album',     room_id: rid, ts: Date.now() });
+        else                 send({ action: 'go_room_edit', room_id: rid, ts: Date.now() });
+        return;
+      }
+      // メニュー外タップ → 閉じる
+      var mm = pDoc.getElementById(RMENU_ID);
+      if (mm && mm.style.display === 'block' && !t.closest('#' + RMENU_ID)) hide();
+    }, true);
+  }
+
   /* ════════════════════════════════════════
    *  @ メンション補完ドロップダウン
    *  入力欄で「@」を打つと候補（AI＋家族）を出し、選ぶと「@名前 」を挿入する。

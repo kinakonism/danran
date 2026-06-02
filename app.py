@@ -849,7 +849,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v101",   # メンション補完: 候補を親ドキュメント共有(_danranMentions)＋pDoc.defaultView 参照で死んだiframeでも動かす
+    "danran_lp_v102",   # チャットヘッダー ☰ メニュー（写真アルバム/ルーム編集）＋アルバム独立画面
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1993,6 +1993,26 @@ def show_room_edit(room: dict) -> None:
                 st.rerun()
 
 # ─────────────────────────────────────
+# 画面⑤-c 写真アルバム（チャット☰メニューから／ルーム編集の奥に埋もれない独立画面）
+# ─────────────────────────────────────
+def show_album(room: dict) -> None:
+    room_name = room.get("name", "")
+    st.markdown("<br>", unsafe_allow_html=True)
+    _alb = [m for m in (fetch_messages(room_name, limit=300) or []) if m.get("image_url")]
+    if not _alb:
+        st.caption("まだ写真はありません。チャットで送った写真がここにまとまります。")
+        return
+    st.caption(f"📷 {len(_alb)} 枚（新しい順）")
+    _alb_rev = list(reversed(_alb))[:120]   # 新しい順・最大120枚
+    _cols = st.columns(3)
+    for _i, _m in enumerate(_alb_rev):
+        with _cols[_i % 3]:
+            try:
+                st.image(_m["image_url"], use_container_width=True)
+            except Exception:
+                pass
+
+# ─────────────────────────────────────
 # 画面⑤-b ルーム作成（room_edit から削除機能を除いたもの）
 # ─────────────────────────────────────
 _ROOM_CREATE_WIDGET_KEYS = ("room_create_atype", "room_create_emoji", "room_create_photo", "room_create_name")
@@ -2602,7 +2622,7 @@ _clear_flag  = st.session_state.pop("_clear_session", False)
 # JS に「ブラウザ側も unsubscribe して再登録せよ」を伝えるフラグ（1回のみ）
 _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
-_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications")
+_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album")
 _active_room_id = ""
 if "current_user" in st.session_state and not _is_profile:
     # active_room が未セット（セッション復元直後）のときは参加ルームの先頭をフォールバック
@@ -2663,6 +2683,7 @@ if "current_user" in st.session_state:
             "profile":       "プロフィール編集",
             "room_edit":     "ルーム編集",
             "notifications": "🔔 通知設定",
+            "album":         "🖼 写真アルバム",
         }
         _hdr_title_text = _title_map.get(_cur_view, "設定")
         _hdr_html = (
@@ -2702,11 +2723,11 @@ if "current_user" in st.session_state:
             # ルーム選択はトップ画面なので戻る（＜）ボタンは出さない
             _hdr_left = '<div style="flex-shrink:0;min-width:44px;"></div>'
         else:
-            # チャット画面: 右上に「👥」メンバー管理ボタン → ルーム編集（メンバー画面）へ
+            # チャット画面: 右上に「☰」メニュー → タップで 写真アルバム / ルーム編集 を選ぶ
             if _active_room_id:
                 _hdr_right = (
-                    f'<button data-hdr-roomedit="{_html.escape(_active_room_id)}" '
-                    f'style="{_HDR_BTN_STYLE}font-size:1.1rem">👥</button>'
+                    f'<button data-hdr-roommenu="{_html.escape(_active_room_id)}" '
+                    f'style="{_HDR_BTN_STYLE}font-size:1.2rem">☰</button>'
                 )
             else:
                 _hdr_right = '<div style="flex-shrink:0;min-width:44px;"></div>'
@@ -2803,6 +2824,11 @@ if isinstance(_lp_result, dict):
         elif _nav == "go_back":
             # 編集画面ヘッダーの ＜ → ルームリストに戻る
             cur = st.session_state.get("view", "")
+            if cur == "album":
+                # アルバムはチャットの☰メニューから開くので、戻り先はそのチャット
+                st.session_state["view"] = "chat"
+                st.session_state.pop("_show_rooms", None)
+                st.rerun()
             if cur == "profile":
                 _reset_profile_widgets()
             elif cur == "room_edit":
@@ -2836,6 +2862,15 @@ if isinstance(_lp_result, dict):
             _reset_room_create_widgets()
             st.session_state["view"] = "room_create"
             st.rerun()
+        elif _nav == "go_album":
+            # チャットヘッダー ☰ メニュー → 写真アルバム画面
+            _room_id = _lp_result.get("room_id", "")
+            if _room_id:
+                _found = [r for r in fetch_rooms(_cu.get("id", "")) if r["id"] == _room_id]
+                if _found:
+                    st.session_state["album_room"] = _found[0]
+                    st.session_state["view"] = "album"
+                    st.rerun()
         elif _nav == "refresh_chat":
             # メッセージ削除後など: チャットHTMLキャッシュを捨ててDBから綺麗に再描画
             st.session_state.pop("_chat_html", None)
@@ -2942,6 +2977,8 @@ else:
             show_profile(st.session_state["current_user"])
         case "room_edit" if "current_user" in st.session_state:
             show_room_edit(st.session_state.get("editing_room", {}))
+        case "album" if "current_user" in st.session_state:
+            show_album(st.session_state.get("album_room", {}))
         case "room_create" if "current_user" in st.session_state:
             show_room_create()
         case "notifications" if "current_user" in st.session_state:

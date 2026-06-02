@@ -72,12 +72,16 @@ def api(method, path, body=None):
         return json.loads(raw) if raw else None
 
 
-def fetch_recent(n=25):
-    q = ("messages?select=user_id,user_name,content,image_url,created_at"
-         "&room_name=eq." + urllib.parse.quote(ROOM) +
+def fetch_all_recent(n=80):
+    """全ルームの直近メッセージ（新しい順）。"""
+    q = ("messages?select=room_name,user_id,user_name,content,image_url,created_at"
          "&order=created_at.desc&limit=" + str(n))
-    rows = api("GET", q) or []
-    return list(reversed(rows))
+    return api("GET", q) or []
+
+def mentions_ai(text):
+    """本文に @AI / ＠AI（大小文字無視）が含まれるか。"""
+    t = (text or "").lower()
+    return ("@ai" in t) or ("＠ai" in t)
 
 
 def parse_ts(s):
@@ -94,9 +98,9 @@ def parse_ts(s):
         return 0.0
 
 
-def post_reply(text):
+def post_reply(text, room=ROOM):
     api("POST", "messages", {
-        "room_name": ROOM, "user_id": BOT_UID,
+        "room_name": room, "user_id": BOT_UID,
         "user_name": BOT_NAME, "user_avatar": BOT_AVATAR,
         "content": (text or "")[:4000],
     })
@@ -111,7 +115,7 @@ def heartbeat():
         pass
 
 
-def build_prompt(msgs):
+def build_prompt(msgs, ai_room=True):
     lines = []
     for m in msgs[-MAX_HIST:]:
         c = (m.get("content") or "").strip() or ("（画像を送信）" if m.get("image_url") else "")
@@ -119,8 +123,18 @@ def build_prompt(msgs):
             continue
         who = "アシスタント" if m.get("user_id") == BOT_UID else (m.get("user_name") or "家族")
         lines.append(f"{who}: {c}")
-    return (SYS + "\n\n--- これまでの会話 ---\n" + "\n".join(lines) +
-            "\n\n--- 指示 ---\n上の最後の発言に対する、アシスタントとしての返信だけを出力してください。")
+    convo = "\n".join(lines)
+    if ai_room:
+        return (SYS + "\n\n--- これまでの会話 ---\n" + convo +
+                "\n\n--- 指示 ---\n上の最後の発言に対する、サポートAIとしての返信だけを出力してください。")
+    # 通常ルームで @AI 呼びかけに答える場合
+    guest = (
+        "あなたは家族チャットアプリ danran の AI アシスタントです。家族の会話の中で誰かが"
+        "「@AI」と呼びかけました。直近の会話の流れを踏まえて、その呼びかけに日本語で簡潔・"
+        "親しみやすく答えてください。アプリ名は半角『danran』。マークダウン記法は使わない。"
+        "返信テキストだけを出力してください。"
+    )
+    return guest + "\n\n--- 会話 ---\n" + convo + "\n\n--- 指示 ---\n@AI への呼びかけに答えてください。"
 
 
 def _claude_bin():
@@ -151,26 +165,51 @@ def run_claude(prompt):
         return ""
 
 
+def _group_by_room(rows):
+    """desc 取得の rows を room_name → 昇順メッセージ列 にまとめる。"""
+    by = {}
+    for m in rows:
+        by.setdefault(m.get("room_name", ""), []).append(m)
+    for rn in by:
+        by[rn] = list(reversed(by[rn]))   # 昇順
+    return by
+
 def main():
-    print(f"[danran-bridge] 起動。ルーム『{ROOM}』を {POLL_SEC}s ごとに監視します。")
-    msgs = fetch_recent()
-    last_ts = parse_ts(msgs[-1]["created_at"]) if msgs else 0.0
-    print(f"[danran-bridge] 既存 {len(msgs)} 件はスキップ。新着を待機中…（Ctrl+C で停止）")
+    print(f"[danran-bridge] 起動。全ルームを {POLL_SEC}s ごとに監視（AIサポート＝常時 / 他＝@AI 呼びかけ時）")
+    # 起動時の各ルーム最新時刻＝バックログ無視の基準
+    last_by_room = {}
+    for rn, msgs in _group_by_room(fetch_all_recent()).items():
+        if msgs:
+            last_by_room[rn] = parse_ts(msgs[-1].get("created_at"))
+    print(f"[danran-bridge] 既存はスキップ。新着を待機中…（Ctrl+C で停止）")
     while True:
         try:
-            heartbeat()   # 生存記録（オンラインランプ用）
-            msgs = fetch_recent()
-            if msgs:
+            heartbeat()
+            for rn, msgs in _group_by_room(fetch_all_recent()).items():
+                if not msgs:
+                    continue
                 newest = msgs[-1]
                 nts = parse_ts(newest.get("created_at"))
-                if (newest.get("user_id") != BOT_UID and nts > last_ts
-                        and (time.time() - nts) > SETTLE_SEC):
-                    print(f"[danran-bridge] 新着 ← {newest.get('user_name')}: "
-                          f"{(newest.get('content') or '(画像)')[:50]}")
-                    reply = run_claude(build_prompt(msgs))
-                    post_reply(reply or "⚠️ うまく応答できませんでした。もう一度試してください。")
-                    print(f"[danran-bridge] 返信 → {(reply or '(エラー)')[:60]}")
-                    last_ts = nts
+                if nts <= last_by_room.get(rn, 0):
+                    continue
+                # ボット自身の発言 → 既読扱いにして次へ
+                if newest.get("user_id") == BOT_UID:
+                    last_by_room[rn] = nts
+                    continue
+                # 連投が落ち着くまで待つ（まだ待つなら last は更新しない＝次ループで再判定）
+                if (time.time() - nts) <= SETTLE_SEC:
+                    continue
+                is_ai_room = (rn == ROOM)
+                # 通常ルームは @AI 呼びかけ時のみ反応
+                if not is_ai_room and not mentions_ai(newest.get("content")):
+                    last_by_room[rn] = nts
+                    continue
+                print(f"[danran-bridge] 新着 ← [{rn}] {newest.get('user_name')}: "
+                      f"{(newest.get('content') or '(画像)')[:50]}")
+                reply = run_claude(build_prompt(msgs, is_ai_room))
+                post_reply(reply or "⚠️ うまく応答できませんでした。もう一度試してください。", rn)
+                print(f"[danran-bridge] 返信 → [{rn}] {(reply or '(エラー)')[:60]}")
+                last_by_room[rn] = nts
         except KeyboardInterrupt:
             raise
         except Exception as e:

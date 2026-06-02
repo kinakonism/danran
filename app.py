@@ -849,7 +849,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v100",   # @ メンション補完ドロップダウン（AI＋家族を候補表示→選択で @名前 を挿入）
+    "danran_lp_v101",   # メンション補完: 候補を親ドキュメント共有(_danranMentions)＋pDoc.defaultView 参照で死んだiframeでも動かす
     path=_LP_COMPONENT_DIR,
 )
 

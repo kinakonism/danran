@@ -199,6 +199,10 @@
       REPLY_TEXT = cfg.getAttribute('data-reply-text')  || '';
       REPLY_IMG  = cfg.getAttribute('data-reply-image') || '';
       try { MENTIONS = JSON.parse(cfg.getAttribute('data-mentions-json') || '[]'); } catch (e) { MENTIONS = []; }
+      // ★ 死んだ iframe 問題対策: メンション補完リスナは最初に張った iframe が所有する。
+      //   その iframe が死ぬとローカル var MENTIONS は更新されないので、親ドキュメント
+      //   経由で共有し、リスナ側は pDoc._danranMentions を都度読む。
+      try { window.parent.document._danranMentions = MENTIONS; } catch (e) {}
 
       if (newSbUrl)    SB_URL      = newSbUrl;
       if (newSbKey)    SB_KEY      = newSbKey;
@@ -3139,9 +3143,10 @@
       var p = pDoc.getElementById(POP_ID);
       if (p) p.style.display = 'none';
     }
+    function pWin() { return pDoc.defaultView || window.parent; }   // 捕捉済み pDoc 経由（死んだ iframe で window.parent が壊れても安全）
     function setNativeValue(ta, val) {
       try {
-        var proto = window.parent.HTMLTextAreaElement.prototype;
+        var proto = pWin().HTMLTextAreaElement.prototype;
         var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
         setter.call(ta, val);
       } catch (e) { ta.value = val; }
@@ -3188,15 +3193,17 @@
       p.innerHTML = html;
       // 入力欄の真上に配置（キーボード表示時も追従）
       var box = (pDoc.querySelector('[data-testid="stChatInput"]') || ta).getBoundingClientRect();
-      var pw  = window.parent.innerWidth || 380;
+      var win = pWin();
+      var pw  = win.innerWidth || 380;
       p.style.left   = Math.max(8, box.left) + 'px';
       p.style.width  = Math.min(box.width || pw - 16, 340) + 'px';
-      p.style.bottom = Math.max(8, (window.parent.innerHeight || 700) - box.top + 8) + 'px';
+      p.style.bottom = Math.max(8, (win.innerHeight || 700) - box.top + 8) + 'px';
       p.style.display = 'block';
     }
     function update() {
       var ta = getTa();
-      if (!ta || !MENTIONS.length) { hide(); return; }
+      var men = pDoc._danranMentions || MENTIONS || [];   // 親ドキュメント共有（死んだ iframe 対策）
+      if (!ta || !men.length) { hide(); return; }
       var caret = ta.selectionStart || 0;
       var upto = (ta.value || '').slice(0, caret);
       var m = upto.match(/[@＠]([^\s@＠]*)$/);
@@ -3205,7 +3212,7 @@
       var prev = at > 0 ? upto[at - 1] : '';
       if (prev && !/\s/.test(prev)) { hide(); return; }   // メアド等(xxx@)は除外
       var q = (m[1] || '').toLowerCase();
-      var list = MENTIONS.filter(function (u) {
+      var list = men.filter(function (u) {
         if (!q) return true;
         return ((u.tag || '').toLowerCase().indexOf(q) >= 0)
             || ((u.name || '').toLowerCase().indexOf(q) >= 0);

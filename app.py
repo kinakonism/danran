@@ -887,7 +887,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v105",   # 編集画面のスクロール跳ね: カバーを高さ安定まで保持(settle)してトップ固定
+    "danran_lp_v106",   # リアクションのピル長押し → 誰がどのスタンプを押したか一覧ポップアップ
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1047,13 +1047,20 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 my  = uname in users
                 bg  = "rgba(232,145,91,0.32)" if my else "rgba(255,255,255,0.08)"
                 bdr = "rgba(240,168,104,0.9)" if my else "rgba(255,255,255,0.2)"
+                # data-react-pill: 長押しで「誰が押したか」ポップアップ（JS）。
                 pills += (
-                    f'<span style="display:inline-flex;align-items:center;gap:2px;'
+                    f'<span data-react-pill="1" data-emoji="{_html.escape(emoji)}" '
+                    f'style="display:inline-flex;align-items:center;gap:2px;'
                     f'background:{bg};border:1px solid {bdr};border-radius:20px;'
-                    f'padding:1px 7px;font-size:0.8rem;margin-right:3px">'
+                    f'padding:1px 7px;font-size:0.8rem;margin-right:3px;cursor:pointer">'
                     f'{emoji}&nbsp;{len(users)}</span>'
                 )
         return pills
+
+    def _react_users_json(msg_reactions: dict) -> str:
+        """{emoji: [name,...]} を data 属性用 JSON に（誰がどのスタンプを押したか）。"""
+        data = {e: msg_reactions.get(e, []) for e in REACTION_EMOJIS if msg_reactions.get(e)}
+        return _html.escape(json.dumps(data, ensure_ascii=False), quote=True)
 
     # ── 連投画像のグルーピング（LINE 風コンパクトグリッド）──
     #   同一送信者・画像のみ（本文なし）・直前から WINDOW 秒以内 のメッセージが
@@ -1272,8 +1279,10 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         # ── リアクション pills ──
         pills = _build_pills(msg_reactions)
         # data-lp-react: JS がリアルタイムで書き換えるためのコンテナ（常に出力）
+        # data-react-users: ピル長押しポップアップ用（誰がどのスタンプを押したか）
         pills_row = (
-            f'<div data-lp-react="{msg_id}" style="margin-top:4px;text-align:{"right" if is_mine else "left"};'
+            f'<div data-lp-react="{msg_id}" data-react-users="{_react_users_json(msg_reactions)}" '
+            f'style="margin-top:4px;text-align:{"right" if is_mine else "left"};'
             f'line-height:2;min-height:0">{pills}</div>'
         )
 

@@ -719,6 +719,61 @@
     } catch (err) { console.error('[danran-lp] showPopup:', err); }
   }
 
+  /* リアクションのピルを長押し → 「誰がどのスタンプを押したか」を一覧表示するポップアップ。
+     データは data-lp-react コンテナの data-react-users（{emoji:[name,...]} JSON）から読む。 */
+  function showReactedByPopup(pillEl) {
+    hidePopup();
+    try {
+      var pDoc = window.parent.document;
+      pDoc._danranLpAt = Date.now();   // 直後の合成 click で画像ビューア等が開くのを抑止
+      var cont = pillEl.closest ? pillEl.closest('[data-lp-react]') : null;
+      var raw  = cont ? (cont.getAttribute('data-react-users') || '') : '';
+      var data = {};
+      try { data = JSON.parse(raw) || {}; } catch (e) { data = {}; }
+      var emojis = Object.keys(data);
+      if (!emojis.length) return;
+
+      var rect = pillEl.getBoundingClientRect();
+      var pop  = pDoc.createElement('div');
+      pop.id = POPUP_ID;
+      pop.style.cssText =
+        'position:fixed;z-index:2147483647;left:50%;transform:translateX(-50%);' +
+        'background:#241f1c;border:1px solid rgba(255,255,255,0.13);border-radius:16px;' +
+        'padding:6px 4px;min-width:170px;max-width:84vw;max-height:50vh;overflow-y:auto;' +
+        'box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;' +
+        '-webkit-overflow-scrolling:touch;';
+      emojis.forEach(function (em, i) {
+        var names = data[em] || [];
+        var row = pDoc.createElement('div');
+        row.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:8px 12px;'
+          + (i > 0 ? 'border-top:1px solid rgba(255,255,255,0.07);' : '');
+        var eSpan = pDoc.createElement('div');
+        eSpan.textContent = em + (names.length > 1 ? ' ' + names.length : '');
+        eSpan.style.cssText = 'font-size:1.25rem;flex-shrink:0;line-height:1.4;min-width:34px;';
+        var nWrap = pDoc.createElement('div');
+        nWrap.textContent = names.join('、');
+        nWrap.style.cssText = 'color:#f0e8e0;font-size:0.9rem;line-height:1.55;word-break:break-word;';
+        row.appendChild(eSpan); row.appendChild(nWrap);
+        pop.appendChild(row);
+      });
+
+      // ピルの上に出す。上に入らなければ下に。
+      var estH = Math.min(window.parent.innerHeight * 0.5, emojis.length * 42 + 16);
+      var topPx = rect.top - 8 - estH;
+      if (topPx < 12) topPx = rect.bottom + 8;
+      pop.style.top = topPx + 'px';
+
+      pDoc._danranPopupAt = Date.now();
+      var back = pDoc.createElement('div');
+      back.id = POPUP_BACK_ID;
+      back.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:transparent;';
+      back.addEventListener('touchstart', function (e) { e.preventDefault(); e.stopPropagation(); hidePopup(); }, { passive: false });
+      back.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); hidePopup(); });
+      pDoc.body.appendChild(back);
+      pDoc.body.appendChild(pop);
+    } catch (err) { console.error('[danran-lp] showReactedByPopup:', err); }
+  }
+
   /* ════════════════════════════════════════
    *  長押し / contextmenu 検出
    * ════════════════════════════════════════ */
@@ -777,10 +832,12 @@
       pDoc.removeEventListener('touchcancel',prev.tc, true);
       pDoc.removeEventListener('contextmenu',prev.cm, true);
     }
-    var timer = null, moved = false, startX = 0, startY = 0, curEl = null;
+    var timer = null, moved = false, startX = 0, startY = 0, curEl = null, curPill = null;
     var rSwipe = false, rEl = null;   // 左スワイプ返信の指追従状態
     function clear() { if (timer) { clearTimeout(timer); timer = null; } }
     function fire(el) {
+      // リアクションのピル上の長押しは「誰が押したか」ポップアップを優先
+      if (curPill) { showReactedByPopup(curPill); return; }
       if (el) showPopup(el, el.getAttribute('data-lp-msg'), el.hasAttribute('data-lp-mine'));
     }
     function resetSwipe(spring) {
@@ -802,9 +859,10 @@
       if (pop && !pop.contains(e.target) && Date.now() - (pDoc._danranPopupAt || 0) > 250) {
         hidePopup();
       }
+      curPill = e.target && e.target.closest ? e.target.closest('[data-react-pill]') : null;
       var el = e.target && e.target.closest ? e.target.closest('[data-lp-msg]') : null;
       curEl = el; moved = false;
-      if (!el) return;
+      if (!el && !curPill) return;
       if (e.touches && e.touches[0]) { startX = e.touches[0].clientX; startY = e.touches[0].clientY; }
       timer = setTimeout(function () { if (!moved && !rSwipe) fire(curEl); }, LP_MS);
     };
@@ -813,8 +871,8 @@
       var dx = e.touches[0].clientX - startX;
       var dy = e.touches[0].clientY - startY;
       if (!moved && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) { moved = true; clear(); }
-      // 左スワイプ返信: 横方向が縦より優勢で左に動いたら指追従開始
-      if (!rSwipe && dx < -10 && Math.abs(dx) > Math.abs(dy) + 4) {
+      // 左スワイプ返信: 横方向が縦より優勢で左に動いたら指追従開始（ピル長押し中は無効）
+      if (!rSwipe && !curPill && dx < -10 && Math.abs(dx) > Math.abs(dy) + 4) {
         rSwipe = true; rEl = curEl;
         if (rEl) rEl.style.transition = 'none';
       }
@@ -832,10 +890,12 @@
         resetSwipe(true);                 // 指を離したら必ずバネで戻す
         if (dx < -48) { startReply(target); }   // 閾値を超えていれば返信
       }
-      moved = false; curEl = null;
+      moved = false; curEl = null; curPill = null;
     };
-    var onTc = function () { clear(); resetSwipe(true); moved = false; curEl = null; };
+    var onTc = function () { clear(); resetSwipe(true); moved = false; curEl = null; curPill = null; };
     var onCm = function (e) {
+      var pill = e.target && e.target.closest ? e.target.closest('[data-react-pill]') : null;
+      if (pill) { e.preventDefault(); showReactedByPopup(pill); return; }
       var el = e.target && e.target.closest ? e.target.closest('[data-lp-msg]') : null;
       if (el) { e.preventDefault(); fire(el); }
     };

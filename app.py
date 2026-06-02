@@ -849,7 +849,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v97",   # go_room を入室できるまで再送（コールド起動でWS未確立→一覧に戻る対策）
+    "danran_lp_v98",   # Enter＝改行（送信は➤ボタン/Cmd+Enter）。IME確定Enterは通す
     path=_LP_COMPONENT_DIR,
 )
 

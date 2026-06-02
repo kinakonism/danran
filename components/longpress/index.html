@@ -3105,14 +3105,26 @@
   function setupChatSendHook(pDoc) {
     if (pDoc._danranSendHook) return;
     pDoc._danranSendHook = true;
-    // Enter 送信（IME 変換中の Enter は送信ではないので除外＝日本語入力対策）
+    // ★ Enter は「改行」にする（送信は➤ボタン、PC は Cmd/Ctrl+Enter）。
+    //   st.chat_input は素の Enter で送信してしまうため、document capture で
+    //   Streamlit のハンドラに届く前に止める（preventDefault しない＝textarea 既定の改行は活かす）。
+    //   IME 変換確定の Enter（isComposing / keyCode 229）はそのまま通す。
     pDoc.addEventListener('keydown', function (e) {
       var ta = e.target;
       if (!ta || !ta.closest || !ta.closest('[data-testid="stChatInput"]')) return;
-      if (e.key !== 'Enter' || e.shiftKey) return;
-      if (e.isComposing || e.keyCode === 229) return;
-      var val = (ta.value || '').trim();
-      if (val) maybeOptimistic(val);
+      if (e.key !== 'Enter') return;
+      if (e.isComposing || e.keyCode === 229) return;   // 変換確定の Enter は触らない
+      if (e.metaKey || e.ctrlKey) {
+        // Cmd/Ctrl + Enter → 送信
+        var val0 = (ta.value || '').trim();
+        var sb = pDoc.querySelector('[data-testid="stChatInputSubmitButton"]');
+        e.stopImmediatePropagation(); e.preventDefault();
+        if (val0) maybeOptimistic(val0);
+        if (sb) sb.click();
+        return;
+      }
+      // 素の Enter / Shift+Enter → 改行（Streamlit の送信を止め、既定の改行に任せる）
+      e.stopImmediatePropagation();
     }, true);
     // 送信ボタン
     pDoc.addEventListener('click', function (e) {

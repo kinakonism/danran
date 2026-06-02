@@ -849,7 +849,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v102",   # チャットヘッダー ☰ メニュー（写真アルバム/ルーム編集）＋アルバム独立画面
+    "danran_lp_v103",   # 編集系画面に入った瞬間トップへスクロール（変なスクロール継承を修正）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1938,22 +1938,8 @@ def show_room_edit(room: dict) -> None:
         else:
             st.caption("全員がこのルームに参加済みです 🎉")
 
-        # ── 写真アルバム（このルームの画像を一覧で見返す）──
-        st.divider()
-        st.markdown("### 🖼 写真アルバム")
-        _alb = [m for m in (fetch_messages(room.get("name", ""), limit=300) or []) if m.get("image_url")]
-        if not _alb:
-            st.caption("まだ写真はありません。")
-        else:
-            st.caption(f"{len(_alb)} 枚（新しい順）")
-            _alb_rev = list(reversed(_alb))[:120]   # 新しい順・最大120枚
-            _cols = st.columns(3)
-            for _i, _m in enumerate(_alb_rev):
-                with _cols[_i % 3]:
-                    try:
-                        st.image(_m["image_url"], use_container_width=True)
-                    except Exception:
-                        pass
+        # 写真アルバムはチャットヘッダー ☰ メニューの独立画面（show_album）へ移動済み。
+        # ルーム編集画面には置かない（埋もれ防止・要望対応）。
 
         # ── ルーム削除（2 段階確認） ──
         st.divider()

@@ -17,3 +17,10 @@ Thumbs.db
 .mcp.json
 tools/ai_bridge.log
 tools/support_digest_*.md
+
+# Cloudflare Worker のローカル生成物
+cloudflare/node_modules/
+cloudflare/.wrangler/
+
+# Supabase CLI のローカルキャッシュ
+supabase/.temp/

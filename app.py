@@ -271,6 +271,35 @@ def save_push_subscription(user_id: str, subscription_json: str) -> None:
     except Exception:
         pass
 
+# ── ルームミュート（受信者ごと・通知だけ止める）──
+def is_room_muted(user_id: str, room_name: str) -> bool:
+    try:
+        r = supabase.table("room_mutes").select("user_id")\
+            .eq("user_id", user_id).eq("room_name", room_name).limit(1).execute().data
+        return bool(r)
+    except Exception:
+        return False
+
+def set_room_mute(user_id: str, room_name: str, muted: bool) -> None:
+    try:
+        if muted:
+            supabase.table("room_mutes").upsert(
+                {"user_id": user_id, "room_name": room_name}, on_conflict="user_id,room_name"
+            ).execute()
+        else:
+            supabase.table("room_mutes").delete()\
+                .eq("user_id", user_id).eq("room_name", room_name).execute()
+    except Exception:
+        pass
+
+def _muted_user_ids(room_name: str) -> set:
+    """そのルームをミュートしている user_id 集合（send_push の除外用・スレッド安全）。"""
+    try:
+        rows = supabase.table("room_mutes").select("user_id").eq("room_name", room_name).execute().data or []
+        return {r["user_id"] for r in rows}
+    except Exception:
+        return set()
+
 def send_push(room: str, sender_uid: str, sender_name: str,
               content: str, has_image: bool = False,
               priv: str = "", subj: str = "") -> None:
@@ -294,6 +323,11 @@ def send_push(room: str, sender_uid: str, sender_name: str,
             .select("endpoint, p256dh, auth, user_id")\
             .neq("user_id", sender_uid)\
             .execute().data or []
+
+        # このルームをミュートしている受信者は通知から除外
+        _muted = _muted_user_ids(room)
+        if _muted:
+            rows = [r for r in rows if r.get("user_id") not in _muted]
 
         expired: list[str] = []
         for row in rows:
@@ -785,6 +819,27 @@ def fmt_ts(ts_str: str) -> str:
     except Exception:
         return ts_str
 
+def _date_key(ts_str: str) -> str:
+    """日付セパレータ用：JST の YYYY-MM-DD（日付が変わったか判定）。"""
+    try:
+        return datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(JST).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+def _date_label(ts_str: str) -> str:
+    """日付セパレータの表示文字（今日 / 昨日 / M月D日(曜)）。"""
+    try:
+        dt  = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(JST)
+        now = datetime.now(JST)
+        if dt.date() == now.date():
+            return "今日"
+        if dt.date() == (now - timedelta(days=1)).date():
+            return "昨日"
+        _w = ["月", "火", "水", "木", "金", "土", "日"][dt.weekday()]
+        return dt.strftime(f"%-m月%-d日（{_w}）")
+    except Exception:
+        return ""
+
 # ─────────────────────────────────────
 # 長押し検出カスタムコンポーネント
 #   components/longpress/index.html が Streamlit の正式プロトコルで
@@ -1041,6 +1096,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
     _bubbles: list[str] = []
     _last_mine_bidx = None   # _bubbles 内の自分の最新バブル位置（軽い既読表示用）
     _last_mine_created = ""  # その既読判定に使う created_at
+    _last_date_key  = ""     # 日付セパレータ用
     for _mi, msg in enumerate(messages):
         if _mi in _skip:
             continue   # 連投グリッドにまとめ済み
@@ -1049,6 +1105,17 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         msg_uid  = msg.get("user_id",    "")
         body     = msg.get("content",    "") or ""
         ts       = msg.get("created_at", "")
+
+        # ── 日付セパレータ（日付が変わったら中央に「今日 / 昨日 / M月D日」）──
+        _dk = _date_key(ts)
+        if _dk and _dk != _last_date_key:
+            _last_date_key = _dk
+            _bubbles.append(
+                f'<div style="text-align:center;margin:14px 0 8px">'
+                f'<span style="display:inline-block;background:rgba(255,255,255,0.08);'
+                f'color:rgba(240,232,224,0.6);font-size:0.7rem;font-weight:600;'
+                f'padding:3px 12px;border-radius:12px">{_html.escape(_date_label(ts))}</span></div>'
+            )
         avatar   = msg.get("user_avatar","🙂")
         img_url  = msg.get("image_url")
         # user_id があればIDで判定（名前変更後も正しく動く）、なければ名前フォールバック
@@ -1623,6 +1690,31 @@ def show_profile(current_user: dict) -> None:
         st.caption("このリンクを家族に送ると、サインアップ画面が開きます（チャットは登録するまで見えません）。")
         st.code(_invite_url(), language=None)
 
+        # ── パスワード変更 ──
+        st.divider()
+        with st.expander("🔑 パスワードを変更"):
+            _pc_cur = st.text_input("現在のパスワード", type="password", key="pw_cur")
+            _pc_new = st.text_input("新しいパスワード（4文字以上）", type="password", key="pw_new")
+            _pc_cfm = st.text_input("新しいパスワード（確認）", type="password", key="pw_cfm")
+            if st.button("変更する", use_container_width=True, key="pw_change_btn"):
+                _u = get_user_with_hash(current_user["id"])
+                if not _u or not verify_password(_pc_cur, _u.get("password_hash") or ""):
+                    st.error("現在のパスワードが違います")
+                elif len(_pc_new) < 4:
+                    st.error("新しいパスワードは4文字以上にしてください")
+                elif _pc_new != _pc_cfm:
+                    st.error("新しいパスワード（確認）が一致しません")
+                else:
+                    try:
+                        supabase.table("users").update(
+                            {"password_hash": hash_password(_pc_new)}
+                        ).eq("id", current_user["id"]).execute()
+                        for _k in ("pw_cur", "pw_new", "pw_cfm"):
+                            st.session_state.pop(_k, None)
+                        st.success("✅ パスワードを変更しました")
+                    except Exception as e:
+                        st.error(f"❌ 変更に失敗しました: {e}")
+
         # ── ログアウト（2 段階確認） ──
         st.divider()
         if st.session_state.get("_logout_confirm"):
@@ -1763,10 +1855,24 @@ def show_room_edit(room: dict) -> None:
                 st.session_state["_show_rooms"] = True
                 st.rerun()
 
+        # ── 通知（このルームのミュート設定・自分だけに効く）──
+        st.divider()
+        st.markdown("### 🔔 このルームの通知")
+        _me_id   = st.session_state.get("current_user", {}).get("id", "")
+        _room_nm = room.get("name", "")
+        _muted_now = is_room_muted(_me_id, _room_nm)
+        _new_muted = not st.toggle(
+            "通知を受け取る", value=(not _muted_now), key=f"mute_toggle_{room_id}",
+            help="オフにすると、このルームの新着プッシュ通知が届かなくなります（あなただけ）。",
+        )
+        if _new_muted != _muted_now:
+            set_room_mute(_me_id, _room_nm, _new_muted)
+            st.toast("🔕 このルームをミュートしました" if _new_muted else "🔔 通知をオンにしました")
+            st.rerun()
+
         # ── メンバー管理（招待制）──
         st.divider()
         st.markdown("### 👥 メンバー")
-        _me_id   = st.session_state.get("current_user", {}).get("id", "")
         _members = fetch_room_members(room_id)
         _member_ids = {m["id"] for m in _members}
         st.caption(f"このルームに参加しているメンバー（{len(_members)}人）")

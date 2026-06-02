@@ -178,6 +178,18 @@ def add_room_member(room_id: str, user_id: str) -> None:
         supabase.table("room_members").upsert(
             {"room_id": room_id, "user_id": user_id}, on_conflict="room_id,user_id"
         ).execute()
+        # 参加時点で last_read を「今」に種付け → 参加前の過去ログは未読に数えない。
+        # ignore_duplicates=True で既存の既読進捗は上書きしない（再追加時も安全）。
+        try:
+            _rn = next((r["name"] for r in fetch_rooms() if r["id"] == room_id), None)
+            if _rn:
+                supabase.table("last_read").upsert(
+                    {"user_id": user_id, "room_name": _rn,
+                     "read_at": datetime.now(timezone.utc).isoformat()},
+                    on_conflict="user_id,room_name", ignore_duplicates=True,
+                ).execute()
+        except Exception:
+            pass
         invalidate_rooms_cache()
     except Exception:
         pass
@@ -742,8 +754,35 @@ def get_unread_counts(user_id: str, room_names: list[str] | None = None) -> dict
             if dt is not None:
                 last_reads[r["room_name"]] = dt
 
-        # ② 全メッセージの room_name + created_at を 1クエリで取得しクライアント集計
-        #    （旧実装はルーム数ぶん count クエリを投げて N+1 だった → 常に2クエリに）
+        # ②-a last_read が無いルームの「基準時刻」を用意（新規登録/参加前の過去ログを
+        #    未読にしないため）。参加日時(room_members.joined_at)→無ければ登録日時
+        #    (users.created_at)。基準も無ければ 0 件扱い（旧挙動の「全件未読」爆発を防ぐ）。
+        #    ★ last_read が揃っている通常時は追加クエリを投げない（5秒フラグメント対策）。
+        baselines: dict[str, datetime] = {}
+        if any(rn not in last_reads for rn in room_names):
+            try:
+                _id2name = {r["id"]: r["name"] for r in fetch_rooms()}  # 全ルーム（キャッシュ）
+                jrows = supabase.table("room_members")\
+                    .select("room_id, joined_at").eq("user_id", user_id).execute().data or []
+                for jr in jrows:
+                    nm = _id2name.get(jr.get("room_id"))
+                    dt = _parse_ts(jr.get("joined_at"))
+                    if nm and dt is not None:
+                        baselines[nm] = dt
+            except Exception:
+                pass
+            try:
+                urow = supabase.table("users").select("created_at")\
+                    .eq("id", user_id).single().execute().data or {}
+                _ucreated = _parse_ts(urow.get("created_at"))
+            except Exception:
+                _ucreated = None
+            for rn in room_names:
+                if rn not in last_reads and rn not in baselines and _ucreated is not None:
+                    baselines[rn] = _ucreated   # 参加日時不明 → 登録日時で代用
+
+        # ②-b 全メッセージの room_name + created_at を 1クエリで取得しクライアント集計
+        #    （旧実装はルーム数ぶん count クエリを投げて N+1 だった）
         #    タイムゾーン差（+09:00 と +00:00）で誤判定しないよう datetime 比較する。
         msg_rows = supabase.table("messages")\
             .select("room_name, created_at").execute().data or []
@@ -754,13 +793,12 @@ def get_unread_counts(user_id: str, room_names: list[str] | None = None) -> dict
             rn = m.get("room_name")
             if rn not in room_set:
                 continue
-            lr = last_reads.get(rn)
-            if lr is None:
-                counts[rn] += 1                      # 既読基準なし＝全件未読（旧挙動と一致）
-            else:
-                cdt = _parse_ts(m.get("created_at"))
-                if cdt is not None and cdt > lr:
-                    counts[rn] += 1
+            base = last_reads.get(rn) or baselines.get(rn)
+            if base is None:
+                continue                              # 既読基準も参加基準も無い → 未読に数えない
+            cdt = _parse_ts(m.get("created_at"))
+            if cdt is not None and cdt > base:
+                counts[rn] += 1
         return counts
     except Exception:
         return {r: 0 for r in room_names}

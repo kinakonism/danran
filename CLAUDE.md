@@ -516,6 +516,45 @@ vapid_subject     = "mailto:..."
   ```
 - システムプロンプト `AI_SYSTEM_PROMPT` に danran の使い方要点を内蔵。画像の中身は見ない（テキストのみ）。バグ報告はこのルームに残るので管理者(まさと)も読める。
 
+### bridge（Mac mini）と Claude Code の協調 = 自動実装ループ
+
+**役割分担**: bridge＝受付＆トリアージ（会話で即レス・実装はしない） / Claude Code＝実装担当（実コード変更・push・完了報告）。共有キューは Supabase の `ai_tasks` テーブル（machine が別でも協調できるよう DB を介す）。
+
+```
+家族が @AI でバグ報告/要望（どの部屋でも）
+   │
+   ▼  tools/ai_bridge.py（Mac mini 常駐・claude -p）
+   ├─ 会話で即レス（🤖アシスタントとして投稿。「実装はClaude Codeが対応します」と伝える）
+   └─ claude 返信末尾の「TASK: yes/no」を解析（家族には非表示で除去）
+        └─ yes なら ai_tasks に status='pending' で enqueue（source_message_id 一意で二重防止）
+   │
+   ▼  まさとの Claude Code（cron・2時間ごと・**起動中のみ**／session-only）
+   ├─ ai_tasks の pending を取得 → 明確・低リスクなら実装→構文チェック→commit→push
+   │    （JS 変更時は danran_lp_vNN を +1）
+   ├─ 完了: status='done' + 依頼の部屋へ「✅ 実装しました」を投稿
+   ├─ 曖昧/大: status='needs_review'（投稿せずまさとへ報告）
+   └─ 不要(質問/既済): status='skipped'
+```
+
+- bridge の `split_task_flag()` が TASK 行を抽出・除去、`enqueue_task()` が積む。`fetch_all_recent` は id も取得（キュー連携のため）。
+- cron は **session-only**（Claude Code を閉じると停止）。キューは Supabase に残るので、次に起動したとき溜まった分を消化できる。常時の一次対応は bridge が担う。
+- 注意: bridge は `[ai] api_key` 未設定前提（クラウド側 `_generate_ai_reply` と二重返信しないため）。
+
+#### `ai_tasks` テーブル
+
+| カラム | 型 | 説明 |
+|------|----|------|
+| id | uuid PK | |
+| room_name | text | 依頼が来た部屋（完了報告の投稿先） |
+| source_message_id | uuid | 元メッセージID（UNIQUE・二重enqueue防止） |
+| requester | text | 依頼者名 |
+| request_text | text | 依頼本文 |
+| status | text | `pending`/`done`/`skipped`/`needs_review` |
+| result | text | 実装要約 or 保留理由 |
+| created_at / updated_at | timestamptz | |
+
+RLS は他テーブル同様 全許可（家族アプリ・制御はアプリ層）。
+
 キーを再生成する場合:
 ```python
 from py_vapid import Vapid

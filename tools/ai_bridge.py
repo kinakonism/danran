@@ -3,9 +3,16 @@
 danran AIサポート bridge — Claude Code CLI（Max プラン）をチャットルームに接続する。
 
 仕組み:
-  - Supabase の「🤖 AIサポート」ルームを数秒ごとに監視
+  - Supabase の全ルームを数秒ごとに監視（AIサポート＝常時 / 他ルーム＝@AI 呼びかけ時）
   - 新しいユーザー発言が来たら、ローカルの `claude -p`（ヘッドレス）で返信を生成
   - その返信をボット（🤖 アシスタント）として Supabase に投稿
+
+Claude Code との協調（実装ループ）:
+  - claude の返信末尾に「TASK: yes/no」を自己申告させ、yes（＝コード変更が要る依頼）なら
+    その発言を Supabase の共有キュー public.ai_tasks に status='pending' で積む。
+  - まさとの Claude Code（cron）が pending を拾って実装→push→その部屋に「✅実装しました」を投稿し
+    タスクを done に更新する。bridge は受付＆トリアージ、Claude Code は実装担当、という分業。
+  - bridge 自身はコードを変更しない（会話のみ）。TASK 行は家族には表示せず除去する。
 
 使い方（この Mac で常駐させる。Claude Code が Max でログイン済みであること）:
   cd ~/danran
@@ -26,6 +33,7 @@ import shutil
 import subprocess
 import time
 import tomllib
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -54,8 +62,9 @@ SYS = (
     "- 返信テキストだけを出力する。ファイル編集やコマンド実行はしない（添付画像を確認する"
     "ための読み取りだけは可）。\n"
     "- 返信は数行で簡潔に、絵文字は控えめに。\n"
-    "バグ報告は受け止めて、必要なら『どの画面で・何をしたら・どうなったか』を1つだけ簡潔に質問してください"
-    "（開発者のまさともこのルームを見ます）。"
+    "バグ報告や機能の要望は受け止めて、必要なら『どの画面で・何をしたら・どうなったか』を1つだけ簡潔に質問してください。\n"
+    "実装が必要なバグ修正・機能追加は、まさとのClaude Codeが引き継いで対応し、できたらこの部屋でお知らせします"
+    "（あなた自身はコードを変更しません。安心させる一言を添えてOK）。"
 )
 
 # ── Supabase 認証情報（.streamlit/secrets.toml から）──
@@ -75,9 +84,43 @@ def api(method, path, body=None):
 
 def fetch_all_recent(n=80):
     """全ルームの直近メッセージ（新しい順）。"""
-    q = ("messages?select=room_name,user_id,user_name,content,image_url,created_at"
+    q = ("messages?select=id,room_name,user_id,user_name,content,image_url,created_at"
          "&order=created_at.desc&limit=" + str(n))
     return api("GET", q) or []
+
+
+def enqueue_task(msg):
+    """実装が要る依頼を ai_tasks キューに積む（Claude Code が拾って実装する）。
+    source_message_id 一意制約で二重登録は弾く（409 は握りつぶす）。"""
+    try:
+        api("POST", "ai_tasks", {
+            "room_name":         msg.get("room_name", ""),
+            "source_message_id": msg.get("id"),
+            "requester":         msg.get("user_name", ""),
+            "request_text":      (msg.get("content") or "")[:2000],
+            "status":            "pending",
+        })
+        print(f"[danran-bridge] 🧩 タスク登録 → ai_tasks: {(msg.get('content') or '')[:40]}")
+    except urllib.error.HTTPError as e:
+        if e.code != 409:    # 409=既に登録済み（二重防止）→ 無視
+            print("[danran-bridge] enqueue err:", e)
+    except Exception as e:
+        print("[danran-bridge] enqueue err:", e)
+
+
+def split_task_flag(text):
+    """claude 返信末尾の `TASK: yes/no` 行を取り出して本文から除去。
+    戻り: (家族に見せる本文, 実装が必要か bool)。"""
+    is_task = False
+    lines = (text or "").rstrip().split("\n")
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines:
+        m = re.match(r"\s*task\s*[:：]\s*(yes|no|はい|いいえ)\s*$", lines[-1], re.I)
+        if m:
+            is_task = m.group(1).lower() in ("yes", "はい")
+            lines.pop()
+    return ("\n".join(lines).strip(), is_task)
 
 def mentions_ai(text):
     """本文に @AI / ＠AI（大小文字無視）が含まれるか。"""
@@ -125,17 +168,27 @@ def build_prompt(msgs, ai_room=True):
         who = "アシスタント" if m.get("user_id") == BOT_UID else (m.get("user_name") or "家族")
         lines.append(f"{who}: {c}")
     convo = "\n".join(lines)
+    # 末尾に必ず付ける「実装要否」の自己申告（Claude Code への引き継ぎ判定に使う）
+    task_rule = (
+        "\n\n--- 最後に必ず ---\n"
+        "返信本文の後、最終行に1行だけ次の形式で実装要否を書いてください（家族には表示しません）:\n"
+        "TASK: yes  ← danran のコード変更（バグ修正・UI改善・機能追加）が必要な依頼のとき\n"
+        "TASK: no   ← 使い方の質問・雑談・既に直っている等、コード変更が不要なとき"
+    )
     if ai_room:
         return (SYS + "\n\n--- これまでの会話 ---\n" + convo +
-                "\n\n--- 指示 ---\n上の最後の発言に対する、サポートAIとしての返信だけを出力してください。")
+                "\n\n--- 指示 ---\n上の最後の発言に対する、サポートAIとしての返信だけを出力してください。" +
+                task_rule)
     # 通常ルームで @AI 呼びかけに答える場合
     guest = (
         "あなたは家族チャットアプリ danran の AI アシスタントです。家族の会話の中で誰かが"
         "「@AI」と呼びかけました。直近の会話の流れを踏まえて、その呼びかけに日本語で簡潔・"
         "親しみやすく答えてください。アプリ名は半角『danran』。マークダウン記法は使わない。"
-        "返信テキストだけを出力してください。"
+        "実装が必要な依頼なら『まさとのClaude Codeが対応して、できたらこの部屋でお知らせします』と"
+        "一言添えてください（あなた自身はコードを変更しません）。返信テキストだけを出力してください。"
     )
-    return guest + "\n\n--- 会話 ---\n" + convo + "\n\n--- 指示 ---\n@AI への呼びかけに答えてください。"
+    return (guest + "\n\n--- 会話 ---\n" + convo +
+            "\n\n--- 指示 ---\n@AI への呼びかけに答えてください。" + task_rule)
 
 
 def _claude_bin():
@@ -254,8 +307,13 @@ def main():
                                "内容を確認し、回答に反映してください: " + ", ".join(imgs))
                 reply = run_claude(prompt, has_images=bool(imgs))
                 cleanup_tmp()
-                post_reply(reply or "⚠️ うまく応答できませんでした。もう一度試してください。", rn)
-                print(f"[danran-bridge] 返信 → [{rn}]{' [img]' if imgs else ''} {(reply or '(エラー)')[:60]}")
+                # 末尾の TASK: yes/no を取り出し、本文からは除去して家族に見せる
+                clean, is_task = split_task_flag(reply)
+                post_reply(clean or "⚠️ うまく応答できませんでした。もう一度試してください。", rn)
+                if is_task:
+                    enqueue_task(newest)   # 実装が要る依頼 → Claude Code 用キューへ
+                print(f"[danran-bridge] 返信 → [{rn}]{' [img]' if imgs else ''}"
+                      f"{' [task]' if is_task else ''} {(clean or '(エラー)')[:60]}")
                 last_by_room[rn] = nts
         except KeyboardInterrupt:
             raise

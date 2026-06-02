@@ -51,7 +51,8 @@ SYS = (
     "- アプリ名は必ず半角で『danran』と書く（『danラン』『ダンラン』などにしない）。\n"
     "- マークダウン記法は使わない。`**`（太字）や`#`（見出し）、`・**…**`のような装飾を出さない。"
     "チャットでは記号がそのまま表示されて読みにくくなるため、プレーンな文章で書く。箇条書きは行頭『・』だけでよい。\n"
-    "- 返信テキストだけを出力し、ファイル編集・コマンド実行などのツールは使わない。\n"
+    "- 返信テキストだけを出力する。ファイル編集やコマンド実行はしない（添付画像を確認する"
+    "ための読み取りだけは可）。\n"
     "- 返信は数行で簡潔に、絵文字は控えめに。\n"
     "バグ報告は受け止めて、必要なら『どの画面で・何をしたら・どうなったか』を1つだけ簡潔に質問してください"
     "（開発者のまさともこのルームを見ます）。"
@@ -153,12 +154,52 @@ def _claude_bin():
 
 CLAUDE_BIN = _claude_bin()
 
-def run_claude(prompt):
+AI_TMP = os.path.join(REPO_DIR, "tools", ".ai_tmp")   # 画像の一時保存（gitignore）
+
+def download_images(msgs, max_n=3):
+    """直近メッセージの画像を最大 max_n 枚 tools/.ai_tmp に落とし、相対パス一覧を返す。"""
+    rels = []
     try:
-        r = subprocess.run(
-            [CLAUDE_BIN, "-p", prompt, "--max-turns", "1"],
-            cwd=WORKDIR, capture_output=True, text=True, timeout=180,
-        )
+        os.makedirs(AI_TMP, exist_ok=True)
+        urls = []
+        for m in reversed(msgs):       # 新しい順に集める
+            u = m.get("image_url")
+            if u:
+                urls.append(u)
+            if len(urls) >= max_n:
+                break
+        for i, u in enumerate(reversed(urls)):   # 会話順（古→新）に保存
+            try:
+                req = urllib.request.Request(u, headers={"User-Agent": "danran-bridge"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    data = r.read()
+                ext = ".png" if u.lower().split("?")[0].endswith(".png") else ".jpg"
+                p = os.path.join(AI_TMP, f"img_{i}{ext}")
+                with open(p, "wb") as f:
+                    f.write(data)
+                rels.append(os.path.relpath(p, REPO_DIR))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return rels
+
+def cleanup_tmp():
+    try:
+        for f in glob.glob(os.path.join(AI_TMP, "*")):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def run_claude(prompt, has_images=False):
+    try:
+        args = [CLAUDE_BIN, "-p", prompt, "--max-turns", "3" if has_images else "1"]
+        if has_images:
+            args += ["--allowedTools", "Read"]   # 画像を Read で見られるように
+        r = subprocess.run(args, cwd=WORKDIR, capture_output=True, text=True, timeout=240)
         return (r.stdout or "").strip()
     except Exception as e:
         print("  claude error:", e)
@@ -206,9 +247,15 @@ def main():
                     continue
                 print(f"[danran-bridge] 新着 ← [{rn}] {newest.get('user_name')}: "
                       f"{(newest.get('content') or '(画像)')[:50]}")
-                reply = run_claude(build_prompt(msgs, is_ai_room))
+                prompt = build_prompt(msgs, is_ai_room)
+                imgs = download_images(msgs)   # 直近の画像があれば落として Vision で見せる
+                if imgs:
+                    prompt += ("\n\n--- 添付画像 ---\n次の画像ファイルを Read ツールで開いて"
+                               "内容を確認し、回答に反映してください: " + ", ".join(imgs))
+                reply = run_claude(prompt, has_images=bool(imgs))
+                cleanup_tmp()
                 post_reply(reply or "⚠️ うまく応答できませんでした。もう一度試してください。", rn)
-                print(f"[danran-bridge] 返信 → [{rn}] {(reply or '(エラー)')[:60]}")
+                print(f"[danran-bridge] 返信 → [{rn}]{' [img]' if imgs else ''} {(reply or '(エラー)')[:60]}")
                 last_by_room[rn] = nts
         except KeyboardInterrupt:
             raise

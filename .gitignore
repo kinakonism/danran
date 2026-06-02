@@ -25,3 +25,4 @@ cloudflare/.wrangler/
 # Supabase CLI のローカルキャッシュ
 supabase/.temp/
 tools/.support_cursor
+tools/.ai_tmp/

@@ -1828,6 +1828,21 @@
           return;
         }
         if (!t.closest) return;
+        // リアクションのピルをタップ → 自分のリアクションをトグル（再度押すと外れる）。
+        //   他人のメッセージのみ（自分のメッセージにはリアクションを付けない）。
+        //   長押し（誰が押したか表示）直後の合成 click は無視。
+        var rp = t.closest('[data-react-pill]');
+        if (rp) {
+          e.preventDefault(); e.stopPropagation();
+          if (Date.now() - (pd._danranLpAt || 0) < 700) return;
+          var rbubble = rp.closest('[data-lp-msg]');
+          if (rbubble && rbubble.hasAttribute('data-lp-mine')) return;
+          var rcont = rp.closest('[data-lp-react]');
+          var rmid  = rcont ? rcont.getAttribute('data-lp-react') : '';
+          var remo  = rp.getAttribute('data-emoji') || '';
+          if (rmid && remo) toggleReactionAndUpdate(rmid, remo);
+          return;
+        }
         var lk = t.closest('[data-lp-link]');
         if (lk) { e.preventDefault(); e.stopPropagation(); showLinkMenu(lk.getAttribute('data-lp-link') || lk.href); return; }
         var jp = t.closest('[data-lp-jump]');

@@ -1066,13 +1066,38 @@
         if (nav) {
           e.preventDefault(); e.stopPropagation();
           try { nav.classList.add('dr-selected'); } catch (e2) {}   // 即フィードバック（琥珀）
+          var rname = nav.getAttribute('data-room-name');
           showEnterCover();   // 遷移全体を覆ってチラつき隠し
-          sendNav({ action: 'go_room', room_name: nav.getAttribute('data-room-name'), ts: Date.now() });
+          // ★ コールド起動直後は WS 未確立で go_room が握り潰されることがある。
+          //   入室できるまで再送するため pending を記録（retryPendingRoom が再送）。
+          pDoc._danranPendingRoom = rname;
+          pDoc._danranPendingAt   = Date.now();
+          pDoc._danranPendingSent = Date.now();
+          sendNav({ action: 'go_room', room_name: rname, ts: Date.now() });
           return;
         }
       };
       pDoc.addEventListener('click', onClick, true);
       pDoc._danranRoomDeleg = onClick;
+    } catch (e) {}
+  }
+
+  // go_room が届かず一覧のままのとき、入室できるまで再送する（コールド起動の WS 未確立対策）。
+  function retryPendingRoom() {
+    try {
+      var pDoc = window.parent.document;
+      var pend = pDoc._danranPendingRoom;
+      if (!pend) return;
+      var sr = pDoc._danranSR;   // SHOW_ROOMS（ルーム選択中）
+      // 入室できた（一覧でない & アクティブが目的の部屋）→ クリア
+      if (!sr && ACTIVE_ROOM === pend) { pDoc._danranPendingRoom = null; return; }
+      // 10秒で諦め（カバーは別途期限切れ掃除される）
+      if (Date.now() - (pDoc._danranPendingAt || 0) > 10000) { pDoc._danranPendingRoom = null; return; }
+      // まだ一覧のまま & 前回送信から1.5秒経過 → 再送
+      if (sr && Date.now() - (pDoc._danranPendingSent || 0) > 1500) {
+        pDoc._danranPendingSent = Date.now();
+        sendNav({ action: 'go_room', room_name: pend, ts: Date.now() });
+      }
     } catch (e) {}
   }
 
@@ -2095,6 +2120,7 @@
       if (pWin._danranCoverIv) clearInterval(pWin._danranCoverIv);
       pWin._danranCoverIv = setInterval(function () {
         try { scrollToLatestOnEnter(); } catch (e) {}
+        try { retryPendingRoom(); } catch (e) {}   // go_room 不達なら再送
       }, 500);
     } catch (e) {}
   }

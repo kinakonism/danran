@@ -354,6 +354,38 @@
     } catch (e) { console.error('[danran] handleSession error:', e); }
   }
 
+  // ── スプラッシュ固着ウォッチドッグ ───────────────────────────────────────
+  //   起動時 Python は _lp_result is None の間スプラッシュ(#_danran_splash_wait)を出し、
+  //   JS の restore_session 到着で解除する。だが restore_session の送信は
+  //   streamlit:render 受信(_gotRender)に依存しており、その render が取りこぼされると
+  //   restore_session が永久に送られず「スプラッシュのまま固着」する。
+  //   → スプラッシュが一定時間出続けていたら、render を待たず restore_session を
+  //     強制（再）送信してデッドロックを解除する。届くまで一定間隔で繰り返す。
+  var _splashFirstSeen = 0, _splashLastKick = 0;
+  function splashWatchdog() {
+    try {
+      var pDoc = window.parent.document;
+      var sp = pDoc.getElementById('_danran_splash_wait');
+      if (!sp) { _splashFirstSeen = 0; return; }   // スプラッシュ無し＝正常
+      var now = Date.now();
+      if (!_splashFirstSeen) { _splashFirstSeen = now; return; }
+      if (now - _splashFirstSeen < 1200) return;   // 一瞬の正常スプラッシュは許容
+      if (now - _splashLastKick   < 1800) return;  // 連打防止（届くまで間隔を空けて再送）
+      _splashLastKick = now;
+      var lsSid = '';
+      try { lsSid = localStorage.getItem(STORAGE_KEY) || ''; } catch (e) {}
+      var er = '';
+      try {
+        var raw = localStorage.getItem(ROOM_KEY);
+        if (raw) { var o = JSON.parse(raw); if (o && o.r && (Date.now() - (o.t || 0) < 120000)) er = o.r; }
+      } catch (e) {}
+      _sessionRestoreSent = true;
+      _gotRender = true;   // 以後の通常 handleSession も解禁しておく
+      dlog('[danran] splash watchdog → force restore_session, sid=' + (lsSid ? lsSid.slice(0, 8) + '…' : '(empty)'));
+      sendNav({ action: 'restore_session', session_id: lsSid, enter_room: er, ts: Date.now() });
+    } catch (e) {}
+  }
+
   // 直前にいた部屋を localStorage に記録（チャット表示中のみ）。一覧にいた時は消す。
   function rememberRoom() {
     try {
@@ -1788,6 +1820,7 @@
   function scan() {
     injectLpCSS();
     readConfig();   // DOM config を毎回読む（render 不要）
+    try { splashWatchdog(); } catch (e) {}   // スプラッシュ固着の検知＆ restore 強制再送
     rememberRoom(); // 直前にいた部屋を記録（再接続で復帰するため）
     // ── スワイプ用 nav 関数を親ドキュメントに登録（毎 scan で上書き）──
     //   スワイプハンドラは古い iframe が所有している可能性があるため、
@@ -3588,6 +3621,7 @@
     var _cnt = 0;
     var _iv = setInterval(function () {
       try { readConfig(); } catch (e) {}
+      try { splashWatchdog(); } catch (e) {}   // スプラッシュ固着を検知して restore 強制再送
       hideManageApp();
       fixStBottom();
       try { attachHdrButtons(); } catch (e) {}

@@ -1930,6 +1930,23 @@ def show_room_edit(room: dict) -> None:
         else:
             st.caption("全員がこのルームに参加済みです 🎉")
 
+        # ── 写真アルバム（このルームの画像を一覧で見返す）──
+        st.divider()
+        st.markdown("### 🖼 写真アルバム")
+        _alb = [m for m in (fetch_messages(room.get("name", ""), limit=300) or []) if m.get("image_url")]
+        if not _alb:
+            st.caption("まだ写真はありません。")
+        else:
+            st.caption(f"{len(_alb)} 枚（新しい順）")
+            _alb_rev = list(reversed(_alb))[:120]   # 新しい順・最大120枚
+            _cols = st.columns(3)
+            for _i, _m in enumerate(_alb_rev):
+                with _cols[_i % 3]:
+                    try:
+                        st.image(_m["image_url"], use_container_width=True)
+                    except Exception:
+                        pass
+
         # ── ルーム削除（2 段階確認） ──
         st.divider()
         st.markdown("### 🗑️ ルームの削除")

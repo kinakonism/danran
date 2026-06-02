@@ -2778,7 +2778,7 @@ if _waiting_for_js:
     st.html(
         '<style>@keyframes danranSplash{'
         '0%,100%{opacity:0.45;transform:scale(0.96)}50%{opacity:1;transform:scale(1)}}</style>'
-        '<div style="position:fixed;inset:0;z-index:2147483646;background:#1a1614;'
+        '<div id="_danran_splash_wait" style="position:fixed;inset:0;z-index:2147483646;background:#1a1614;'
         'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">'
         '<div style="font-size:3.4rem;animation:danranSplash 1.4s ease-in-out infinite">🏠</div>'
         '<div style="color:rgba(255,255,255,0.45);font-size:0.9rem;font-weight:700;'

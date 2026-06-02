@@ -146,6 +146,17 @@ export default {
       return new Response(res.body, { status: 200, headers: h });
     }
 
+    // favicon は danran アイコンを返す（Streamlit 既定の赤い船 favicon を上書き）
+    if (url.pathname === '/favicon.png' || url.pathname === '/favicon.ico') {
+      const res = await fetch(
+        'https://raw.githubusercontent.com/kinakonism/danran/main/static/icons/icon-192.png'
+      );
+      const h = new Headers();
+      h.set('Content-Type', 'image/png');
+      h.set('Cache-Control', 'public, max-age=86400');
+      return new Response(res.ok ? res.body : null, { status: res.ok ? 200 : 404, headers: h });
+    }
+
     // ── WebSocket プロキシ ───────────────────────────────────────────
     if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
       console.log('[WS] incoming websocket request:', url.pathname);
@@ -211,14 +222,34 @@ async function proxyHttp(request, url) {
       status: res.status, statusText: res.statusText, headers: newHeaders,
     });
     return new HTMLRewriter()
-      // Streamlit 既定の apple-touch-icon は除去（ロゴが赤い船になるのを防ぐ）
+      // Streamlit 既定のアイコン類は除去（ホーム画面が赤い船ロゴになるのを防ぐ）
       .on('link[rel="apple-touch-icon"]', { element(el) { el.remove(); } })
+      .on('link[rel="apple-touch-icon-precomposed"]', { element(el) { el.remove(); } })
+      .on('link[rel="shortcut icon"]', { element(el) { el.remove(); } })
+      .on('link[rel="icon"]', { element(el) { el.remove(); } })
       .on('title', { element(el) { el.setInnerContent('danran'); } })
       .on('head', {
         element(el) {
+          // ★ 起動詰まり自動復旧ウォッチドッグ。長時間アイドル後の起動で Streamlit との接続が
+          //   確立せず「スプラッシュのまま/暗転」になることがある（手動で落とし再起動すると直る）。
+          //   18秒経っても通常画面が出ない（_danran_cfg 無し or スプラッシュ常駐）なら自動リロード。
+          //   sessionStorage で最大2回まで（無限ループ防止）、正常表示でカウンタ解除。
+          el.append(
+            '<script>(function(){try{setTimeout(function(){try{' +
+            'var stuck=(!document.getElementById("_danran_cfg"))||document.getElementById("_danran_splash_wait");' +
+            'var ok=document.querySelector("[data-testid=\\"stChatInput\\"]")||document.querySelector("input[type=password]");' +
+            'if(stuck&&!ok){var n=parseInt(sessionStorage.getItem("_dwd")||"0",10);' +
+            'if(n<2){sessionStorage.setItem("_dwd",String(n+1));location.reload();}}' +
+            'else{sessionStorage.removeItem("_dwd");}' +
+            '}catch(e){}},18000);}catch(e){}})();</script>',
+            { html: true },
+          );
+          el.append('<link rel="icon" type="image/png" href="/icons/icon-192.png">', { html: true });
           el.append('<link rel="apple-touch-icon" href="/icons/icon-192.png">', { html: true });
+          el.append('<link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-192.png">', { html: true });
           el.append('<link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png">', { html: true });
           el.append('<meta name="apple-mobile-web-app-capable" content="yes">', { html: true });
+          el.append('<meta name="mobile-web-app-capable" content="yes">', { html: true });
           el.append('<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">', { html: true });
           el.append('<meta name="apple-mobile-web-app-title" content="danran">', { html: true });
           el.append('<link rel="manifest" href="/manifest.json">', { html: true });

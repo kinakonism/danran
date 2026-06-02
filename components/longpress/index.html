@@ -2716,29 +2716,37 @@
   function scrollTopOnEditEnter() {
     try {
       var editViews = { profile: 1, room_edit: 1, notifications: 1, album: 1, room_create: 1 };
-      if (editViews[VIEW]) {
-        if (_lastViewForScroll !== VIEW) {
-          _lastViewForScroll = VIEW;
-          var pWin = window.parent, pDoc = pWin.document;
-          var top = function () { try { pWin.scrollTo(0, 0); } catch (e) {} };
-          top();
-          // Streamlit が遅れて高さ確定するので数回押さえる（smooth にせず瞬時に）
-          setTimeout(top, 60);
-          setTimeout(top, 200);
-          // 遷移カバー(dir='edit')があれば、トップ移動後に剥がす（跳ねを見せない）
-          setTimeout(function () {
-            try {
-              var c = pDoc.getElementById('_danran_enter_cover');
-              if (c && c.getAttribute('data-cover-dir') === 'edit') {
-                c.style.opacity = '0';
-                setTimeout(function () { if (c.parentNode) c.remove(); }, 180);
-              }
-            } catch (e) {}
-          }, 110);
-        }
-      } else {
+      if (!editViews[VIEW]) {
         _lastViewForScroll = VIEW;   // chat 等に戻ったらリセット（次に編集へ入ると再度トップへ）
+        return;
       }
+      if (_lastViewForScroll === VIEW) return;   // この View では既に処理済み
+      _lastViewForScroll = VIEW;
+
+      var pWin = window.parent, pDoc = pWin.document;
+      var cover = pDoc.getElementById('_danran_enter_cover');
+      var hasEditCover = !!(cover && cover.getAttribute('data-cover-dir') === 'edit');
+      var top = function () { try { pWin.scrollTo(0, 0); } catch (e) {} };
+      top();
+      // ★ Streamlit は room_edit 等を2パスで描画し高さが後から伸びる。固定時間で剥がすと
+      //   その後に跳ねる。チャット入室と同じく「高さが安定するまでトップに張り付け」、
+      //   安定してからカバーを剥がす（最大 ~750ms で打ち切り）。
+      var startT = Date.now(), lastH = -1, stable = 0;
+      (function settle() {
+        top();   // 安定するまで毎フレーム先頭へ固定
+        var h = pDoc.body.scrollHeight;
+        if (h === lastH) { stable++; } else { stable = 0; lastH = h; }
+        var elapsed = Date.now() - startT;
+        if ((stable >= 3 && elapsed > 140) || elapsed > 750) {
+          top();
+          if (hasEditCover && cover && cover.parentNode) {
+            cover.style.opacity = '0';
+            setTimeout(function () { if (cover.parentNode) cover.remove(); }, 160);
+          }
+        } else {
+          pWin.requestAnimationFrame(settle);
+        }
+      })();
     } catch (e) {}
   }
 

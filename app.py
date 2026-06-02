@@ -887,7 +887,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v104",   # ☰→編集は遷移カバーで跳ね隠蔽＋戻りは元のチャットへ（origin=chat）
+    "danran_lp_v105",   # 編集画面のスクロール跳ね: カバーを高さ安定まで保持(settle)してトップ固定
     path=_LP_COMPONENT_DIR,
 )
 

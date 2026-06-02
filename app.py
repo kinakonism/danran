@@ -2044,19 +2044,53 @@ def show_room_edit(room: dict) -> None:
 def show_album(room: dict) -> None:
     room_name = room.get("name", "")
     st.markdown("<br>", unsafe_allow_html=True)
-    _alb = [m for m in (fetch_messages(room_name, limit=300) or []) if m.get("image_url")]
-    if not _alb:
+    _msgs = [m for m in (fetch_messages(room_name, limit=300) or []) if m.get("image_url")]
+    if not _msgs:
         st.caption("まだ写真はありません。チャットで送った写真がここにまとまります。")
         return
-    st.caption(f"📷 {len(_alb)} 枚（新しい順）")
-    _alb_rev = list(reversed(_alb))[:120]   # 新しい順・最大120枚
-    _cols = st.columns(3)
-    for _i, _m in enumerate(_alb_rev):
-        with _cols[_i % 3]:
-            try:
-                st.image(_m["image_url"], use_container_width=True)
-            except Exception:
-                pass
+
+    _imgs = list(reversed(_msgs))[:300]   # 新しい順
+    # 日付ごとにグループ化（dict の挿入順＝新しい日付が上）
+    _groups: dict[str, list[dict]] = {}
+    for _m in _imgs:
+        _k = _date_key(_m.get("created_at", "")) or "?"
+        _groups.setdefault(_k, []).append(_m)
+
+    # チャットと同じ JS スロット方式（lp-imgslot）。タップで全画面ビューア（DL・スワイプ付き）。
+    def _slot(u: str, name: str) -> str:
+        return (
+            f'<span class="lp-imgslot" data-fit="cover" '
+            f'data-img="{_html.escape(u)}" data-lp-image="{_html.escape(u)}" '
+            f'data-lp-name="{_html.escape(name or "")}" '
+            f'style="position:relative;display:block;width:100%;aspect-ratio:1/1;'
+            f'background:rgba(255,255,255,0.06);cursor:pointer;overflow:hidden;'
+            f'border-radius:10px"></span>'
+        )
+
+    _parts: list[str] = [
+        f'<div style="color:rgba(240,232,224,0.5);font-size:0.8rem;margin:0 2px 4px">'
+        f'📷 合計 {len(_imgs)} 枚</div>'
+    ]
+    for _items in _groups.values():
+        _label = _date_label(_items[0].get("created_at", "")) or ""
+        _parts.append(
+            f'<div style="font-size:0.92rem;font-weight:700;color:#f0a868;'
+            f'margin:16px 2px 9px;display:flex;align-items:baseline;gap:8px">'
+            f'{_html.escape(_label)}'
+            f'<span style="font-weight:400;color:rgba(240,232,224,0.4);font-size:0.78rem">'
+            f'{len(_items)}枚</span></div>'
+        )
+        _cells = "".join(_slot(m.get("image_url") or "", m.get("user_name", "")) for m in _items)
+        if len(_items) == 1:
+            # 1枚だけの日はグリッドセルと同じ大きさで左寄せ（半分幅）
+            _parts.append(f'<div style="max-width:48%">{_cells}</div>')
+        else:
+            # 2枚以上は2列グリッド（下に行が増える）
+            _parts.append(
+                f'<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:5px">'
+                f'{_cells}</div>'
+            )
+    st.markdown("".join(_parts), unsafe_allow_html=True)
 
 # ─────────────────────────────────────
 # 画面⑤-b ルーム作成（room_edit から削除機能を除いたもの）

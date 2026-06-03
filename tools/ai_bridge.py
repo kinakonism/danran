@@ -30,6 +30,8 @@ import json
 import os
 import re
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -91,13 +93,45 @@ URL  = _sec["supabase"]["url"].rstrip("/")
 KEY  = _sec["supabase"]["anon_key"]
 HDR  = {"apikey": KEY, "Authorization": "Bearer " + KEY, "Content-Type": "application/json"}
 
+# ── IPv4 優先（mini の SSL handshake timeout 対策）─────────────────────────
+#   macOS で IPv6 経路が張れず TLS handshake がストールすることがある。bridge プロセスの
+#   getaddrinfo を IPv4 だけに絞る（claude はサブプロセス＝別プロセスなので影響しない）。
+_USE_IPV4_ONLY = True
+if _USE_IPV4_ONLY:
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _getaddrinfo_v4(host, *a, **kw):
+        res = _orig_getaddrinfo(host, *a, **kw)
+        v4 = [r for r in res if r[0] == socket.AF_INET]
+        return v4 or res
+    socket.getaddrinfo = _getaddrinfo_v4
 
-def api(method, path, body=None):
+# リトライ対象のネットワーク例外（HTTPError は別扱い＝4xx は再試行しない）
+_RETRYABLE = (ssl.SSLError, socket.timeout, TimeoutError, ConnectionError, urllib.error.URLError)
+
+
+def api(method, path, body=None, tries=3):
+    """Supabase REST 呼び出し。一時的なネットワーク/SSL エラーはバックオフ付きで再試行。
+    HTTP 4xx（409=重複 等）は確定的なので再試行せず投げる。5xx は一時的とみて再試行。"""
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(URL + "/rest/v1/" + path, data=data, headers=HDR, method=method)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        raw = r.read()
-        return json.loads(raw) if raw else None
+    last_err = None
+    for attempt in range(tries):
+        req = urllib.request.Request(URL + "/rest/v1/" + path, data=data, headers=HDR, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                raw = r.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            if 500 <= e.code < 600 and attempt < tries - 1:
+                last_err = e; time.sleep(0.6 * (attempt + 1)); continue
+            raise   # 4xx は即投げる（enqueue の 409 判定等が依存）
+        except _RETRYABLE as e:
+            last_err = e
+            if attempt < tries - 1:
+                time.sleep(0.6 * (attempt + 1))   # 0.6s → 1.2s バックオフ
+                continue
+            raise
+    if last_err:
+        raise last_err
 
 
 def fetch_all_recent(n=80):

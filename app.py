@@ -923,6 +923,69 @@ _lp_detector = st.components.v1.declare_component(
 # ─────────────────────────────────────
 _URL_RE = re.compile(r'(https?://[^\s<>"\']+)')
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_og(url: str) -> dict | None:
+    """URL の OGP（タイトル/画像/説明）を取得してリンクプレビュー用 dict を返す。
+    取得失敗・HTML以外・OG無しは None。結果は1日キャッシュ（2秒ポーリングでも再取得しない）。"""
+    import urllib.request as _ur
+    from urllib.parse import urlparse as _up, urljoin as _uj
+    try:
+        req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; danran-linkpreview)"})
+        with _ur.urlopen(req, timeout=4) as r:
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            if "html" not in ctype:
+                return None
+            raw = r.read(300000)   # 先頭 300KB だけ（head にOGがある）
+        doc = raw.decode("utf-8", "ignore")
+
+        def meta(prop: str) -> str:
+            pat1 = r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop) + r'["\'][^>]+content=["\']([^"\']*)["\']'
+            pat2 = r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']' + re.escape(prop) + r'["\']'
+            m = re.search(pat1, doc, re.I) or re.search(pat2, doc, re.I)
+            return _html.unescape(m.group(1).strip()) if m else ""
+
+        title = meta("og:title") or meta("twitter:title")
+        if not title:
+            mt = re.search(r'<title[^>]*>([^<]+)</title>', doc, re.I)
+            title = _html.unescape(mt.group(1).strip()) if mt else ""
+        image = meta("og:image") or meta("twitter:image") or meta("og:image:url")
+        desc  = meta("og:description") or meta("twitter:description") or meta("description")
+        site  = meta("og:site_name")
+        if not (title or image):
+            return None
+        if image:
+            image = _uj(url, image)   # 相対URL → 絶対URL
+        return {"title": title[:120], "image": image, "desc": desc[:140],
+                "site": (site or _up(url).netloc)[:60], "url": url}
+    except Exception:
+        return None
+
+def _og_card_html(og: dict) -> str:
+    """リンクプレビューのカード。タップで data-lp-link メニュー（開く/コピー/共有）。"""
+    u = _html.escape(og.get("url", ""))
+    img = ""
+    if og.get("image"):
+        img = (f'<div style="width:100%;aspect-ratio:1.91/1;background:#1a1614;'
+               f'background-image:url(\'{_html.escape(og["image"])}\');'
+               f'background-size:cover;background-position:center"></div>')
+    title = _html.escape(og.get("title", "") or og.get("site", ""))
+    site  = _html.escape(og.get("site", ""))
+    desc  = _html.escape(og.get("desc", ""))
+    return (
+        f'<a href="{u}" data-lp-link="{u}" target="_blank" rel="noopener noreferrer" '
+        f'style="display:block;margin-top:6px;max-width:240px;border-radius:12px;overflow:hidden;'
+        f'border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);'
+        f'text-decoration:none;color:inherit">'
+        f'{img}'
+        f'<div style="padding:8px 10px">'
+        f'<div style="font-size:0.82rem;font-weight:700;line-height:1.3;'
+        f'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{title}</div>'
+        + (f'<div style="font-size:0.72rem;color:rgba(240,232,224,0.55);margin-top:2px;'
+           f'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{desc}</div>' if desc else "")
+        + f'<div style="font-size:0.68rem;color:rgba(240,232,224,0.4);margin-top:4px">🔗 {site}</div>'
+        f'</div></a>'
+    )
+
 def _body_attr(body: str) -> str:
     """data-lp-body 属性用エスケープ。生の改行を属性に入れると st.markdown の
     Markdown 処理が HTML タグを壊すため &#10; に変換（getAttribute では \\n に復元される）。"""
@@ -1326,6 +1389,14 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             f'{"margin-bottom:6px" if body else ""}"></span>'
         ) if img_url else ""
         content = _reply_quote_html(msg) + img_piece + body_esc
+
+        # ── リンクプレビュー（本文に URL があれば先頭1件のカードを下に付ける）──
+        if not img_url:
+            _um = _URL_RE.search(body)
+            if _um:
+                _og = fetch_og(_um.group(1))
+                if _og:
+                    content += _og_card_html(_og)
 
         # ── デカ絵文字: 絵文字のみ1〜3個は背景なしで大きく表示（LINE 風）──
         #   1個=大 / 2〜3個=中 / 4個以上=通常。画像付き・引用付きは対象外。

@@ -924,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v114",   # ペースト: clipboardDataで取れない時 navigator.clipboard.readText にフォールバック（iOS Google共有）
+    "danran_lp_v115",   # ☰メニューにメッセージ検索を追加
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2303,6 +2303,54 @@ def show_album(room: dict) -> None:
     st.markdown("".join(_parts), unsafe_allow_html=True)
 
 # ─────────────────────────────────────
+# 画面⑤-d メッセージ検索（チャット☰メニューから）
+# ─────────────────────────────────────
+def show_search(room: dict) -> None:
+    room_name = room.get("name", "")
+    st.markdown("<br>", unsafe_allow_html=True)
+    q = (st.text_input("検索", placeholder="メッセージを検索…",
+                       label_visibility="collapsed", key="search_q") or "").strip()
+    if len(q) < 1:
+        st.caption("キーワードを入力すると、このルームのメッセージを検索します。")
+        return
+    try:
+        rows = supabase.table("messages")\
+            .select("id, user_name, user_avatar, content, created_at")\
+            .eq("room_name", room_name).ilike("content", f"%{q}%")\
+            .order("created_at", desc=True).limit(80).execute().data or []
+    except Exception:
+        rows = []
+    if not rows:
+        st.caption(f"「{q}」を含むメッセージは見つかりませんでした。")
+        return
+    st.caption(f"「{q}」… {len(rows)} 件")
+
+    _eq = re.escape(_html.escape(q))
+    cards = []
+    for m in rows:
+        nm = _html.escape(m.get("user_name", "") or "")
+        av = m.get("user_avatar", "🙂") or "🙂"
+        ic = (f'<img src="{_html.escape(av)}" style="width:26px;height:26px;border-radius:50%;'
+              f'object-fit:cover;flex:0 0 auto">' if av.startswith("http") else
+              f'<span style="width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,0.08);'
+              f'display:flex;align-items:center;justify-content:center;font-size:15px;flex:0 0 auto">'
+              f'{_html.escape(av)}</span>')
+        esc_body = _html.escape(m.get("content", "") or "")
+        hl = re.sub(_eq, lambda mm: f'<mark style="background:#f0a868;color:#1a1614;'
+                    f'border-radius:3px;padding:0 1px">{mm.group(0)}</mark>', esc_body, flags=re.I)
+        when = _html.escape(_date_label(m.get("created_at", "")) or "")
+        cards.append(
+            f'<div style="display:flex;gap:10px;padding:10px 4px;'
+            f'border-bottom:1px solid rgba(255,255,255,0.07)">{ic}'
+            f'<div style="min-width:0;flex:1">'
+            f'<div style="font-size:0.72rem;color:rgba(240,232,224,0.5);margin-bottom:2px">'
+            f'{nm}・{when}</div>'
+            f'<div style="font-size:0.9rem;color:#f0e8e0;word-break:break-word;line-height:1.45">'
+            f'{hl}</div></div></div>'
+        )
+    st.markdown("".join(cards), unsafe_allow_html=True)
+
+# ─────────────────────────────────────
 # 画面⑤-b ルーム作成（room_edit から削除機能を除いたもの）
 # ─────────────────────────────────────
 _ROOM_CREATE_WIDGET_KEYS = ("room_create_atype", "room_create_emoji", "room_create_photo", "room_create_name")
@@ -2876,7 +2924,7 @@ _clear_flag  = st.session_state.pop("_clear_session", False)
 # JS に「ブラウザ側も unsubscribe して再登録せよ」を伝えるフラグ（1回のみ）
 _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
-_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album")
+_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album", "search")
 _active_room_id = ""
 if "current_user" in st.session_state and not _is_profile:
     # active_room が未セット（セッション復元直後）のときは参加ルームの先頭をフォールバック
@@ -2938,6 +2986,7 @@ if "current_user" in st.session_state:
             "room_edit":     "ルーム編集",
             "notifications": "🔔 通知設定",
             "album":         "🖼 写真アルバム",
+            "search":        "🔍 メッセージ検索",
         }
         _hdr_title_text = _title_map.get(_cur_view, "設定")
         _hdr_html = (
@@ -3081,8 +3130,8 @@ if isinstance(_lp_result, dict):
         elif _nav == "go_back":
             # 編集画面ヘッダーの ＜ → ルームリストに戻る
             cur = st.session_state.get("view", "")
-            if cur == "album":
-                # アルバムはチャットの☰メニューから開くので、戻り先はそのチャット
+            if cur in ("album", "search"):
+                # アルバム/検索はチャットの☰メニューから開くので、戻り先はそのチャット
                 st.session_state["view"] = "chat"
                 st.session_state.pop("_show_rooms", None)
                 st.rerun()
@@ -3134,6 +3183,16 @@ if isinstance(_lp_result, dict):
                 if _found:
                     st.session_state["album_room"] = _found[0]
                     st.session_state["view"] = "album"
+                    st.rerun()
+        elif _nav == "go_search":
+            # チャットヘッダー ☰ メニュー → メッセージ検索画面
+            _room_id = _lp_result.get("room_id", "")
+            if _room_id:
+                _found = [r for r in fetch_rooms(_cu.get("id", "")) if r["id"] == _room_id]
+                if _found:
+                    st.session_state["search_room"] = _found[0]
+                    st.session_state.pop("search_q", None)   # 前回のクエリをクリア
+                    st.session_state["view"] = "search"
                     st.rerun()
         elif _nav == "refresh_chat":
             # メッセージ削除後など: チャットHTMLキャッシュを捨ててDBから綺麗に再描画
@@ -3243,6 +3302,8 @@ else:
             show_room_edit(st.session_state.get("editing_room", {}))
         case "album" if "current_user" in st.session_state:
             show_album(st.session_state.get("album_room", {}))
+        case "search" if "current_user" in st.session_state:
+            show_search(st.session_state.get("search_room", {}))
         case "room_create" if "current_user" in st.session_state:
             show_room_create()
         case "notifications" if "current_user" in st.session_state:

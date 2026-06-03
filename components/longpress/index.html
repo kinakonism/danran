@@ -3412,7 +3412,10 @@
           + 'box-shadow:0 10px 30px rgba(0,0,0,0.55);padding:6px;'
           + 'opacity:0;transform:translateY(-6px);transition:opacity .12s,transform .12s;';
         m.innerHTML =
-            '<div data-rmenu="album" style="display:flex;align-items:center;gap:10px;'
+            '<div data-rmenu="search" style="display:flex;align-items:center;gap:10px;'
+          + 'padding:11px 12px;border-radius:10px;cursor:pointer;color:#f0e8e0;font-size:15px">'
+          + '<span style="font-size:18px">🔍</span>メッセージ検索</div>'
+          + '<div data-rmenu="album" style="display:flex;align-items:center;gap:10px;'
           + 'padding:11px 12px;border-radius:10px;cursor:pointer;color:#f0e8e0;font-size:15px">'
           + '<span style="font-size:18px">🖼</span>写真アルバム</div>'
           + '<div data-rmenu="edit" style="display:flex;align-items:center;gap:10px;'
@@ -3462,8 +3465,9 @@
         if (!rid) return;
         showEditTransitionCover();   // 遷移スクロールの跳ねを隠す
         // origin:'chat' → 戻るときルーム一覧でなく元のチャットへ戻す（Python が判定）
-        if (act === 'album') send({ action: 'go_album',     room_id: rid, ts: Date.now() });
-        else                 send({ action: 'go_room_edit', room_id: rid, origin: 'chat', ts: Date.now() });
+        if (act === 'album')       send({ action: 'go_album',  room_id: rid, ts: Date.now() });
+        else if (act === 'search') send({ action: 'go_search', room_id: rid, ts: Date.now() });
+        else                       send({ action: 'go_room_edit', room_id: rid, origin: 'chat', ts: Date.now() });
         return;
       }
       // メニュー外タップ → 閉じる

@@ -1521,8 +1521,9 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         # 既読人数だけ表示（誰が読んだかは出さない＝アイコン無し）
         _readers = read_by_users(selected_room, my_id, _last_mine_created)
         if _readers:
+            # class="dr-read" は再描画判定で除外するための目印（既読だけの変化では再描画しない）
             _bubbles[_last_mine_bidx] += (
-                f'<div style="text-align:right;margin:0 2px 6px 0;font-size:0.66rem;'
+                f'<div class="dr-read" style="text-align:right;margin:0 2px 6px 0;font-size:0.66rem;'
                 f'color:rgba(240,232,224,0.45)">既読 {len(_readers)}</div>'
             )
 
@@ -1556,6 +1557,12 @@ def render_chat_messages(current_user: dict) -> None:
     st.markdown(st.session_state.get("_chat_html", "") or "", unsafe_allow_html=True)
 
 
+_READ_RE = re.compile(r'<div class="dr-read"[^>]*>.*?</div>', re.S)
+def _strip_read_receipts(html: str | None) -> str:
+    """再描画判定用に「既読 N」表示(dr-read)を除いた HTML を返す。
+    これで既読だけの変化では再描画が走らず、チカチカを抑える。"""
+    return _READ_RE.sub("", html or "")
+
 @st.fragment(run_every="2s")
 def poll_messages() -> None:
     """2秒ごとに「内容が変わったか」だけを確認し、変わった時だけ st.rerun()。
@@ -1587,12 +1594,17 @@ def poll_messages() -> None:
     st.session_state[count_key] = len(_msgs)
 
     # 内容（バブルHTML）が前回と変わっていれば再描画。同じなら何もしない。
+    #   ★ チカチカ対策: 「既読(dr-read)だけの変化」では再描画しない（既読が更新される
+    #     たびに st.markdown が貼り替わってチラつくため）。既読は新着/リアクション等の
+    #     実変化で再描画が走るときにまとめて反映される。
     _html_now = build_messages_html(selected_room, current_user)
     if _html_now is None:
         return   # 取得失敗 → 前回表示を維持
-    if _html_now != st.session_state.get("_chat_html") \
-            or st.session_state.get("_chat_html_room") != selected_room:
-        st.session_state["_chat_html"]      = _html_now
+    _prev = st.session_state.get("_chat_html")
+    _changed = (_strip_read_receipts(_html_now) != _strip_read_receipts(_prev)) \
+        or st.session_state.get("_chat_html_room") != selected_room
+    if _changed:
+        st.session_state["_chat_html"]      = _html_now   # 再描画時は最新の既読込みで保存
         st.session_state["_chat_html_room"] = selected_room
         st.rerun()
 

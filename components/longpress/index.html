@@ -3776,8 +3776,10 @@
 
   var RMENU_ID = '_danran_room_menu';
   function setupRoomMenu(pDoc) {
-    if (pDoc._danranRoomMenuHook) return;
-    pDoc._danranRoomMenuHook = true;
+    // ★ 1回だけ登録ではなく、毎 scan で生きた iframe から登録し直す（死んだ iframe 問題対策）。
+    //   コンポーネント iframe が作り直されると旧リスナが無反応になるため、古いものを外して付け直す。
+    var prevRM = pDoc._danranRoomMenuClick;
+    if (prevRM) { try { pDoc.removeEventListener('click', prevRM, true); } catch (e) {} }
 
     function pWin() { return pDoc.defaultView || window.parent; }
     function send(v) {
@@ -3845,7 +3847,7 @@
       void m.offsetWidth;
       m.style.opacity = '1'; m.style.transform = 'translateY(0)';
     }
-    pDoc.addEventListener('click', function (e) {
+    var onRoomMenuClick = function (e) {
       var t = e.target;
       if (!t || !t.closest) return;
       var hb = t.closest('[data-hdr-roommenu]');
@@ -3914,7 +3916,9 @@
       // メニュー外タップ → 閉じる
       var mm = pDoc.getElementById(RMENU_ID);
       if (mm && mm.style.display === 'block' && !t.closest('#' + RMENU_ID)) hide();
-    }, true);
+    };
+    pDoc.addEventListener('click', onRoomMenuClick, true);
+    pDoc._danranRoomMenuClick = onRoomMenuClick;   // 次回 scan で外して付け直すため保持
   }
 
   /* ════════════════════════════════════════

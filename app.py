@@ -976,7 +976,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v135",   # みんなでFaceTime: 参加シート表示（本物の<a>を直接タップで開く・pDoc描画）
+    "danran_lp_v136",   # ☰メニューのクリック処理を毎scan登録し直し（死んだiframeで無反応になる問題）
     path=_LP_COMPONENT_DIR,
 )
 

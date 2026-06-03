@@ -3072,14 +3072,35 @@
         bg.style.backgroundImage = 'url("' + _escHtml(cu) + '")';
         coverOverlay.style.display = 'block';
       }
+      // FaceTime 通話ボタン（電話番号がある相手のみ・iOS で動作）
+      function _addCallButtons(phone) {
+        var row = pDoc.createElement('div');
+        row.style.cssText = 'position:relative;z-index:2;display:flex;gap:14px;margin-top:12px;';
+        function btn(label, scheme) {
+          var a = pDoc.createElement('a');
+          a.href = scheme + ':' + phone;
+          a.textContent = label;
+          a.style.cssText = 'display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.16);'
+            + 'color:#fff;text-decoration:none;padding:10px 18px;border-radius:22px;font-size:0.95rem;'
+            + 'font-weight:600;-webkit-tap-highlight-color:transparent;';
+          a.addEventListener('click', function (e) { e.stopPropagation(); });   // 背景タップ閉じを抑止
+          return a;
+        }
+        row.appendChild(btn('🎥 ビデオ', 'facetime'));
+        row.appendChild(btn('🎤 音声', 'facetime-audio'));
+        ov.appendChild(row);
+      }
       if (coverUrl) {
-        _applyCover(coverUrl);   // プレビュー: cover を直接指定
+        _applyCover(coverUrl);   // プレビュー: cover を直接指定（自分→通話ボタンは出さない）
       } else {
-        // 他人タップ時: cover_url を名前から取得して背景に反映（非同期・取れたら差し替え）
+        // 他人タップ時: cover_url と phone を名前から取得 → 背景反映＋通話ボタン
         try {
-          sbGet('users?select=cover_url&name=eq.' + encodeURIComponent(name || '') + '&limit=1')
-            .then(function (rows) { _applyCover(rows && rows[0] && rows[0].cover_url); })
-            .catch(function () {});
+          sbGet('users?select=cover_url,phone&name=eq.' + encodeURIComponent(name || '') + '&limit=1')
+            .then(function (rows) {
+              var r = rows && rows[0]; if (!r) return;
+              _applyCover(r.cover_url);
+              if (r.phone && pDoc.getElementById(USER_PROFILE_ID)) _addCallButtons(r.phone);
+            }).catch(function () {});
         } catch (e) {}
       }
       var av;
@@ -3775,7 +3796,10 @@
           + 'box-shadow:0 10px 30px rgba(0,0,0,0.55);padding:6px;'
           + 'opacity:0;transform:translateY(-6px);transition:opacity .12s,transform .12s;';
         m.innerHTML =
-            '<div data-rmenu="album" style="display:flex;align-items:center;gap:10px;'
+            '<div data-rmenu="facetime" style="display:flex;align-items:center;gap:10px;'
+          + 'padding:11px 12px;border-radius:10px;cursor:pointer;color:#f0e8e0;font-size:15px">'
+          + '<span style="font-size:18px">📹</span>みんなでFaceTime</div>'
+          + '<div data-rmenu="album" style="display:flex;align-items:center;gap:10px;'
           + 'padding:11px 12px;border-radius:10px;cursor:pointer;color:#f0e8e0;font-size:15px">'
           + '<span style="font-size:18px">🖼</span>写真アルバム</div>'
           + '<div data-rmenu="edit" style="display:flex;align-items:center;gap:10px;'
@@ -3823,6 +3847,18 @@
         var act = item.getAttribute('data-rmenu');
         hide();
         if (!rid) return;
+        // みんなで FaceTime: ルームのリンクを取得して開く（画面遷移しない）
+        if (act === 'facetime') {
+          try {
+            sbGet('rooms?select=facetime_url&id=eq.' + encodeURIComponent(rid) + '&limit=1')
+              .then(function (rows) {
+                var url = rows && rows[0] && rows[0].facetime_url;
+                if (url) { try { (pDoc.defaultView || window.parent).open(url, '_blank'); } catch (e) { (pDoc.defaultView || window.parent).location.href = url; } }
+                else { showToast('ルーム編集でFaceTimeリンクを設定してね'); }
+              }).catch(function () { showToast('リンクを開けませんでした'); });
+          } catch (e) {}
+          return;
+        }
         showEditTransitionCover();   // 遷移スクロールの跳ねを隠す
         // origin:'chat' → 戻るときルーム一覧でなく元のチャットへ戻す（Python が判定）
         if (act === 'album') send({ action: 'go_album',     room_id: rid, ts: Date.now() });

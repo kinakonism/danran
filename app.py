@@ -874,6 +874,20 @@ def set_room_pin(room_name: str, msg_id: str | None) -> None:
     except Exception:
         pass
 
+def set_room_facetime(room_id: str, url: str | None) -> None:
+    """ルームのグループ FaceTime リンクを設定（None/空で解除）。"""
+    try:
+        supabase.table("rooms").update({"facetime_url": (url or None)}).eq("id", room_id).execute()
+    except Exception as e:
+        raise RuntimeError(str(e))
+
+def get_room_facetime(room_id: str) -> str | None:
+    try:
+        rows = supabase.table("rooms").select("facetime_url").eq("id", room_id).limit(1).execute().data or []
+        return (rows[0].get("facetime_url") if rows else None) or None
+    except Exception:
+        return None
+
 def get_room_pin(room_name: str) -> dict | None:
     """ルームのピン留めメッセージ {id,user_name,content,image_url} を返す。無ければ None。"""
     try:
@@ -962,7 +976,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v130",   # プレビューで背景画像が出ない修正（_applyCoverのDOM前ガード除去）
+    "danran_lp_v131",   # FaceTime: 全画面プロフィールに1:1通話ボタン＋ハンバーガーに みんなでFaceTime（グループリンク）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2335,6 +2349,24 @@ def show_room_edit(room: dict) -> None:
 
         # 写真アルバムはチャットヘッダー ☰ メニューの独立画面（show_album）へ移動済み。
         # ルーム編集画面には置かない（埋もれ防止・要望対応）。
+
+        # ── みんなで FaceTime（グループ通話リンク）──
+        st.divider()
+        st.markdown("### 📹 みんなでFaceTime")
+        st.caption("FaceTimeアプリで「リンクを作成」したURLを貼ると、☰メニューの"
+                   "「みんなでFaceTime」からこの部屋のみんなで通話に入れます。")
+        _ft_cur = get_room_facetime(room_id) or ""
+        _ft_new = st.text_input(
+            "", value=_ft_cur, placeholder="https://facetime.apple.com/join#...",
+            label_visibility="collapsed", key=f"room_ft_{room_id}",
+        )
+        if st.button("📹 FaceTimeリンクを保存", use_container_width=True, key="room_ft_save"):
+            try:
+                set_room_facetime(room_id, _ft_new.strip())
+                st.success("✅ 保存しました（☰メニューに「みんなでFaceTime」が出ます）")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 保存に失敗しました: {e}")
 
         # ── ルーム削除（2 段階確認） ──
         st.divider()

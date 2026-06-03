@@ -933,9 +933,9 @@ _lp_detector = st.components.v1.declare_component(
 # ─────────────────────────────────────
 _URL_RE = re.compile(r'(https?://[^\s<>"\']+)')
 
-# リンクプレビュー（OGPカード）。描画時の同期取得が重く送信を不安定にしたため一旦オフ。
-# URL は linkify_body で常にクリック可能。将来、非同期プリフェッチ方式で再有効化する。
-LINK_PREVIEW_ON = False
+# リンクプレビュー（OGPカード）。fetch_og は1日キャッシュ＋4秒タイムアウト。
+# 新しいURLの初回描画だけ取得で軽く待つ（以降キャッシュ）。重くなるようなら非同期化を検討。
+LINK_PREVIEW_ON = True
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_og(url: str) -> dict | None:

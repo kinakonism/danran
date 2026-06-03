@@ -3641,6 +3641,34 @@
   function setupChatSendHook(pDoc) {
     if (pDoc._danranSendHook) return;
     pDoc._danranSendHook = true;
+
+    // ── ペースト正規化 ──────────────────────────────────────────
+    //   iOS で Google「共有でコピー」等のリッチ/複数項目クリップボードは textarea に
+    //   既定ペーストできないことがある（食べログ等の素のURLは貼れる）。
+    //   paste を横取りして clipboardData からプレーンテキストを取り出し手動挿入する。
+    function _setTaValue(ta, val) {
+      try {
+        var proto = (pDoc.defaultView || window.parent).HTMLTextAreaElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, 'value').set.call(ta, val);
+      } catch (e) { ta.value = val; }
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    pDoc.addEventListener('paste', function (e) {
+      var ta = e.target;
+      if (!ta || !ta.closest || !ta.closest('[data-testid="stChatInput"]')) return;
+      var cd = e.clipboardData || (pDoc.defaultView && pDoc.defaultView.clipboardData);
+      if (!cd) return;
+      var txt = cd.getData('text/plain') || cd.getData('text/uri-list')
+             || cd.getData('text') || cd.getData('URL') || '';
+      if (!txt) return;                 // 取れなければ既定動作に任せる（回帰防止）
+      txt = txt.replace(/\r\n?/g, '\n'); // 改行コードを正規化
+      e.preventDefault(); e.stopImmediatePropagation();
+      var s = ta.selectionStart || 0, en = ta.selectionEnd || 0, v = ta.value || '';
+      _setTaValue(ta, v.slice(0, s) + txt + v.slice(en));
+      var p = s + txt.length;
+      try { ta.setSelectionRange(p, p); } catch (x) {}
+    }, true);
+
     // ★ Enter は「改行」にする（送信は➤ボタン、PC は Cmd/Ctrl+Enter）。
     //   st.chat_input は素の Enter で送信してしまうため、document capture で
     //   Streamlit のハンドラに届く前に止める（preventDefault しない＝textarea 既定の改行は活かす）。

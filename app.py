@@ -924,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v112",   # 入力欄のペースト不可を修正（input選択許可CSS＋スワイプ追跡を入力欄で無効化）
+    "danran_lp_v113",   # ペースト正規化（iOSでGoogle共有等のリッチクリップボードを貼れるように）
     path=_LP_COMPONENT_DIR,
 )
 

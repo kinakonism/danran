@@ -2757,14 +2757,60 @@
     if (el) { try { el.scrollIntoView({ block: 'center' }); } catch (e) {} }
     applySearchHighlight(); _searchCount(pDoc);
   }
+  function _esc(s) {
+    return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function _hlQ(escaped, q) {   // エスケープ済みテキスト内の q を <mark> で包む（大小無視）
+    if (!q) return escaped;
+    var eq = _esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try { return escaped.replace(new RegExp(eq, 'ig'), function (m) { return '<mark class="dr-mark">' + m + '</mark>'; }); }
+    catch (e) { return escaped; }
+  }
+  function _dbSearch(pDoc, q) {
+    try {
+      var room = ACTIVE_ROOM, panel = pDoc.getElementById('_danran_search_db');
+      if (!panel || !room || !SB_URL) return;
+      var pat = '*' + q.replace(/\*/g, '') + '*';
+      sbGet('messages?select=user_name,content,created_at&room_name=eq.' + encodeURIComponent(room)
+            + '&content=ilike.' + encodeURIComponent(pat)
+            + '&order=created_at.desc&limit=20').then(function (rows) {
+        var S = pDoc._danranSearch;
+        // 状況が変わっていたら（閉じた/DOMヒット有り/クエリ変化）出さない
+        if (!S || !S.open || (S.ids && S.ids.length) || (S.q || '').trim() !== q) {
+          panel.style.display = 'none'; return;
+        }
+        if (!rows || !rows.length) {
+          panel.innerHTML = '<div style="font-size:0.75rem;color:rgba(240,232,224,0.45);'
+            + 'padding:8px 4px">古いメッセージにも見つかりませんでした</div>';
+          panel.style.display = 'block'; return;
+        }
+        var html = '<div style="font-size:0.72rem;color:rgba(240,232,224,0.5);padding:5px 2px">'
+          + '📜 古いメッセージに ' + rows.length + ' 件（プレビューのみ）</div>';
+        for (var i = 0; i < rows.length; i++) {
+          html += '<div style="padding:7px 4px;border-top:1px solid rgba(255,255,255,0.07);'
+            + 'font-size:0.86rem;color:#f0e8e0;line-height:1.45;word-break:break-word">'
+            + '<span style="color:rgba(240,232,224,0.5);font-size:0.7rem">'
+            + _esc(rows[i].user_name || '') + '</span> ' + _hlQ(_esc(rows[i].content || ''), q) + '</div>';
+        }
+        panel.innerHTML = html; panel.style.display = 'block';
+      }).catch(function () {});
+    } catch (e) {}
+  }
   function _runSearch(pDoc, q) {
     var S = pDoc._danranSearch || {}; S.open = true; S.q = q;
     S.ids = _collectMatches(pDoc, (q || '').trim());
     S.idx = S.ids.length - 1;   // 現在ヒットは最新（移動は↑↓の時だけ）
     pDoc._danranSearch = S;
     // ★ 入力中はスクロールしない（ページが動くと入力中の文字を見失うため）。
-    //   ハイライトと件数だけ更新。実際の移動は ↑↓ / Enter で行う。
     applySearchHighlight(); _searchCount(pDoc);
+    // 読込済みにヒットが無ければ DB を遡って検索（デバウンス）。あれば DB パネルは隠す。
+    var qq = (q || '').trim();
+    var panel = pDoc.getElementById('_danran_search_db');
+    if (panel && (S.ids.length || qq.length < 2)) panel.style.display = 'none';
+    if (pDoc._danranDbT) clearTimeout(pDoc._danranDbT);
+    if (!S.ids.length && qq.length >= 2) {
+      pDoc._danranDbT = (pDoc.defaultView || window.parent).setTimeout(function () { _dbSearch(pDoc, qq); }, 400);
+    }
   }
   function _searchStep(pDoc, dir) {
     var S = pDoc._danranSearch; if (!S || !S.ids.length) return;
@@ -2791,10 +2837,11 @@
     var bar = pDoc.createElement('div'); bar.id = '_danran_search_bar';
     bar.style.cssText = 'position:fixed;top:52px;left:0;right:0;z-index:2147483646;'
       + 'background:#241f1c;border-bottom:1px solid rgba(255,255,255,0.12);'
-      + 'display:flex;align-items:center;gap:4px;padding:7px 10px;box-sizing:border-box;'
+      + 'display:flex;flex-direction:column;gap:6px;padding:7px 10px;box-sizing:border-box;'
       + 'box-shadow:0 4px 14px rgba(0,0,0,0.4);transform:translateZ(0);';   // translateZ=iOSで固定を安定化
     bar.innerHTML =
-        '<input id="_danran_search_input" type="text" enterkeyhint="next" placeholder="このルームを検索" '
+        '<div style="display:flex;align-items:center;gap:4px">'
+      + '<input id="_danran_search_input" type="text" enterkeyhint="next" placeholder="このルームを検索" '
       // ★ font-size は必ず 16px 以上（iOS が入力フォーカス時に自動ズームして画面が崩れるのを防ぐ）
       + 'style="flex:1;min-width:0;background:#1a1614;border:1px solid rgba(255,255,255,0.15);'
       + 'border-radius:18px;color:#f0e8e0;font-size:16px;padding:7px 12px;outline:none">'
@@ -2805,7 +2852,11 @@
       + '<button id="_danran_search_next" style="background:none;border:none;color:#f0e8e0;'
       + 'font-size:1.5rem;padding:6px 9px;cursor:pointer;-webkit-tap-highlight-color:transparent">↓</button>'
       + '<button id="_danran_search_close" style="background:none;border:none;color:#f0e8e0;'
-      + 'font-size:1.4rem;padding:6px 9px;cursor:pointer;-webkit-tap-highlight-color:transparent">✕</button>';
+      + 'font-size:1.4rem;padding:6px 9px;cursor:pointer;-webkit-tap-highlight-color:transparent">✕</button>'
+      + '</div>'
+      // 読込済みでヒット0のとき、DBを遡った結果（読み取り専用）を出すパネル
+      + '<div id="_danran_search_db" style="display:none;max-height:40vh;overflow-y:auto;'
+      + '-webkit-overflow-scrolling:touch"></div>';
     pDoc.body.appendChild(bar);
     var inp = pDoc.getElementById('_danran_search_input');
     inp.addEventListener('input', function () { _runSearch(pDoc, inp.value); });

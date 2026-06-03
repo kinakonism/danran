@@ -924,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v121",   # 検索バーをvisualViewportで完全固定＋ルーム編集スクロールのsettle強化
+    "danran_lp_v122",   # 検索: 読込済みヒット0ならDBを遡って検索（読み取り専用プレビュー）
     path=_LP_COMPONENT_DIR,
 )
 

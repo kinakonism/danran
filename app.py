@@ -928,7 +928,9 @@ def fetch_og(url: str) -> dict | None:
     """URL の OGP（タイトル/画像/説明）を取得してリンクプレビュー用 dict を返す。
     取得失敗・HTML以外・OG無しは None。結果は1日キャッシュ（2秒ポーリングでも再取得しない）。"""
     import urllib.request as _ur
-    from urllib.parse import urlparse as _up, urljoin as _uj
+    from urllib.parse import urlparse as _up, urljoin as _uj, parse_qs as _pq
+    _GENERIC = {"google search", "google マップ", "google maps", "googleマップ",
+                "google", "redirecting", "リダイレクト中"}
     try:
         req = _ur.Request(url, headers={
             "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -937,6 +939,7 @@ def fetch_og(url: str) -> dict | None:
         })
         with _ur.urlopen(req, timeout=4) as r:
             ctype = (r.headers.get("Content-Type") or "").lower()
+            final_url = r.geturl()   # リダイレクト後の最終URL
             if "html" not in ctype:
                 return None
             raw = r.read(300000)   # 先頭 300KB だけ（head にOGがある）
@@ -955,12 +958,31 @@ def fetch_og(url: str) -> dict | None:
         image = meta("og:image") or meta("twitter:image") or meta("og:image:url")
         desc  = meta("og:description") or meta("twitter:description") or meta("description")
         site  = meta("og:site_name")
+
+        # Google 系（share.google / 検索 / マップ）は JS必須でOGが無く title が汎用になる。
+        # リダイレクト先 or 元URL の q=（検索語＝店名）をタイトルに使うと綺麗なカードになる。
+        host = _up(final_url).netloc.lower()
+        is_google = ("google." in host) or host.endswith("goo.gl") or "share.google" in url
+        if is_google and (not title or title.strip().lower() in _GENERIC):
+            q = ""
+            for cand in (final_url, url):
+                qs = _pq(_up(cand).query)
+                if qs.get("q"):
+                    q = qs["q"][0]; break
+            if q:
+                title = q
+                site  = site or "Google"
+                image = image or ""   # 検索ページ画像は使わない（汎用なので）
+
+        # 中身が無い（汎用タイトルのみ・画像なし）→ カードを出さない（ただのリンク表示に任せる）
+        if title.strip().lower() in _GENERIC:
+            title = ""
         if not (title or image):
             return None
         if image:
-            image = _uj(url, image)   # 相対URL → 絶対URL
+            image = _uj(final_url or url, image)   # 相対URL → 絶対URL
         return {"title": title[:120], "image": image, "desc": desc[:140],
-                "site": (site or _up(url).netloc)[:60], "url": url}
+                "site": (site or _up(final_url or url).netloc)[:60], "url": url}
     except Exception:
         return None
 

@@ -962,7 +962,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v129",   # プロフィール編集にプレビュー（押された時の全画面表示）＋openUserProfileにcover直指定
+    "danran_lp_v130",   # プレビューで背景画像が出ない修正（_applyCoverのDOM前ガード除去）
     path=_LP_COMPONENT_DIR,
 )
 

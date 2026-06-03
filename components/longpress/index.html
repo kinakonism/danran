@@ -3066,11 +3066,11 @@
         + 'background:linear-gradient(rgba(16,13,11,0.15),rgba(16,13,11,0.78));';
       ov.appendChild(coverOverlay);
       function _applyCover(cu) {
-        if (cu && pDoc.getElementById(USER_PROFILE_ID)) {
-          bg.style.filter = 'none'; bg.style.transform = 'none';
-          bg.style.backgroundImage = 'url("' + _escHtml(cu) + '")';
-          coverOverlay.style.display = 'block';
-        }
+        // bg/coverOverlay は生成済みの参照なので DOM 追加前でも適用できる（プレビューは同期適用）。
+        if (!cu) return;
+        bg.style.filter = 'none'; bg.style.transform = 'none';
+        bg.style.backgroundImage = 'url("' + _escHtml(cu) + '")';
+        coverOverlay.style.display = 'block';
       }
       if (coverUrl) {
         _applyCover(coverUrl);   // プレビュー: cover を直接指定

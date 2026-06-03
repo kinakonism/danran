@@ -2002,10 +2002,15 @@ def show_profile(current_user: dict) -> None:
                     if atype == "絵文字":
                         final_av = new_avatar or av
                     else:
-                        if not avatar_photo:
-                            st.error("写真を選択してください"); return
-                        with st.spinner("アップロード中…"):
-                            final_av = upload_photo(AVATAR_BUCKET, current_user["id"], avatar_photo)
+                        # 写真: 新しく選んだ時だけアップロード。選んでいなければ今のアイコンを維持
+                        #（アイコンを変えずに名前・電話・背景だけ保存できるように）。
+                        if avatar_photo:
+                            with st.spinner("アップロード中…"):
+                                final_av = upload_photo(AVATAR_BUCKET, current_user["id"], avatar_photo)
+                        elif av.startswith("http"):
+                            final_av = av          # 既存の写真アイコンをそのまま維持
+                        else:
+                            final_av = new_avatar or av   # 写真未選択かつ写真も無い → 絵文字にフォールバック
 
                     with st.spinner("保存中…"):
                         update_user_profile(

@@ -944,7 +944,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v126",   # 長押しポップアップを2段組み（絵文字=1行目, アクション=2行目）
+    "danran_lp_v127",   # 長押しポップアップ: 各行nowrapで絵文字1行/アクション1行を確実に
     path=_LP_COMPONENT_DIR,
 )
 

@@ -930,7 +930,11 @@ def fetch_og(url: str) -> dict | None:
     import urllib.request as _ur
     from urllib.parse import urlparse as _up, urljoin as _uj
     try:
-        req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; danran-linkpreview)"})
+        req = _ur.Request(url, headers={
+            "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+            "Accept-Language": "ja,en;q=0.8",
+        })
         with _ur.urlopen(req, timeout=4) as r:
             ctype = (r.headers.get("Content-Type") or "").lower()
             if "html" not in ctype:
@@ -961,28 +965,29 @@ def fetch_og(url: str) -> dict | None:
         return None
 
 def _og_card_html(og: dict) -> str:
-    """リンクプレビューのカード。タップで data-lp-link メニュー（開く/コピー/共有）。"""
+    """リンクプレビューのカード（一回り小さめ）。タップで data-lp-link メニュー。
+    画像は <img src> で出す（CSS background だと URL 内の & が &amp; のまま壊れるため）。"""
     u = _html.escape(og.get("url", ""))
     img = ""
     if og.get("image"):
-        img = (f'<div style="width:100%;aspect-ratio:1.91/1;background:#1a1614;'
-               f'background-image:url(\'{_html.escape(og["image"])}\');'
-               f'background-size:cover;background-position:center"></div>')
+        # src 属性なら &amp; はブラウザがデコードして正しく取得する（Google Maps 等の query 付き画像対応）
+        img = (f'<img src="{_html.escape(og["image"])}" loading="lazy" '
+               f'style="width:100%;height:90px;object-fit:cover;display:block;background:#1a1614">')
     title = _html.escape(og.get("title", "") or og.get("site", ""))
     site  = _html.escape(og.get("site", ""))
     desc  = _html.escape(og.get("desc", ""))
     return (
         f'<a href="{u}" data-lp-link="{u}" target="_blank" rel="noopener noreferrer" '
-        f'style="display:block;margin-top:6px;max-width:240px;border-radius:12px;overflow:hidden;'
+        f'style="display:block;margin-top:5px;max-width:190px;border-radius:10px;overflow:hidden;'
         f'border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);'
         f'text-decoration:none;color:inherit">'
         f'{img}'
-        f'<div style="padding:8px 10px">'
-        f'<div style="font-size:0.82rem;font-weight:700;line-height:1.3;'
+        f'<div style="padding:6px 9px">'
+        f'<div style="font-size:0.74rem;font-weight:700;line-height:1.3;'
         f'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{title}</div>'
-        + (f'<div style="font-size:0.72rem;color:rgba(240,232,224,0.55);margin-top:2px;'
-           f'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{desc}</div>' if desc else "")
-        + f'<div style="font-size:0.68rem;color:rgba(240,232,224,0.4);margin-top:4px">🔗 {site}</div>'
+        + (f'<div style="font-size:0.66rem;color:rgba(240,232,224,0.55);margin-top:2px;'
+           f'display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden">{desc}</div>' if desc else "")
+        + f'<div style="font-size:0.62rem;color:rgba(240,232,224,0.4);margin-top:3px">🔗 {site}</div>'
         f'</div></a>'
     )
 

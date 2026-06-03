@@ -515,6 +515,20 @@ def register_user(name: str, avatar: str, pw: str, uid: str | None = None, phone
         row["phone"] = phone
     return supabase.table("users").insert(row).execute().data[0]
 
+def set_user_cover(user_id: str, cover_url: str | None) -> None:
+    """プロフィール背景画像（cover_url）を設定（None で解除）。"""
+    try:
+        supabase.table("users").update({"cover_url": cover_url}).eq("id", user_id).execute()
+    except Exception as e:
+        raise RuntimeError(str(e))
+
+def get_user_cover(user_id: str) -> str | None:
+    try:
+        rows = supabase.table("users").select("cover_url").eq("id", user_id).limit(1).execute().data or []
+        return (rows[0].get("cover_url") if rows else None) or None
+    except Exception:
+        return None
+
 def update_user_profile(user_id: str, old_name: str, new_name: str, avatar: str, phone: str = "") -> None:
     """名前・アバター・電話番号を更新し、過去メッセージも一括で書き換える。
     user_id でフィルタするため名前変更後も確実に更新される。"""
@@ -948,7 +962,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v127",   # 長押しポップアップ: 各行nowrapで絵文字1行/アクション1行を確実に
+    "danran_lp_v128",   # プロフィール背景画像（cover_url）を全画面プロフィールの背景に表示
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1854,7 +1868,7 @@ def show_register() -> None:
 # ─────────────────────────────────────
 # 画面④ プロフィール編集
 # ─────────────────────────────────────
-_PROFILE_WIDGET_KEYS = ("profile_atype", "profile_emoji", "profile_photo", "profile_name", "profile_phone")
+_PROFILE_WIDGET_KEYS = ("profile_atype", "profile_emoji", "profile_photo", "profile_name", "profile_phone", "profile_cover")
 
 def _reset_profile_widgets() -> None:
     """プロフィール画面を開くたびにウィジェット状態をクリアする。
@@ -1939,6 +1953,44 @@ def show_profile(current_user: dict) -> None:
                 except Exception:
                     st.image(avatar_photo, width=100)
                 st.caption("この写真に変更します")
+
+        # ── 背景画像（LINE 風カバー。相手があなたのアイコンを押した時に表示される）──
+        st.divider()
+        st.markdown("**背景画像**")
+        st.caption("家族があなたのアイコンをタップした時に、大きく表示される背景です。")
+        _cur_cover = get_user_cover(current_user["id"])
+        if _cur_cover:
+            try:
+                st.image(_cur_cover, use_container_width=True)
+            except Exception:
+                pass
+        _cover_file = st.file_uploader(
+            "", type=["jpg", "jpeg", "png", "webp"],
+            label_visibility="collapsed", key="profile_cover",
+        )
+        _cv1, _cv2 = st.columns(2)
+        with _cv1:
+            if st.button("🖼 背景を保存", use_container_width=True, key="cover_save"):
+                if not _cover_file:
+                    st.warning("画像を選んでください")
+                else:
+                    try:
+                        with st.spinner("アップロード中…"):
+                            _cu_url = upload_photo(AVATAR_BUCKET, f"cover_{current_user['id']}", _cover_file)
+                            _cu_url = f"{_cu_url}?t={int(_time.time())}"   # 上書き時のキャッシュ対策
+                            set_user_cover(current_user["id"], _cu_url)
+                        st.session_state.pop("profile_cover", None)
+                        st.success("✅ 背景画像を設定しました")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ 保存に失敗しました: {e}")
+        with _cv2:
+            if _cur_cover and st.button("🗑️ 背景を削除", use_container_width=True, key="cover_del"):
+                try:
+                    set_user_cover(current_user["id"], None)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 削除に失敗しました: {e}")
 
         st.divider()
         c1, c2 = st.columns(2)

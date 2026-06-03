@@ -3042,13 +3042,32 @@
         'position:fixed;inset:0;z-index:2147483647;overflow:hidden;' +
         'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;' +
         'background:#100d0b;animation:_danranFadeIn 0.18s ease;-webkit-tap-highlight-color:transparent;';
+      // 背景レイヤー: 既定はアイコンをぼかした背景。後で cover_url があれば鮮明な背景画像に差し替える。
+      var bg = pDoc.createElement('div');
+      bg.style.cssText = 'position:absolute;inset:0;background-size:cover;background-position:center;';
       if (isImg) {
-        var bg = pDoc.createElement('div');
-        bg.style.cssText =
-          'position:absolute;inset:0;background-image:url("' + _escHtml(avatar) + '");' +
-          'background-size:cover;background-position:center;filter:blur(30px) brightness(0.4);transform:scale(1.25);';
-        ov.appendChild(bg);
+        bg.style.backgroundImage = 'url("' + _escHtml(avatar) + '")';
+        bg.style.filter = 'blur(30px) brightness(0.4)';
+        bg.style.transform = 'scale(1.25)';
       }
+      ov.appendChild(bg);
+      // 背景画像(cover)用の暗いグラデ（名前を読みやすく）。cover がある時だけ表示。
+      var coverOverlay = pDoc.createElement('div');
+      coverOverlay.style.cssText = 'position:absolute;inset:0;display:none;'
+        + 'background:linear-gradient(rgba(16,13,11,0.15),rgba(16,13,11,0.78));';
+      ov.appendChild(coverOverlay);
+      // cover_url を取得して背景に反映（非同期・取れたら差し替え）
+      try {
+        sbGet('users?select=cover_url&name=eq.' + encodeURIComponent(name || '') + '&limit=1')
+          .then(function (rows) {
+            var cu = rows && rows[0] && rows[0].cover_url;
+            if (cu && pDoc.getElementById(USER_PROFILE_ID)) {
+              bg.style.filter = 'none'; bg.style.transform = 'none';
+              bg.style.backgroundImage = 'url("' + _escHtml(cu) + '")';
+              coverOverlay.style.display = 'block';
+            }
+          }).catch(function () {});
+      } catch (e) {}
       var av;
       if (isImg) {
         av = pDoc.createElement('img');

@@ -2753,7 +2753,8 @@
     if (idx < 0) idx = 0; if (idx >= S.ids.length) idx = S.ids.length - 1;
     S.idx = idx;
     var el = pDoc.querySelector('[data-lp-msg="' + S.ids[idx] + '"]');
-    if (el) { try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} }
+    // ★ smooth だと iOS で固定バーがアニメ中に消えるため瞬間移動にする
+    if (el) { try { el.scrollIntoView({ block: 'center' }); } catch (e) {} }
     applySearchHighlight(); _searchCount(pDoc);
   }
   function _runSearch(pDoc, q) {
@@ -2790,14 +2791,14 @@
       // ★ font-size は必ず 16px 以上（iOS が入力フォーカス時に自動ズームして画面が崩れるのを防ぐ）
       + 'style="flex:1;min-width:0;background:#1a1614;border:1px solid rgba(255,255,255,0.15);'
       + 'border-radius:18px;color:#f0e8e0;font-size:16px;padding:7px 12px;outline:none">'
-      + '<span id="_danran_search_count" style="color:rgba(240,232,224,0.55);font-size:0.78rem;'
-      + 'min-width:34px;text-align:center">0</span>'
+      + '<span id="_danran_search_count" style="color:rgba(240,232,224,0.6);font-size:0.9rem;'
+      + 'min-width:42px;text-align:center">0</span>'
       + '<button id="_danran_search_prev" style="background:none;border:none;color:#f0e8e0;'
-      + 'font-size:1.15rem;padding:4px 6px;cursor:pointer;-webkit-tap-highlight-color:transparent">↑</button>'
+      + 'font-size:1.5rem;padding:6px 9px;cursor:pointer;-webkit-tap-highlight-color:transparent">↑</button>'
       + '<button id="_danran_search_next" style="background:none;border:none;color:#f0e8e0;'
-      + 'font-size:1.15rem;padding:4px 6px;cursor:pointer;-webkit-tap-highlight-color:transparent">↓</button>'
+      + 'font-size:1.5rem;padding:6px 9px;cursor:pointer;-webkit-tap-highlight-color:transparent">↓</button>'
       + '<button id="_danran_search_close" style="background:none;border:none;color:#f0e8e0;'
-      + 'font-size:1.05rem;padding:4px 6px;cursor:pointer;-webkit-tap-highlight-color:transparent">✕</button>';
+      + 'font-size:1.4rem;padding:6px 9px;cursor:pointer;-webkit-tap-highlight-color:transparent">✕</button>';
     pDoc.body.appendChild(bar);
     var inp = pDoc.getElementById('_danran_search_input');
     inp.addEventListener('input', function () { _runSearch(pDoc, inp.value); });

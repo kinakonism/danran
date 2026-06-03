@@ -5,8 +5,6 @@ danran - 家族専用チャットアプリ  Streamlit × Supabase
 通知: PWA Web Push (static/ → /app/static/ で配信、enableStaticServing=true)
 """
 
-# danran: 家族チャット
-
 import html as _html
 import io
 import json

@@ -924,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v115",   # ☰メニューにメッセージ検索を追加
+    "danran_lp_v116",   # チャット内インクリメンタル検索（ヘッダー🔍→検索バー→ヒットへ移動＆ハイライト）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -3026,11 +3026,14 @@ if "current_user" in st.session_state:
             # ルーム選択はトップ画面なので戻る（＜）ボタンは出さない
             _hdr_left = '<div style="flex-shrink:0;min-width:44px;"></div>'
         else:
-            # チャット画面: 右上に「☰」メニュー → タップで 写真アルバム / ルーム編集 を選ぶ
+            # チャット画面: 右上に「🔍 検索」＋「☰ メニュー」
             if _active_room_id:
                 _hdr_right = (
+                    f'<div style="display:flex;align-items:center;flex-shrink:0">'
+                    f'<button data-hdr-search style="{_HDR_BTN_STYLE}font-size:1.05rem;min-width:40px">🔍</button>'
                     f'<button data-hdr-roommenu="{_html.escape(_active_room_id)}" '
-                    f'style="{_HDR_BTN_STYLE}font-size:1.2rem">☰</button>'
+                    f'style="{_HDR_BTN_STYLE}font-size:1.2rem;min-width:40px">☰</button>'
+                    f'</div>'
                 )
             else:
                 _hdr_right = '<div style="flex-shrink:0;min-width:44px;"></div>'

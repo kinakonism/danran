@@ -1860,6 +1860,8 @@
     scrollTopOnEditEnter();  // 編集系画面に入った瞬間だけ先頭へ（変なスクロール継承を防ぐ）
     unreadBanner();          // 入室時に未読があれば上部に「N件の未読」バナーを出す
     applyFontScale();        // 文字サイズ設定(localStorage)を本文に適用
+    try { setupSearchBar(window.parent.document); } catch (e) {}  // ヘッダー🔍検索（1回張る）
+    try { applySearchHighlight(); } catch (e) {}  // 検索ヒットのハイライトを再適用（再描画対策）
     // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
     // （通常は Python が st.html() でレンダリングするため実行されない）
     try {
@@ -2651,6 +2653,116 @@
     } catch (e) {}
   }
 
+  /* ════════════════════════════════════════
+   *  チャット内インクリメンタル検索（ヘッダー🔍 → 上部に検索バー）
+   *  - 表示中メッセージ(data-lp-body)を絞り込み、ヒットへ移動＋ハイライト
+   *  - ↑/↓ で前後のヒット、✕ で閉じる。ハイライトは scan で再適用（2秒再描画でも維持）
+   * ════════════════════════════════════════ */
+  function _searchCSS(pDoc) {
+    if (pDoc.getElementById('_danran_search_css')) return;
+    var s = pDoc.createElement('style'); s.id = '_danran_search_css';
+    s.textContent = '.dr-search-hit{background:rgba(240,168,104,0.28)!important;'
+      + 'outline:2px solid rgba(240,168,104,0.85);outline-offset:1px;border-radius:12px;}';
+    (pDoc.head || pDoc.body).appendChild(s);
+  }
+  function _collectMatches(pDoc, q) {
+    var ids = []; if (!q) return ids;
+    var ql = q.toLowerCase();
+    var els = pDoc.querySelectorAll('[data-lp-msg][data-lp-body]');
+    for (var i = 0; i < els.length; i++) {
+      var b = (els[i].getAttribute('data-lp-body') || '').toLowerCase();
+      if (b.indexOf(ql) >= 0) ids.push(els[i].getAttribute('data-lp-msg'));
+    }
+    return ids;   // DOM順＝古い→新しい
+  }
+  function applySearchHighlight() {
+    try {
+      var pDoc = window.parent.document, S = pDoc._danranSearch;
+      // チャット以外に遷移したら検索を閉じる
+      if (S && S.open && (pDoc._danranSR ||
+          (pDoc._danranView && pDoc._danranView !== 'chat' && pDoc._danranView !== ''))) {
+        closeSearchBar(pDoc); return;
+      }
+      var prev = pDoc.querySelectorAll('.dr-search-hit');
+      for (var i = 0; i < prev.length; i++) prev[i].classList.remove('dr-search-hit');
+      if (!S || !S.open || !S.ids || !S.ids.length) return;
+      var el = pDoc.querySelector('[data-lp-msg="' + S.ids[S.idx] + '"]');
+      if (el) el.classList.add('dr-search-hit');
+    } catch (e) {}
+  }
+  function _searchCount(pDoc) {
+    var S = pDoc._danranSearch, c = pDoc.getElementById('_danran_search_count');
+    if (c) c.textContent = (S && S.ids.length) ? (S.idx + 1) + '/' + S.ids.length : '0';
+  }
+  function _searchGoto(pDoc, idx) {
+    var S = pDoc._danranSearch; if (!S || !S.ids.length) return;
+    if (idx < 0) idx = 0; if (idx >= S.ids.length) idx = S.ids.length - 1;
+    S.idx = idx;
+    var el = pDoc.querySelector('[data-lp-msg="' + S.ids[idx] + '"]');
+    if (el) { try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} }
+    applySearchHighlight(); _searchCount(pDoc);
+  }
+  function _runSearch(pDoc, q) {
+    var S = pDoc._danranSearch || {}; S.open = true; S.q = q;
+    S.ids = _collectMatches(pDoc, (q || '').trim());
+    S.idx = S.ids.length - 1;   // まず最新のヒットへ
+    pDoc._danranSearch = S;
+    if (S.ids.length) _searchGoto(pDoc, S.idx);
+    else { applySearchHighlight(); _searchCount(pDoc); }
+  }
+  function _searchStep(pDoc, dir) {
+    var S = pDoc._danranSearch; if (!S || !S.ids.length) return;
+    _searchGoto(pDoc, S.idx + dir);   // ↑(-1)=古い / ↓(+1)=新しい
+  }
+  function closeSearchBar(pDoc) {
+    pDoc._danranSearch = { open: false, q: '', ids: [], idx: 0 };
+    var prev = pDoc.querySelectorAll('.dr-search-hit');
+    for (var i = 0; i < prev.length; i++) prev[i].classList.remove('dr-search-hit');
+    var bar = pDoc.getElementById('_danran_search_bar'); if (bar) bar.remove();
+  }
+  function openSearchBar(pDoc) {
+    _searchCSS(pDoc);
+    pDoc._danranSearch = { open: true, q: '', ids: [], idx: 0 };
+    var bar = pDoc.createElement('div'); bar.id = '_danran_search_bar';
+    bar.style.cssText = 'position:fixed;top:52px;left:0;right:0;z-index:2147483646;'
+      + 'background:#241f1c;border-bottom:1px solid rgba(255,255,255,0.12);'
+      + 'display:flex;align-items:center;gap:4px;padding:7px 10px;'
+      + 'box-shadow:0 4px 14px rgba(0,0,0,0.4);';
+    bar.innerHTML =
+        '<input id="_danran_search_input" type="search" placeholder="このルームを検索" '
+      + 'style="flex:1;min-width:0;background:#1a1614;border:1px solid rgba(255,255,255,0.15);'
+      + 'border-radius:18px;color:#f0e8e0;font-size:0.95rem;padding:7px 12px;outline:none">'
+      + '<span id="_danran_search_count" style="color:rgba(240,232,224,0.55);font-size:0.78rem;'
+      + 'min-width:34px;text-align:center">0</span>'
+      + '<button id="_danran_search_prev" style="background:none;border:none;color:#f0e8e0;'
+      + 'font-size:1.15rem;padding:4px 6px;cursor:pointer;-webkit-tap-highlight-color:transparent">↑</button>'
+      + '<button id="_danran_search_next" style="background:none;border:none;color:#f0e8e0;'
+      + 'font-size:1.15rem;padding:4px 6px;cursor:pointer;-webkit-tap-highlight-color:transparent">↓</button>'
+      + '<button id="_danran_search_close" style="background:none;border:none;color:#f0e8e0;'
+      + 'font-size:1.05rem;padding:4px 6px;cursor:pointer;-webkit-tap-highlight-color:transparent">✕</button>';
+    pDoc.body.appendChild(bar);
+    var inp = pDoc.getElementById('_danran_search_input');
+    inp.addEventListener('input', function () { _runSearch(pDoc, inp.value); });
+    inp.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); _searchStep(pDoc, e.shiftKey ? 1 : -1); }
+    });
+    pDoc.getElementById('_danran_search_prev').addEventListener('click', function (e) { e.preventDefault(); _searchStep(pDoc, -1); });
+    pDoc.getElementById('_danran_search_next').addEventListener('click', function (e) { e.preventDefault(); _searchStep(pDoc, 1); });
+    pDoc.getElementById('_danran_search_close').addEventListener('click', function (e) { e.preventDefault(); closeSearchBar(pDoc); });
+    try { inp.focus(); } catch (e) {}
+  }
+  function setupSearchBar(pDoc) {
+    if (pDoc._danranSearchHook) return; pDoc._danranSearchHook = true;
+    pDoc.addEventListener('click', function (e) {
+      var t = e.target;
+      if (t && t.closest && t.closest('[data-hdr-search]')) {
+        e.preventDefault(); e.stopPropagation();
+        if (pDoc.getElementById('_danran_search_bar')) closeSearchBar(pDoc);
+        else openSearchBar(pDoc);
+      }
+    }, true);
+  }
+
   /* 入室時に未読があれば上部に「N件の未読」バナーを出す。タップで先頭未読へジャンプ。
      Python が #_danran_unread_info（data-count/data-first）を出力する。入室1回だけ表示。 */
   function unreadBanner() {
@@ -3412,10 +3524,7 @@
           + 'box-shadow:0 10px 30px rgba(0,0,0,0.55);padding:6px;'
           + 'opacity:0;transform:translateY(-6px);transition:opacity .12s,transform .12s;';
         m.innerHTML =
-            '<div data-rmenu="search" style="display:flex;align-items:center;gap:10px;'
-          + 'padding:11px 12px;border-radius:10px;cursor:pointer;color:#f0e8e0;font-size:15px">'
-          + '<span style="font-size:18px">🔍</span>メッセージ検索</div>'
-          + '<div data-rmenu="album" style="display:flex;align-items:center;gap:10px;'
+            '<div data-rmenu="album" style="display:flex;align-items:center;gap:10px;'
           + 'padding:11px 12px;border-radius:10px;cursor:pointer;color:#f0e8e0;font-size:15px">'
           + '<span style="font-size:18px">🖼</span>写真アルバム</div>'
           + '<div data-rmenu="edit" style="display:flex;align-items:center;gap:10px;'
@@ -3465,9 +3574,8 @@
         if (!rid) return;
         showEditTransitionCover();   // 遷移スクロールの跳ねを隠す
         // origin:'chat' → 戻るときルーム一覧でなく元のチャットへ戻す（Python が判定）
-        if (act === 'album')       send({ action: 'go_album',  room_id: rid, ts: Date.now() });
-        else if (act === 'search') send({ action: 'go_search', room_id: rid, ts: Date.now() });
-        else                       send({ action: 'go_room_edit', room_id: rid, origin: 'chat', ts: Date.now() });
+        if (act === 'album') send({ action: 'go_album',     room_id: rid, ts: Date.now() });
+        else                 send({ action: 'go_room_edit', room_id: rid, origin: 'chat', ts: Date.now() });
         return;
       }
       // メニュー外タップ → 閉じる

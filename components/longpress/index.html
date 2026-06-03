@@ -3870,16 +3870,39 @@
         //     依存で死んだ iframe だと効かないため、この方式に統一（out-of-scope は iOS が Safari で開く）。
         if (act === 'facetime') {
           var ft = ROOM_FACETIME || (pDoc._danranRoomFacetime || '');
+          var ov2 = pDoc.createElement('div');
+          ov2.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.5);'
+            + 'display:flex;align-items:flex-end;justify-content:center;';
+          var sh = pDoc.createElement('div');
+          sh.style.cssText = 'background:#241f1c;border-radius:18px;width:calc(100% - 24px);max-width:420px;'
+            + 'margin:0 0 calc(env(safe-area-inset-bottom,0px) + 14px);overflow:hidden;'
+            + 'box-shadow:0 8px 28px rgba(0,0,0,0.6)';
+          function _shClose() { if (ov2.parentNode) ov2.remove(); }
           if (ft) {
-            try {
-              var fa = pDoc.createElement('a');
-              fa.href = ft; fa.rel = 'noopener noreferrer'; fa.style.display = 'none';
-              pDoc.body.appendChild(fa); fa.click();
-              setTimeout(function () { try { if (fa.parentNode) fa.remove(); } catch (e) {} }, 400);
-            } catch (e) {}
+            var a2 = pDoc.createElement('a');
+            a2.href = ft; a2.rel = 'noopener noreferrer';
+            a2.textContent = '📹 FaceTimeに参加する';
+            a2.style.cssText = 'display:block;padding:18px 16px;color:#f0e8e0;font-size:1.05rem;'
+              + 'font-weight:700;text-align:center;text-decoration:none;'
+              + 'border-bottom:1px solid rgba(255,255,255,0.08);-webkit-tap-highlight-color:transparent';
+            a2.addEventListener('click', function () { setTimeout(_shClose, 60); });   // 本物のタップで開く
+            sh.appendChild(a2);
           } else {
-            try { showToast('ルーム編集でFaceTimeリンクを設定してね'); } catch (e) {}
+            var msg = pDoc.createElement('div');
+            msg.textContent = 'この部屋にはFaceTimeリンクが未設定です（ルーム編集で設定できます）';
+            msg.style.cssText = 'padding:18px 16px;color:rgba(240,232,224,0.7);font-size:0.9rem;'
+              + 'text-align:center;border-bottom:1px solid rgba(255,255,255,0.08)';
+            sh.appendChild(msg);
           }
+          var cx = pDoc.createElement('button');
+          cx.textContent = 'キャンセル';
+          cx.style.cssText = 'width:100%;padding:15px;background:none;border:none;color:#888;'
+            + 'font-size:1rem;cursor:pointer;-webkit-tap-highlight-color:transparent';
+          cx.addEventListener('click', _shClose);
+          sh.appendChild(cx);
+          ov2.appendChild(sh);
+          ov2.addEventListener('click', function (e) { if (e.target === ov2) _shClose(); });
+          pDoc.body.appendChild(ov2);
           return;
         }
         showEditTransitionCover();   // 遷移スクロールの跳ねを隠す

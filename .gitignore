@@ -26,3 +26,6 @@ cloudflare/.wrangler/
 supabase/.temp/
 tools/.support_cursor
 tools/.ai_tmp/
+
+# Mac mini bridge 専用 venv（pywebpush 等）
+.bridge-venv/

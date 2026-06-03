@@ -1859,6 +1859,7 @@
     scrollToLatestOnEnter(); // チャット入室時に最新メッセージへ即移動
     scrollTopOnEditEnter();  // 編集系画面に入った瞬間だけ先頭へ（変なスクロール継承を防ぐ）
     unreadBanner();          // 入室時に未読があれば上部に「N件の未読」バナーを出す
+    applyFontScale();        // 文字サイズ設定(localStorage)を本文に適用
     // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
     // （通常は Python が st.html() でレンダリングするため実行されない）
     try {
@@ -1904,6 +1905,14 @@
           return;
         }
         if (!t.closest) return;
+        // 文字サイズボタン（設定画面）→ localStorage に保存して即適用
+        var fsb = t.closest('[data-fontscale]');
+        if (fsb) {
+          e.preventDefault(); e.stopPropagation();
+          try { localStorage.setItem('danran_fs', fsb.getAttribute('data-fontscale') || '1'); } catch (x) {}
+          applyFontScale();
+          return;
+        }
         // リアクションのピルをタップ → 自分のリアクションをトグル（再度押すと外れる）。
         //   他人のメッセージのみ（自分のメッセージにはリアクションを付けない）。
         //   長押し（誰が押したか表示）直後の合成 click は無視。
@@ -2619,6 +2628,23 @@
           setTimeout(function () { try { target.style.animation = ''; } catch (e) {} }, 700);
         } catch (e) {}
       }, 320);
+    } catch (e) {}
+  }
+
+  /* 文字サイズ: localStorage('danran_fs') を CSS 変数 --dr-fs に適用（本文 font-size が参照）。
+     設定画面のボタン(.dr-fsbtn)に現在値をハイライト。端末ごとに保存。 */
+  function applyFontScale() {
+    try {
+      var pDoc = window.parent.document;
+      var fs = '1';
+      try { fs = localStorage.getItem('danran_fs') || '1'; } catch (e) {}
+      pDoc.documentElement.style.setProperty('--dr-fs', fs);
+      var btns = pDoc.querySelectorAll('.dr-fsbtn');
+      for (var i = 0; i < btns.length; i++) {
+        var on = btns[i].getAttribute('data-fontscale') === fs;
+        btns[i].style.background  = on ? 'rgba(240,168,104,0.28)' : '#241f1c';
+        btns[i].style.borderColor = on ? 'rgba(240,168,104,0.9)'  : 'rgba(255,255,255,0.18)';
+      }
     } catch (e) {}
   }
 

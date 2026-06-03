@@ -914,7 +914,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v110",   # 入室時に「N件の未読」バナー→タップで先頭未読へジャンプ（unreadBanner）
+    "danran_lp_v111",   # 文字サイズ設定（localStorage→CSS変数 --dr-fs を本文に適用）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1365,7 +1365,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'<div style="font-size:0.7rem;color:#888;margin-bottom:3px">{fmt_ts(ts)}</div>'
                 f'<div style="{_mine_bstyle};'
                 f'display:inline-block;max-width:100%;text-align:left;'
-                f'word-break:break-word;line-height:1.15;font-size:{_content_fs};'
+                f'word-break:break-word;line-height:1.15;font-size:calc({_content_fs} * var(--dr-fs,1));'
                 # ★ 絵文字をフルカラー描画（継承された -webkit-text-fill-color で 💩 等が
                 #   文字色に塗られてモノクロ化するのを防ぐ。テキストは currentColor=文字色のまま）
                 f'-webkit-text-fill-color:currentColor">{content}</div>'
@@ -1390,7 +1390,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'margin-bottom:3px">{sender}</div>'
                 f'<div style="{_other_bstyle};'
                 f'display:inline-block;max-width:100%;text-align:left;'
-                f'word-break:break-word;line-height:1.15;font-size:{_content_fs};'
+                f'word-break:break-word;line-height:1.15;font-size:calc({_content_fs} * var(--dr-fs,1));'
                 f'-webkit-text-fill-color:currentColor">{content}</div>'
                 f'<div style="font-size:0.7rem;color:#888;margin-top:3px">{fmt_ts(ts)}</div>'
                 f'{pills_row}'
@@ -2636,6 +2636,28 @@ def show_install_page() -> None:
 # ─────────────────────────────────────
 def show_notifications(current_user: dict) -> None:
     """通知設定画面 — JS が Notification.permission を読んで UI を更新する。"""
+
+    # ── 文字サイズ（端末ごと・localStorage に保存し JS が即適用）──
+    st.markdown("#### 🔤 文字サイズ")
+    st.markdown(
+        '<div style="color:rgba(255,255,255,0.5);font-size:0.8rem;margin:-4px 2px 6px">'
+        'チャットの文字の大きさ（この端末だけに保存されます）</div>',
+        unsafe_allow_html=True,
+    )
+    st.html(
+        '<div id="_danran_fs_ctl" style="display:flex;gap:8px;margin:0 0 6px">'
+        '<button data-fontscale="0.9"  class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
+        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:0.85rem;'
+        'cursor:pointer">小</button>'
+        '<button data-fontscale="1"    class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
+        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:1rem;'
+        'cursor:pointer">中</button>'
+        '<button data-fontscale="1.15" class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
+        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:1.2rem;'
+        'cursor:pointer">大</button>'
+        '</div>'
+    )
+    st.divider()
 
     # 現在の許可状態を JS が書き込むプレースホルダー
     st.html('<div id="_danran_notif_ui"></div>')

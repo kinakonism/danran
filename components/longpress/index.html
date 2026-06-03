@@ -106,6 +106,7 @@
   var VIEW        = '';     // 現在の画面（'chat'|'profile'|'room_edit'|...）
   var REPLY_ID    = '', REPLY_NAME = '', REPLY_TEXT = '', REPLY_IMG = '';  // 引用返信ターゲット
   var MENTIONS    = [];     // メンション候補 [{name, avatar, tag}] （data-mentions-json 由来）
+  var ROOM_FACETIME = '';   // アクティブルームのグループ FaceTime リンク（data-room-facetime 由来）
   var _embedFixed          = false;  // embed=true 除去リダイレクトを1回のみ実行
   var _sessionRestoreSent = false;  // restore_session postMessage を1回のみ送る
   var _gotRender          = false;  // streamlit:render を受信済みかどうか
@@ -199,6 +200,8 @@
       REPLY_TEXT = cfg.getAttribute('data-reply-text')  || '';
       REPLY_IMG  = cfg.getAttribute('data-reply-image') || '';
       try { MENTIONS = JSON.parse(cfg.getAttribute('data-mentions-json') || '[]'); } catch (e) { MENTIONS = []; }
+      ROOM_FACETIME = cfg.getAttribute('data-room-facetime') || '';
+      try { window.parent.document._danranRoomFacetime = ROOM_FACETIME; } catch (e) {}
       // ★ 死んだ iframe 問題対策: メンション補完リスナは最初に張った iframe が所有する。
       //   その iframe が死ぬとローカル var MENTIONS は更新されないので、親ドキュメント
       //   経由で共有し、リスナ側は pDoc._danranMentions を都度読む。
@@ -3757,6 +3760,20 @@
    *  ☰(data-hdr-roommenu="{room_id}") タップで下にメニューを開き、選ぶと nav。
    *  delegated（pDoc に1回張る）＋ pDoc._danranSend 経由で死んだ iframe でも動く。
    * ════════════════════════════════════════ */
+  // 外部リンクを同期的に開く（PWA/iOS でも確実に新規タブ。window.open はブロックされやすい）
+  function openExternalLink(pDoc, url) {
+    try {
+      var a = pDoc.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.style.display = 'none';
+      pDoc.body.appendChild(a);
+      a.click();
+      setTimeout(function () { try { if (a.parentNode) a.remove(); } catch (e) {} }, 200);
+    } catch (e) {
+      try { (pDoc.defaultView || window.parent).location.href = url; } catch (x) {}
+    }
+  }
+
   var RMENU_ID = '_danran_room_menu';
   function setupRoomMenu(pDoc) {
     if (pDoc._danranRoomMenuHook) return;
@@ -3847,16 +3864,12 @@
         var act = item.getAttribute('data-rmenu');
         hide();
         if (!rid) return;
-        // みんなで FaceTime: ルームのリンクを取得して開く（画面遷移しない）
+        // みんなで FaceTime: リンクを cfg から同期的に開く（非同期だと iOS が
+        //   ユーザー操作の期限切れと判断して window.open をブロックするため）。
         if (act === 'facetime') {
-          try {
-            sbGet('rooms?select=facetime_url&id=eq.' + encodeURIComponent(rid) + '&limit=1')
-              .then(function (rows) {
-                var url = rows && rows[0] && rows[0].facetime_url;
-                if (url) { try { (pDoc.defaultView || window.parent).open(url, '_blank'); } catch (e) { (pDoc.defaultView || window.parent).location.href = url; } }
-                else { showToast('ルーム編集でFaceTimeリンクを設定してね'); }
-              }).catch(function () { showToast('リンクを開けませんでした'); });
-          } catch (e) {}
+          var ft = ROOM_FACETIME || (pDoc._danranRoomFacetime || '');
+          if (ft) openExternalLink(pDoc, ft);
+          else showToast('ルーム編集でFaceTimeリンクを設定してね');
           return;
         }
         showEditTransitionCover();   // 遷移スクロールの跳ねを隠す

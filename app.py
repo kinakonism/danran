@@ -976,7 +976,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v131",   # FaceTime: 全画面プロフィールに1:1通話ボタン＋ハンバーガーに みんなでFaceTime（グループリンク）
+    "danran_lp_v132",   # みんなでFaceTime: リンクをcfg経由で同期的に開く(iOSのwindow.openブロック回避)
     path=_LP_COMPONENT_DIR,
 )
 
@@ -3211,6 +3211,11 @@ if "current_user" in st.session_state:
             f'</div>'
         )
 
+# ── アクティブルームのグループ FaceTime リンク（☰メニューが同期的に開くため cfg に渡す）──
+_room_ft = ""
+if ("current_user" in st.session_state and not _is_profile and not _show_rooms and _active_room_id):
+    _room_ft = get_room_facetime(_active_room_id) or ""
+
 # ── ピン留めバー（チャット表示中・ピンがある時だけ。ヘッダー直下に固定）──
 _pin_bar_html = ""
 _pad_top = 62
@@ -3262,6 +3267,7 @@ st.html(
     f'data-uid="{_html.escape(_cu.get("id",""))}" '
     f'data-push-resub="{str(_push_resub).lower()}" '
     f'data-mentions-json="{_html.escape(_mentions_json, quote=True)}" '
+    f'data-room-facetime="{_html.escape(_room_ft, quote=True)}" '
     # ── 引用返信ターゲット（JS が入力欄の上に固定バーを描画する）──
     f'data-reply-id="{_html.escape((st.session_state.get("_reply_to") or {}).get("id","") or "")}" '
     f'data-reply-name="{_html.escape((st.session_state.get("_reply_to") or {}).get("name","") or "")}" '

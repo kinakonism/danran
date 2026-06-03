@@ -1806,6 +1806,14 @@
           sendNav({ action: 'go_profile', ts: Date.now() });
         });
       }
+      // ルーム選択ヘッダーの ⚙️ → 設定画面
+      var setBtn = pDoc.querySelector('[data-hdr-settings]');
+      if (setBtn && !setBtn._danranHdrSettings) {
+        setBtn._danranHdrSettings = true;
+        setBtn.addEventListener('click', function () {
+          sendNav({ action: 'go_settings', ts: Date.now() });
+        });
+      }
       // チャットヘッダー右上の 👥 → ルーム編集（メンバー管理）画面
       var memBtn = pDoc.querySelector('[data-hdr-roomedit]');
       if (memBtn && !memBtn._danranHdrRoomEdit) {

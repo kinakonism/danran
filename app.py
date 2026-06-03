@@ -1951,10 +1951,15 @@ def show_profile(current_user: dict) -> None:
                 st.session_state["_show_rooms"] = True
                 st.rerun()
 
-        st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
-        if st.button("🔔 通知設定", use_container_width=True, key="profile_to_notif"):
-            st.session_state["view"] = "notifications"
-            st.rerun()
+# ─────────────────────────────────────
+# 画面④-b 設定（ルーム選択ヘッダーの ⚙️ から）
+#   アプリの好み・アカウント操作を集約（プロフィール＝本人情報 とは分離）
+# ─────────────────────────────────────
+def show_settings(current_user: dict) -> None:
+    _, col, _ = st.columns([1, 3, 1])
+    with col:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("## ⚙️ 設定")
 
         # ── 文字サイズ（端末ごと・localStorage に保存し JS が即適用）──
         st.divider()
@@ -1973,6 +1978,12 @@ def show_profile(current_user: dict) -> None:
             'cursor:pointer">大</button>'
             '</div>'
         )
+
+        # ── 通知設定（専用画面へ）──
+        st.divider()
+        if st.button("🔔 通知設定", use_container_width=True, key="settings_to_notif"):
+            st.session_state["view"] = "notifications"
+            st.rerun()
 
         # ── 家族を招待 ──
         st.divider()
@@ -2936,7 +2947,7 @@ _clear_flag  = st.session_state.pop("_clear_session", False)
 # JS に「ブラウザ側も unsubscribe して再登録せよ」を伝えるフラグ（1回のみ）
 _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
-_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album", "search")
+_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album", "search", "settings")
 _active_room_id = ""
 if "current_user" in st.session_state and not _is_profile:
     # active_room が未セット（セッション復元直後）のときは参加ルームの先頭をフォールバック
@@ -2999,6 +3010,7 @@ if "current_user" in st.session_state:
             "notifications": "🔔 通知設定",
             "album":         "🖼 写真アルバム",
             "search":        "🔍 メッセージ検索",
+            "settings":      "⚙️ 設定",
         }
         _hdr_title_text = _title_map.get(_cur_view, "設定")
         _hdr_html = (
@@ -3028,12 +3040,16 @@ if "current_user" in st.session_state:
                     f'align-items:center;justify-content:center;font-size:1.2rem">'
                     f'{_html.escape(_hdr_av)}</span>'
                 )
+            # 右側: ⚙️設定（アバターの左）＋ アバター（プロフィール）
             _hdr_right = (
+                f'<div style="display:flex;align-items:center;flex-shrink:0">'
+                f'<button data-hdr-settings style="{_HDR_BTN_STYLE}font-size:1.15rem;min-width:40px">⚙️</button>'
                 f'<button data-hdr-profile style="background:none;border:none;'
                 f'padding:6px;cursor:pointer;flex-shrink:0;min-width:44px;'
                 f'display:flex;align-items:center;justify-content:center;'
                 f'-webkit-tap-highlight-color:transparent">'
                 f'{_hdr_av_inner}</button>'
+                f'</div>'
             )
             # ルーム選択はトップ画面なので戻る（＜）ボタンは出さない
             _hdr_left = '<div style="flex-shrink:0;min-width:44px;"></div>'
@@ -3141,6 +3157,13 @@ if isinstance(_lp_result, dict):
         elif _nav == "go_profile":
             _reset_profile_widgets()
             st.session_state["view"] = "profile"
+            st.rerun()
+        elif _nav == "go_settings":
+            # ⚙️ 設定画面（前回の確認/入力状態はリセット）
+            st.session_state.pop("_logout_confirm", None)
+            for _k in ("pw_cur", "pw_new", "pw_cfm"):
+                st.session_state.pop(_k, None)
+            st.session_state["view"] = "settings"
             st.rerun()
         elif _nav == "go_back":
             # 編集画面ヘッダーの ＜ → ルームリストに戻る
@@ -3313,6 +3336,8 @@ else:
             show_chat(st.session_state["current_user"])
         case "profile" if "current_user" in st.session_state:
             show_profile(st.session_state["current_user"])
+        case "settings" if "current_user" in st.session_state:
+            show_settings(st.session_state["current_user"])
         case "room_edit" if "current_user" in st.session_state:
             show_room_edit(st.session_state.get("editing_room", {}))
         case "album" if "current_user" in st.session_state:

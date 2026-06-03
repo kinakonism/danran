@@ -341,6 +341,15 @@ def send_push(room: str, sender_uid: str, sender_name: str,
         if _muted:
             rows = [r for r in rows if r.get("user_id") not in _muted]
 
+        # 受信者 id→name（メンション判定用・スレッド安全な素クエリ）
+        try:
+            _urows = supabase.table("users").select("id, name").execute().data or []
+            _uid2name = {u["id"]: (u.get("name") or "") for u in _urows}
+        except Exception:
+            _uid2name = {}
+
+        _content_short = content[:80] if content else ("📷 写真" if has_image else "")
+
         expired: list[str] = []
         for row in rows:
             # 受信者ごとに未読数を計算してペイロードに乗せる（sw.js がバッジに使う）
@@ -351,9 +360,18 @@ def send_push(room: str, sender_uid: str, sender_name: str,
                 unread = sum(get_unread_counts(recipient_uid, r_rooms).values()) if r_rooms else 1
             except Exception:
                 unread = 1
+            # メンション判定: 本文に @受信者名 / ＠受信者名 が含まれれば専用の通知文に変える
+            _rname = _uid2name.get(recipient_uid, "")
+            _mentioned = bool(_rname and content and (("@" + _rname) in content or ("＠" + _rname) in content))
+            if _mentioned:
+                _title = f"📣 {sender_name}があなたをメンション"
+                _body  = _content_short or "あなた宛のメッセージ"
+            else:
+                _title = f"danran 🏠 {room}"
+                _body  = body
             payload = json.dumps({
-                "title":        f"danran 🏠 {room}",
-                "body":         body,
+                "title":        _title,
+                "body":         _body,
                 "room":         room,
                 "url":          "/",
                 "unread_count": unread,

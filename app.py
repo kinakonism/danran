@@ -849,6 +849,26 @@ def _get_last_read_ts(user_id: str, room: str) -> str | None:
     except Exception:
         return None
 
+def set_room_pin(room_name: str, msg_id: str | None) -> None:
+    """ルームのピン留めメッセージを設定（msg_id=None で解除）。1ルーム1件。"""
+    try:
+        supabase.table("rooms").update({"pinned_message_id": msg_id}).eq("name", room_name).execute()
+    except Exception:
+        pass
+
+def get_room_pin(room_name: str) -> dict | None:
+    """ルームのピン留めメッセージ {id,user_name,content,image_url} を返す。無ければ None。"""
+    try:
+        rr = supabase.table("rooms").select("pinned_message_id").eq("name", room_name).limit(1).execute().data or []
+        pid = rr[0].get("pinned_message_id") if rr else None
+        if not pid:
+            return None
+        m = supabase.table("messages").select("id, user_name, content, image_url")\
+            .eq("id", pid).limit(1).execute().data or []
+        return m[0] if m else None
+    except Exception:
+        return None
+
 def read_by_users(room: str, my_id: str, msg_created_iso: str) -> list[dict]:
     """指定メッセージ(msg_created_iso)以降に既読にした「自分以外」のユーザー一覧を返す。
     last_read（ユーザー×ルームの最終既読時刻）を流用。軽い既読表示用。"""
@@ -924,7 +944,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v124",   # リアクション＋ピッカー（多数の絵文字から選ぶ）＋全絵文字をピル表示
+    "danran_lp_v125",   # メッセージのピン留め（長押し📌→上部バー、✕で解除、タップでジャンプ）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -3084,6 +3104,35 @@ if "current_user" in st.session_state:
             f'</div>'
         )
 
+# ── ピン留めバー（チャット表示中・ピンがある時だけ。ヘッダー直下に固定）──
+_pin_bar_html = ""
+_pad_top = 62
+if ("current_user" in st.session_state and not _is_profile and not _show_rooms and _active_room):
+    _pin = get_room_pin(_active_room)
+    if _pin:
+        _ptext = (_pin.get("content") or "").strip().replace("\n", " ")
+        if not _ptext and _pin.get("image_url"):
+            _ptext = "📷 写真"
+        _ptext = _ptext[:60]
+        _pname = _pin.get("user_name", "") or ""
+        _pin_bar_html = (
+            f'<div id="_danran_pin_bar" style="position:fixed;top:52px;left:0;right:0;z-index:2147483646;'
+            f'background:rgba(36,31,28,0.97);border-bottom:1px solid rgba(240,168,104,0.35);'
+            f'display:flex;align-items:center;gap:8px;padding:6px 12px;box-sizing:border-box;'
+            f'backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)">'
+            f'<span style="font-size:0.95rem;flex-shrink:0">📌</span>'
+            f'<div data-lp-jump="{_html.escape(_pin.get("id",""))}" '
+            f'style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+            f'font-size:0.8rem;color:rgba(240,232,224,0.85);cursor:pointer">'
+            f'<span style="color:rgba(240,168,104,0.9)">{_html.escape(_pname)}</span>'
+            f' {_html.escape(_ptext)}</div>'
+            f'<button data-unpin="1" style="background:none;border:none;color:rgba(240,232,224,0.6);'
+            f'font-size:1rem;cursor:pointer;flex-shrink:0;padding:2px 4px;'
+            f'-webkit-tap-highlight-color:transparent">✕</button>'
+            f'</div>'
+        )
+        _pad_top = 98   # ピンバーの高さぶん本文を下げる
+
 st.html(
     # PWA manifest + iOS メタタグ（毎 rerun で同じ内容を書くが副作用なし）
     '<link rel="manifest" href="/manifest.json">'
@@ -3118,9 +3167,9 @@ st.html(
     + (
         '<style>'
         '[data-testid="stMainBlockContainer"]'
-        '{padding-top:62px!important;padding-bottom:160px!important;}'
+        f'{{padding-top:{_pad_top}px!important;padding-bottom:160px!important;}}'
         '</style>'
-        + _hdr_html
+        + _hdr_html + _pin_bar_html
         if _hdr_html else ""
     )
 )
@@ -3243,6 +3292,19 @@ if isinstance(_lp_result, dict):
             # メッセージ削除後など: チャットHTMLキャッシュを捨ててDBから綺麗に再描画
             st.session_state.pop("_chat_html", None)
             st.rerun()
+        elif _nav == "pin_message":
+            # 長押しメニュー → このメッセージをルーム上部にピン留め（1ルーム1件）
+            _pid = _lp_result.get("msg_id", "")
+            _proom = st.session_state.get("active_room", "")
+            if _pid and _proom:
+                set_room_pin(_proom, _pid)
+                st.rerun()
+        elif _nav == "unpin_message":
+            # ピンバーの ✕ → 解除
+            _proom = st.session_state.get("active_room", "")
+            if _proom:
+                set_room_pin(_proom, None)
+                st.rerun()
         elif _nav == "set_reply":
             # メッセージ長押し/左スワイプ → 引用返信ターゲットをセット（入力欄上にバー表示）
             _rid = _lp_result.get("reply_id", "")

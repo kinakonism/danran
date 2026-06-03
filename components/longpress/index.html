@@ -824,6 +824,13 @@
         }, true));
       }
 
+      // 📌 ピン留め（全メッセージ・1ルーム1件。ルーム上部に固定表示される）
+      pop.appendChild(makeSep());
+      pop.appendChild(makeBtn('📌 ピン', function () {
+        hidePopup();
+        sendNav({ action: 'pin_message', msg_id: msgId, ts: Date.now() });
+      }, true));
+
       // ✕ 閉じるボタンは無し。外タップで閉じる：
       //  ① 透明バックドロップ（画面全体を覆うモーダル背面）への「新規タップ」で閉じる。
       //     長押しを開いた指の touchstart はバックドロップ生成前なので拾わず、離した時の
@@ -1971,6 +1978,13 @@
           e.preventDefault(); e.stopPropagation();
           try { localStorage.setItem('danran_fs', fsb.getAttribute('data-fontscale') || '1'); } catch (x) {}
           applyFontScale();
+          return;
+        }
+        // ピンバーの ✕ → ピン解除
+        var unp = t.closest('[data-unpin]');
+        if (unp) {
+          e.preventDefault(); e.stopPropagation();
+          sendNav({ action: 'unpin_message', ts: Date.now() });
           return;
         }
         // リアクションのピルをタップ → 自分のリアクションをトグル（再度押すと外れる）。

@@ -924,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v122",   # 検索: 読込済みヒット0ならDBを遡って検索（読み取り専用プレビュー）
+    "danran_lp_v123",   # 設定画面 ⚙️（data-hdr-settings ハンドラ追加）
     path=_LP_COMPONENT_DIR,
 )
 

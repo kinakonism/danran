@@ -830,6 +830,15 @@ def mark_as_read(user_id: str, room: str) -> None:
     except Exception:
         pass
 
+def _get_last_read_ts(user_id: str, room: str) -> str | None:
+    """(user, room) の最終既読時刻 ISO。未読ポップアップの基準（入室時に固定）に使う。"""
+    try:
+        rows = supabase.table("last_read").select("read_at")\
+            .eq("user_id", user_id).eq("room_name", room).limit(1).execute().data or []
+        return rows[0]["read_at"] if rows else None
+    except Exception:
+        return None
+
 def read_by_users(room: str, my_id: str, msg_created_iso: str) -> list[dict]:
     """指定メッセージ(msg_created_iso)以降に既読にした「自分以外」のユーザー一覧を返す。
     last_read（ユーザー×ルームの最終既読時刻）を流用。軽い既読表示用。"""
@@ -905,7 +914,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v109",   # スプラッシュ固着対策: render取りこぼし時も restore_session を強制再送（splashWatchdog）
+    "danran_lp_v110",   # 入室時に「N件の未読」バナー→タップで先頭未読へジャンプ（unreadBanner）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1051,6 +1060,37 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
 
     # リアクション一括取得
     all_reactions = fetch_reactions_bulk([m["id"] for m in messages])
+
+    # ── 未読ポップアップ用: 入室時の last_read を「未読アンカー」として固定する ──
+    #   入室後は poll の mark_as_read で既読化されるが、アンカーは session に固定して
+    #   「入室時点で未読だったメッセージ」の先頭と件数を求める（JS が上部に出して飛ぶ）。
+    #   ★ render_chat_messages は poll より先に走るので、ここで取れる last_read は
+    #     「既読化される前」の値（＝入室時の本当の未読基準）。
+    _first_unread_id = ""
+    _unread_n = 0
+    if my_id:
+        if st.session_state.get("_unread_anchor_room") != selected_room:
+            st.session_state["_unread_anchor_room"] = selected_room
+            st.session_state["_unread_anchor_ts"]   = _get_last_read_ts(my_id, selected_room)
+        _anchor_ts = st.session_state.get("_unread_anchor_ts")
+        if _anchor_ts:
+            def _p(s):
+                try:
+                    return datetime.fromisoformat((s or "").replace("Z", "+00:00"))
+                except Exception:
+                    return None
+            _a = _p(_anchor_ts)
+            if _a is not None:
+                for _m in messages:
+                    _muid = _m.get("user_id", "")
+                    _mine = (_muid == my_id) if (_muid and my_id) else (_m.get("user_name") == uname)
+                    if _mine:
+                        continue   # 自分のメッセージは未読に数えない
+                    _cd = _p(_m.get("created_at"))
+                    if _cd is not None and _cd > _a:
+                        if not _first_unread_id:
+                            _first_unread_id = _m.get("id", "")
+                        _unread_n += 1
 
     # AI サポートルームなら、ボットアイコンにオンライン状態ランプを出す（🟢=応答可 / グレー=不在）
     _ai_room = (selected_room == AI_ROOM_NAME)
@@ -1370,8 +1410,17 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'color:rgba(240,232,224,0.45)">既読 {len(_readers)}</div>'
             )
 
+    # 未読ポップアップ用の隠し情報（JS が読んで上部に「N件の未読」を出し、タップで先頭未読へ）
+    _unread_info = ""
+    if _first_unread_id and _unread_n > 0:
+        _unread_info = (
+            f'<div id="_danran_unread_info" style="display:none" '
+            f'data-count="{_unread_n}" data-first="{_html.escape(_first_unread_id)}" '
+            f'data-room="{_html.escape(selected_room)}"></div>'
+        )
+
     # 全バブルを 1 つの文字列で返す（呼び出し元が 1 回だけ st.markdown する）
-    return '\n'.join(_bubbles)
+    return _unread_info + '\n'.join(_bubbles)
 
 
 # ── 変化時のみ再描画する仕組み ────────────────────────────────────────
@@ -2920,6 +2969,9 @@ if isinstance(_lp_result, dict):
         if _nav == "go_rooms":
             st.session_state["_show_rooms"] = True
             st.session_state["_nav_anim"] = "left"   # ルーム選択を左からスライドイン
+            # 未読アンカーを破棄 → 次に部屋へ入る時に「入室時の未読」を取り直す
+            st.session_state.pop("_unread_anchor_room", None)
+            st.session_state.pop("_unread_anchor_ts", None)
             st.rerun()
         elif _nav == "go_chat":
             st.session_state.pop("_show_rooms", None)

@@ -1858,6 +1858,7 @@
     sweepToast();           // 期限切れトーストの掃除（死んだ iframe タイマー対策）
     scrollToLatestOnEnter(); // チャット入室時に最新メッセージへ即移動
     scrollTopOnEditEnter();  // 編集系画面に入った瞬間だけ先頭へ（変なスクロール継承を防ぐ）
+    unreadBanner();          // 入室時に未読があれば上部に「N件の未読」バナーを出す
     // JS フォールバック: Python ヘッダーが DOM にない場合のみ注入
     // （通常は Python が st.html() でレンダリングするため実行されない）
     try {
@@ -2618,6 +2619,53 @@
           setTimeout(function () { try { target.style.animation = ''; } catch (e) {} }, 700);
         } catch (e) {}
       }, 320);
+    } catch (e) {}
+  }
+
+  /* 入室時に未読があれば上部に「N件の未読」バナーを出す。タップで先頭未読へジャンプ。
+     Python が #_danran_unread_info（data-count/data-first）を出力する。入室1回だけ表示。 */
+  function unreadBanner() {
+    try {
+      var pDoc = window.parent.document;
+      // チャット表示中のみ（ルーム選択・編集画面では出さない）
+      if (pDoc._danranSR) return;
+      var v = pDoc._danranView;
+      if (v && v !== 'chat' && v !== '') return;
+      var info = pDoc.getElementById('_danran_unread_info');
+      if (!info) return;
+      var n     = parseInt(info.getAttribute('data-count') || '0', 10);
+      var first = info.getAttribute('data-first') || '';
+      var room  = info.getAttribute('data-room')  || '';
+      if (!n || !first) return;
+      var key = room + '|' + first + '|' + n;
+      pDoc._danranUnreadShownKeys = pDoc._danranUnreadShownKeys || {};
+      if (pDoc._danranUnreadShownKeys[key]) return;   // この入室では表示済み
+      pDoc._danranUnreadShownKeys[key] = true;
+
+      var old = pDoc.getElementById('_danran_unread_banner'); if (old) old.remove();
+      var b = pDoc.createElement('div');
+      b.id = '_danran_unread_banner';
+      b.style.cssText = 'position:fixed;top:60px;left:50%;'
+        + 'transform:translateX(-50%) translateY(-8px);z-index:2147483600;'
+        + 'background:#f0a868;color:#1a1614;font-weight:700;font-size:0.85rem;'
+        + 'padding:8px 16px;border-radius:20px;box-shadow:0 6px 20px rgba(0,0,0,0.45);'
+        + 'cursor:pointer;opacity:0;transition:opacity .2s,transform .2s;white-space:nowrap;'
+        + '-webkit-tap-highlight-color:transparent;';
+      b.textContent = '🔽 ' + n + '件の未読メッセージ';
+      function dismiss() {
+        b.style.opacity = '0'; b.style.transform = 'translateX(-50%) translateY(-8px)';
+        setTimeout(function () { if (b.parentNode) b.remove(); }, 200);
+      }
+      b.addEventListener('click', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        try { jumpToMessage(first); } catch (x) {}
+        dismiss();
+      });
+      pDoc.body.appendChild(b);
+      requestAnimationFrame(function () {
+        b.style.opacity = '1'; b.style.transform = 'translateX(-50%) translateY(0)';
+      });
+      setTimeout(function () { if (b.parentNode) dismiss(); }, 7000);   // 自動的に引っ込む
     } catch (e) {}
   }
 

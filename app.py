@@ -924,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v116",   # チャット内インクリメンタル検索（ヘッダー🔍→検索バー→ヒットへ移動＆ハイライト）
+    "danran_lp_v117",   # 検索: 入力中はスクロールせずハイライトのみ（移動は↑↓）＝入力を見失わない
     path=_LP_COMPONENT_DIR,
 )
 

@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import tomllib
@@ -57,6 +58,9 @@ OWNER_NAME      = "まさと"          # 破壊的変更の承認者・通知先
 IMPLEMENT_ON    = True              # 自動実装ループの有効/無効スイッチ
 IMPL_TIMEOUT    = 600              # 実装役 claude の最大実行秒
 IMPL_LOCK       = threading.Lock()  # 同時に走る実装は1つだけ
+STUCK_MIN       = 12                # implementing がこの分数を超えたら failed に回収
+# 安全網: デプロイ後ヘルスチェック先（Streamlit の health エンドポイント）
+APP_HEALTH_URL  = "https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/_stcore/health"
 # 実装役が触ってよいファイル（破壊的変更の防波堤の一つ）
 EDIT_ALLOW      = "app.py / components/longpress/index.html / sw.js / manifest.json / .streamlit/config.toml"
 # 依頼者の「進めていい？」への合図（肯定/否定）
@@ -397,6 +401,54 @@ IMPL_ALLOWED = ("Edit,Write,Read,Glob,Grep,"
 def _git(*a):
     return subprocess.run(["git", *a], cwd=REPO_DIR, capture_output=True, text=True, timeout=60)
 
+def _compile_guard():
+    """push 済みツリーの app.py がコンパイル（構文）OK か。実装役の自己チェックすり抜け対策。"""
+    try:
+        r = subprocess.run([sys.executable, "-m", "py_compile", "app.py"],
+                           cwd=REPO_DIR, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return (False, "app.py 構文エラー: " + (r.stderr or "")[-200:])
+        return (True, "")
+    except Exception as e:
+        return (True, "")   # チェック自体が失敗したらロールバックはしない（誤爆防止）
+
+def _http_ok(url, timeout=10):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "danran-bridge"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = (r.read(64) or b"").decode("utf-8", "ignore").lower()
+            return getattr(r, "status", 200) == 200 and ("ok" in body or body.strip() == "")
+    except Exception:
+        return False
+
+def reclaim_stuck_tasks():
+    """mini が実装中に落ちる等で implementing のまま固着したタスクを failed に戻す。"""
+    try:
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=STUCK_MIN)).isoformat()
+        stuck = api("GET", "ai_tasks?select=id&status=eq.implementing&updated_at=lt."
+                    + urllib.parse.quote(cutoff)) or []
+        for t in stuck:
+            # STUCK_MIN(12分) > IMPL_TIMEOUT(10分) なので、ここに来る＝実装フローは既に終了/死亡。
+            # ロックは同一プロセス内で finally 解放済み or プロセスごと消滅しているため触らない。
+            set_task_status(t["id"], "failed", "実装プロセスが途中で停止（自動回収）")
+            print("[danran-bridge] ♻ 固着タスクを回収:", t["id"])
+    except Exception:
+        pass
+
+def post_deploy_healthcheck(room):
+    """デプロイ後、アプリが応答するか確認（通知のみ・自動ロールバックはしない＝誤爆防止）。"""
+    try:
+        time.sleep(150)   # Streamlit 再デプロイを待つ
+        for _ in range(4):
+            if _http_ok(APP_HEALTH_URL):
+                return
+            time.sleep(20)
+        notify_owner("danran デプロイ後 応答なし",
+                     f"[{room}] 直近の自動実装の後、アプリの health チェックが通りません。確認して。")
+    except Exception:
+        pass
+
 def run_implementer(request_text, convo):
     """実装役 claude を起動して実装→push まで行う。戻り: (status, summary)
        status: 'done'（push 済み）/ 'needs_owner'（破壊的で保留）/ 'failed'。"""
@@ -419,19 +471,28 @@ def run_implementer(request_text, convo):
         reason = out.split("NEEDS_OWNER", 1)[1].lstrip(": ：").strip()[:300]
         return ("needs_owner", reason or "破壊的/要注意のため保留")
 
+    def _finalize_done():
+        # 安全網: push 済みツリーが壊れていたら自動ロールバック
+        ok, err = _compile_guard()
+        if not ok:
+            _git("revert", "--no-edit", "HEAD")
+            _git("push", "origin", "main")
+            _git("fetch", "origin", "main")
+            return ("reverted", err)
+        return ("done", out[-500:].strip() or "実装してデプロイしました")
+
     # 実際に push されたか検証（HEAD が進み、origin/main に乗ったか）
     _git("fetch", "origin", "main")
     head_after = _git("rev-parse", "HEAD").stdout.strip()
     origin = _git("rev-parse", "origin/main").stdout.strip()
     if head_after and head_after != head_before and head_after == origin:
-        summary = out[-500:].strip() if out else "実装してデプロイしました"
-        return ("done", summary)
+        return _finalize_done()
     # コミットはあるが push できていない等
     if head_after != head_before:
         _git("push", "origin", "main")
         _git("fetch", "origin", "main")
         if _git("rev-parse", "HEAD").stdout.strip() == _git("rev-parse", "origin/main").stdout.strip():
-            return ("done", (out[-500:].strip() or "実装してデプロイしました"))
+            return _finalize_done()
     return ("failed", "コード変更が確認できませんでした（実装されなかった可能性）")
 
 
@@ -469,6 +530,13 @@ def implement_flow(task, room):
             post_reply("✅ 直したよ！" + (("\n" + summary) if summary else "") +
                        "\nアプリ更新済み（1〜2分で反映、出ないときは再起動してね）", room)
             notify_owner("danran 自動実装", f"[{room}] {req} の依頼を実装＆デプロイ: {summary[:120]}")
+            # デプロイ後ヘルスチェック（別スレッド・通知のみ）
+            threading.Thread(target=post_deploy_healthcheck, args=(room,), daemon=True).start()
+        elif status == "reverted":
+            set_task_status(task["id"], "failed", "デプロイ後に構文エラーを検知し自動ロールバック: " + summary)
+            post_reply("ごめん、変更でエラーが出たので自動で元に戻したよ。まさとに見てもらうね🙏", room)
+            notify_owner("danran 自動ロールバック",
+                         f"[{room}] {task.get('request_text','')[:60]} → {summary[:120]}")
         elif status == "needs_owner":
             set_task_status(task["id"], "needs_review", summary)
             post_reply("ごめん、これは念のためまさとに確認してから対応するね🙏", room)
@@ -498,9 +566,13 @@ def main():
         if msgs:
             last_by_room[rn] = parse_ts(msgs[-1].get("created_at"))
     print(f"[danran-bridge] 既存はスキップ。新着を待機中…（Ctrl+C で停止）")
+    _last_reclaim = 0.0
     while True:
         try:
             heartbeat()
+            if time.time() - _last_reclaim > 60:   # 固着タスク回収は約60秒ごと
+                reclaim_stuck_tasks()
+                _last_reclaim = time.time()
             for rn, msgs in _group_by_room(fetch_all_recent()).items():
                 if not msgs:
                     continue

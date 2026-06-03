@@ -388,6 +388,8 @@ UNIQUE(user_id, room_name) で upsert。
 | avatars     | ユーザーアイコン写真（`{user_id}.jpg`）、ルームアイコン写真（`room_{room_id}.jpg`） |
 | chat-images | チャット添付画像（JS が直接アップロード）   |
 
+**孤児ファイルの自動掃除**: メッセージ/ルーム削除は主に JS 経由で Storage オブジェクトは残る（孤児）。bridge（mini）が **日次で `orphan_sweep()`** を実行し、`messages.image_url`（chat-images）/ `users.avatar`・`rooms.icon`（avatars）に参照されず **24時間より古い**オブジェクトを削除する。アップロード直後（メッセージ未挿入の窓）を消さないための猶予が24h。RLS は `danran_orphan_select`/`danran_orphan_delete`（chat-images/avatars に list/delete 許可）。anon key 運用なので service_role は不要。
+
 ### pg_cron
 
 ```sql

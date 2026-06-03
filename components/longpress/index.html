@@ -2768,7 +2768,9 @@
   }
   function _searchStep(pDoc, dir) {
     var S = pDoc._danranSearch; if (!S || !S.ids.length) return;
-    _searchGoto(pDoc, S.idx + dir);   // ↑(-1)=古い / ↓(+1)=新しい
+    // 循環移動（末尾→先頭へラップ）。↑(-1)=古い / ↓(+1)=新しい / Return も同様
+    var ni = (S.idx + dir + S.ids.length) % S.ids.length;
+    _searchGoto(pDoc, ni);
   }
   function closeSearchBar(pDoc) {
     pDoc._danranSearch = { open: false, q: '', ids: [], idx: 0 };
@@ -2787,7 +2789,7 @@
       + 'display:flex;align-items:center;gap:4px;padding:7px 10px;box-sizing:border-box;'
       + 'box-shadow:0 4px 14px rgba(0,0,0,0.4);transform:translateZ(0);';   // translateZ=iOSで固定を安定化
     bar.innerHTML =
-        '<input id="_danran_search_input" type="search" placeholder="このルームを検索" '
+        '<input id="_danran_search_input" type="text" enterkeyhint="next" placeholder="このルームを検索" '
       // ★ font-size は必ず 16px 以上（iOS が入力フォーカス時に自動ズームして画面が崩れるのを防ぐ）
       + 'style="flex:1;min-width:0;background:#1a1614;border:1px solid rgba(255,255,255,0.15);'
       + 'border-radius:18px;color:#f0e8e0;font-size:16px;padding:7px 12px;outline:none">'
@@ -2803,7 +2805,11 @@
     var inp = pDoc.getElementById('_danran_search_input');
     inp.addEventListener('input', function () { _runSearch(pDoc, inp.value); });
     inp.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); _searchStep(pDoc, e.shiftKey ? 1 : -1); }
+      if (e.key === 'Enter') {
+        e.preventDefault(); e.stopPropagation();
+        _searchStep(pDoc, e.shiftKey ? 1 : -1);
+        try { inp.focus(); } catch (x) {}   // キーボードを閉じない＝続けて Return で循環移動できる
+      }
     });
     pDoc.getElementById('_danran_search_prev').addEventListener('click', function (e) { e.preventDefault(); _searchStep(pDoc, -1); });
     pDoc.getElementById('_danran_search_next').addEventListener('click', function (e) { e.preventDefault(); _searchStep(pDoc, 1); });

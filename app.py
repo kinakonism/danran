@@ -924,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v119",   # 検索: ヒット移動を瞬間スクロール(固定バー消え防止)＋右側コントロール拡大
+    "danran_lp_v120",   # 検索: Returnで循環移動＋keyboard維持(type=text)＝バー消え防止
     path=_LP_COMPONENT_DIR,
 )
 

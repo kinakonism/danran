@@ -1481,7 +1481,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'<div style="font-size:0.7rem;color:#888;margin-bottom:3px">{fmt_ts(ts)}</div>'
                 f'<div style="{_mine_bstyle};'
                 f'display:inline-block;max-width:100%;text-align:left;'
-                f'word-break:break-word;line-height:1.15;font-size:calc({_content_fs} * var(--dr-fs,1));'
+                f'word-break:break-word;line-height:1.45;font-size:calc({_content_fs} * var(--dr-fs,1));'
                 # ★ 絵文字をフルカラー描画（継承された -webkit-text-fill-color で 💩 等が
                 #   文字色に塗られてモノクロ化するのを防ぐ。テキストは currentColor=文字色のまま）
                 f'-webkit-text-fill-color:currentColor">{content}</div>'
@@ -1506,7 +1506,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
                 f'margin-bottom:3px">{sender}</div>'
                 f'<div style="{_other_bstyle};'
                 f'display:inline-block;max-width:100%;text-align:left;'
-                f'word-break:break-word;line-height:1.15;font-size:calc({_content_fs} * var(--dr-fs,1));'
+                f'word-break:break-word;line-height:1.45;font-size:calc({_content_fs} * var(--dr-fs,1));'
                 f'-webkit-text-fill-color:currentColor">{content}</div>'
                 f'<div style="font-size:0.7rem;color:#888;margin-top:3px">{fmt_ts(ts)}</div>'
                 f'{pills_row}'

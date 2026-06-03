@@ -924,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v123",   # 設定画面 ⚙️（data-hdr-settings ハンドラ追加）
+    "danran_lp_v124",   # リアクション＋ピッカー（多数の絵文字から選ぶ）＋全絵文字をピル表示
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1201,9 +1201,16 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
     _ai_up   = ai_online() if _ai_room else False
 
     # ── リアクション pills 生成（通常バブル・連投グリッド両方で共用）──
+    def _pill_emojis(msg_reactions: dict) -> list[str]:
+        """表示する絵文字を決定的順序で返す。既定5種を先頭順、その他は文字コード順。
+        （＋ピッカーで任意の絵文字が付くため、固定5種以外も表示する）"""
+        present = [e for e in REACTION_EMOJIS if msg_reactions.get(e)]
+        extras  = sorted(e for e in msg_reactions if e not in REACTION_EMOJIS and msg_reactions.get(e))
+        return present + extras
+
     def _build_pills(msg_reactions: dict) -> str:
         pills = ""
-        for emoji in REACTION_EMOJIS:
+        for emoji in _pill_emojis(msg_reactions):
             users = msg_reactions.get(emoji, [])
             if users:
                 my  = uname in users
@@ -1221,7 +1228,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
 
     def _react_users_json(msg_reactions: dict) -> str:
         """{emoji: [name,...]} を data 属性用 JSON に（誰がどのスタンプを押したか）。"""
-        data = {e: msg_reactions.get(e, []) for e in REACTION_EMOJIS if msg_reactions.get(e)}
+        data = {e: msg_reactions.get(e, []) for e in _pill_emojis(msg_reactions)}
         return _html.escape(json.dumps(data, ensure_ascii=False), quote=True)
 
     # ── 連投画像のグルーピング（LINE 風コンパクトグリッド）──

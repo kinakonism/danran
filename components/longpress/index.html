@@ -474,6 +474,13 @@
    *  長押しポップアップ（親ドキュメントに注入）
    * ════════════════════════════════════════ */
   var EMOJIS = ['👍', '❤️', '😂', '😲', '🙏'];
+  // ＋ボタンで開く絵文字ピッカーの候補（スペース区切り→配列）
+  var EMOJI_PICK = ('😀 😃 😄 😁 😆 😅 😂 🤣 🙂 😉 😊 😍 🥰 😘 😋 😎 🤩 🥳 🤔 😴 '
+    + '😢 😭 😡 😱 😲 😮 🥺 😬 🙄 😏 '
+    + '👍 👎 👏 🙏 🙌 💪 🤝 ✌️ 🤞 👌 '
+    + '❤️ 🧡 💛 💚 💙 💜 🤍 💕 💖 💔 '
+    + '🎉 🎊 ✨ 🔥 💯 ⭐ 🌟 👀 🍀 🌸 '
+    + '🍻 🍰 🎂 🍣 🍙 ☕ 🐶 🐱 🚗 🏠').split(' ');
 
   var POPUP_BACK_ID = '_danran_lp_back';
   function hidePopup() {
@@ -663,6 +670,45 @@
     } catch (e) {}
   }
 
+  // ＋ から開く絵文字ピッカー（下から出るシート）。選ぶとそのリアクションを付ける。
+  function showEmojiPicker(msgId) {
+    try {
+      var pDoc = window.parent.document;
+      hidePopup();   // リアクションポップアップは閉じる
+      if (pDoc.getElementById('_danran_emoji_picker')) return;
+      var ov = pDoc.createElement('div');
+      ov.id = '_danran_emoji_picker';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.5);'
+        + 'display:flex;align-items:flex-end;justify-content:center;';
+      var card = pDoc.createElement('div');
+      card.style.cssText = 'background:#241f1c;border-top-left-radius:18px;border-top-right-radius:18px;'
+        + 'width:100%;max-width:480px;max-height:55vh;overflow-y:auto;padding:14px 12px 24px;'
+        + 'box-shadow:0 -8px 28px rgba(0,0,0,0.5);-webkit-overflow-scrolling:touch;';
+      var html = '<div style="text-align:center;color:rgba(240,232,224,0.5);font-size:0.8rem;'
+        + 'margin-bottom:8px">リアクションを選ぶ</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(8,1fr);gap:4px">';
+      for (var i = 0; i < EMOJI_PICK.length; i++) {
+        html += '<button data-pick="' + EMOJI_PICK[i] + '" style="background:none;border:none;'
+          + 'font-size:1.7rem;padding:7px 0;cursor:pointer;border-radius:10px;'
+          + '-webkit-tap-highlight-color:transparent">' + EMOJI_PICK[i] + '</button>';
+      }
+      html += '</div>';
+      card.innerHTML = html;
+      ov.appendChild(card);
+      function close() { if (ov.parentNode) ov.remove(); }
+      ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+      card.addEventListener('click', function (e) {
+        var b = e.target && e.target.closest ? e.target.closest('[data-pick]') : null;
+        if (!b) return;
+        e.preventDefault(); e.stopPropagation();
+        var em = b.getAttribute('data-pick');
+        close();
+        if (em) toggleReactionAndUpdate(msgId, em);
+      }, true);
+      pDoc.body.appendChild(ov);
+    } catch (e) { console.error('[danran] emojiPicker:', e); }
+  }
+
   function showPopup(el, msgId, isMine) {
     hidePopup();
     try {
@@ -704,7 +750,7 @@
         return b;
       }
 
-      // 他人のメッセージ → 絵文字リアクション
+      // 他人のメッセージ → 絵文字リアクション（5種 ＋ ＋でもっと選ぶ）
       if (!isMine) {
         EMOJIS.forEach(function (emoji) {
           pop.appendChild(makeBtn(emoji, function (b) {
@@ -713,6 +759,10 @@
             toggleReactionAndUpdate(msgId, emoji);   // 即 DOM 更新
           }));
         });
+        // ＋ → たくさんの絵文字から選ぶピッカー
+        var plus = makeBtn('＋', function () { showEmojiPicker(msgId); });
+        plus.style.opacity = '0.85';
+        pop.appendChild(plus);
       }
 
       // 自分のメッセージ → 削除のみ（2段階確認）

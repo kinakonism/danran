@@ -3653,20 +3653,35 @@
       } catch (e) { ta.value = val; }
       ta.dispatchEvent(new Event('input', { bubbles: true }));
     }
+    function _insertIntoTa(ta, txt) {
+      txt = (txt || '').replace(/\r\n?/g, '\n');
+      if (!txt) return;
+      var s = ta.selectionStart || 0, en = ta.selectionEnd || 0, v = ta.value || '';
+      _setTaValue(ta, v.slice(0, s) + txt + v.slice(en));
+      var p = s + txt.length;
+      try { ta.setSelectionRange(p, p); ta.focus(); } catch (x) {}
+    }
     pDoc.addEventListener('paste', function (e) {
       var ta = e.target;
       if (!ta || !ta.closest || !ta.closest('[data-testid="stChatInput"]')) return;
       var cd = e.clipboardData || (pDoc.defaultView && pDoc.defaultView.clipboardData);
-      if (!cd) return;
-      var txt = cd.getData('text/plain') || cd.getData('text/uri-list')
-             || cd.getData('text') || cd.getData('URL') || '';
-      if (!txt) return;                 // 取れなければ既定動作に任せる（回帰防止）
-      txt = txt.replace(/\r\n?/g, '\n'); // 改行コードを正規化
-      e.preventDefault(); e.stopImmediatePropagation();
-      var s = ta.selectionStart || 0, en = ta.selectionEnd || 0, v = ta.value || '';
-      _setTaValue(ta, v.slice(0, s) + txt + v.slice(en));
-      var p = s + txt.length;
-      try { ta.setSelectionRange(p, p); } catch (x) {}
+      var txt = cd ? (cd.getData('text/plain') || cd.getData('text/uri-list')
+                      || cd.getData('text') || cd.getData('URL') || '') : '';
+      if (txt) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        _insertIntoTa(ta, txt);
+        return;
+      }
+      // clipboardData から取れない（iOS の Google 共有等のリッチ内容）→ readText に頼る。
+      // paste はユーザー操作なので readText の許可が下りる。preventDefault して二重挿入を防ぐ。
+      var nav = (pDoc.defaultView && pDoc.defaultView.navigator) || navigator;
+      if (nav.clipboard && nav.clipboard.readText) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        nav.clipboard.readText().then(function (t) {
+          if (t) _insertIntoTa(ta, t);
+        }).catch(function () {});
+      }
+      // readText も無ければ既定動作に任せる（回帰防止）
     }, true);
 
     // ★ Enter は「改行」にする（送信は➤ボタン、PC は Cmd/Ctrl+Enter）。

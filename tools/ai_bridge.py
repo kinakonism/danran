@@ -455,6 +455,115 @@ def _http_ok(url, timeout=10):
     except Exception:
         return False
 
+def storage_api(method, path, body=None, tries=3):
+    """Supabase Storage REST 呼び出し（/storage/v1/...）。api() と同じくリトライ付き。"""
+    data = json.dumps(body).encode() if body is not None else None
+    last_err = None
+    for attempt in range(tries):
+        req = urllib.request.Request(URL + "/storage/v1/" + path, data=data, headers=HDR, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                raw = r.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            if 500 <= e.code < 600 and attempt < tries - 1:
+                last_err = e; time.sleep(0.6 * (attempt + 1)); continue
+            raise
+        except _RETRYABLE as e:
+            last_err = e
+            if attempt < tries - 1:
+                time.sleep(0.6 * (attempt + 1)); continue
+            raise
+    if last_err:
+        raise last_err
+
+def _obj_name_from_url(url, bucket):
+    """公開URL …/object/public/{bucket}/{name} から name を取り出す。"""
+    if not url:
+        return ""
+    marker = "/" + bucket + "/"
+    i = url.find(marker)
+    if i < 0:
+        return ""
+    return url[i + len(marker):].split("?")[0]
+
+ORPHAN_GRACE_H = 24   # アップロード直後（メッセージ未挿入の窓）を消さない猶予
+
+def _sweep_bucket(bucket, referenced):
+    """bucket の孤児（referenced に無く ORPHAN_GRACE_H 時間より古い）を削除。削除数を返す。"""
+    deleted = 0
+    try:
+        from datetime import datetime, timezone, timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=ORPHAN_GRACE_H)
+        offset = 0
+        orphans = []
+        while True:
+            page = storage_api("POST", "object/list/" + urllib.parse.quote(bucket),
+                               {"prefix": "", "limit": 1000, "offset": offset,
+                                "sortBy": {"column": "name", "order": "asc"}}) or []
+            if not page:
+                break
+            for o in page:
+                nm = o.get("name", "")
+                if not nm or nm in referenced:
+                    continue
+                ca = o.get("created_at") or o.get("updated_at") or ""
+                try:
+                    dt = datetime.fromisoformat(ca.replace("Z", "+00:00"))
+                except Exception:
+                    dt = None
+                if dt is None or dt < cutoff:   # 日付不明も猶予超えとみなして対象
+                    orphans.append(nm)
+            if len(page) < 1000:
+                break
+            offset += 1000
+        # まとめて削除（prefixes 指定）。50件ずつ。
+        for i in range(0, len(orphans), 50):
+            chunk = orphans[i:i + 50]
+            try:
+                storage_api("DELETE", "object/" + urllib.parse.quote(bucket), {"prefixes": chunk})
+                deleted += len(chunk)
+            except Exception as e:
+                print("[danran-bridge] orphan delete err:", e)
+    except Exception as e:
+        print("[danran-bridge] sweep err (%s):" % bucket, e)
+    return deleted
+
+def orphan_sweep():
+    """孤児ファイル（削除済みメッセージ/ルームの画像など）を Storage から自動掃除。日次。"""
+    try:
+        # chat-images: messages.image_url で参照されている name 集合
+        refs_img = set()
+        rows = api("GET", "messages?select=image_url") or []
+        for m in rows:
+            n = _obj_name_from_url(m.get("image_url"), "chat-images")
+            if n:
+                refs_img.add(n)
+        d1 = _sweep_bucket("chat-images", refs_img)
+
+        # avatars: users.avatar / rooms.icon が指す name 集合
+        refs_av = set()
+        for tbl, col in (("users", "avatar"), ("rooms", "icon")):
+            try:
+                rr = api("GET", "%s?select=%s" % (tbl, col)) or []
+                for r in rr:
+                    n = _obj_name_from_url(r.get(col), "avatars")
+                    if n:
+                        refs_av.add(n)
+            except Exception:
+                pass
+        d2 = _sweep_bucket("avatars", refs_av)
+
+        if d1 or d2:
+            print(f"[danran-bridge] 🧹 孤児掃除: chat-images={d1} / avatars={d2} 件削除")
+            notify_owner("danran 孤児ファイル掃除",
+                         f"未使用ファイルを削除しました（画像{d1}・アイコン{d2}）。",
+                         to_support=False)
+        else:
+            print("[danran-bridge] 🧹 孤児掃除: 対象なし")
+    except Exception as e:
+        print("[danran-bridge] orphan_sweep err:", e)
+
 def reclaim_stuck_tasks():
     """mini が実装中に落ちる等で implementing のまま固着したタスクを failed に戻す。"""
     try:
@@ -601,12 +710,16 @@ def main():
             last_by_room[rn] = parse_ts(msgs[-1].get("created_at"))
     print(f"[danran-bridge] 既存はスキップ。新着を待機中…（Ctrl+C で停止）")
     _last_reclaim = 0.0
+    _last_sweep   = 0.0   # 0 = 起動直後に1回 → 以後24時間ごと
     while True:
         try:
             heartbeat()
             if time.time() - _last_reclaim > 60:   # 固着タスク回収は約60秒ごと
                 reclaim_stuck_tasks()
                 _last_reclaim = time.time()
+            if time.time() - _last_sweep > 86400:  # 孤児ファイル掃除は1日ごと（別スレッド）
+                _last_sweep = time.time()
+                threading.Thread(target=orphan_sweep, daemon=True).start()
             for rn, msgs in _group_by_room(fetch_all_recent()).items():
                 if not msgs:
                     continue

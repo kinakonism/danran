@@ -2661,9 +2661,9 @@
   function _searchCSS(pDoc) {
     if (pDoc.getElementById('_danran_search_css')) return;
     var s = pDoc.createElement('style'); s.id = '_danran_search_css';
-    s.textContent = '.dr-search-hit{background:rgba(240,168,104,0.16)!important;border-radius:10px;}'
-      + '.dr-search-cur{background:rgba(240,168,104,0.34)!important;'
-      + 'outline:2px solid rgba(240,168,104,0.9);outline-offset:1px;border-radius:12px;}';
+    s.textContent = '.dr-search-cur{outline:2px solid rgba(240,168,104,0.9);'
+      + 'outline-offset:1px;border-radius:12px;}'
+      + 'mark.dr-mark{background:#ffd54a;color:#1a1614;border-radius:2px;padding:0 1px;}';
     (pDoc.head || pDoc.body).appendChild(s);
   }
   function _collectMatches(pDoc, q) {
@@ -2676,6 +2676,39 @@
     }
     return ids;   // DOM順＝古い→新しい
   }
+  function _unwrapMarks(pDoc, el) {
+    if (!el) return;
+    var ms = el.querySelectorAll('mark.dr-mark');
+    for (var i = 0; i < ms.length; i++) {
+      var m = ms[i];
+      if (m.parentNode) m.parentNode.replaceChild(pDoc.createTextNode(m.textContent), m);
+    }
+    if (ms.length) { try { el.normalize(); } catch (e) {} }
+  }
+  function _markText(pDoc, el, q) {
+    try {
+      var ql = q.toLowerCase();
+      var W = pDoc.createTreeWalker(el, 4, null);   // 4 = SHOW_TEXT
+      var targets = [], n;
+      while ((n = W.nextNode())) {
+        var v = n.nodeValue;
+        if (v && v.toLowerCase().indexOf(ql) >= 0 &&
+            !(n.parentNode && n.parentNode.nodeName === 'MARK')) targets.push(n);
+      }
+      for (var i = 0; i < targets.length; i++) {
+        var node = targets[i], text = node.nodeValue, low = text.toLowerCase();
+        var frag = pDoc.createDocumentFragment(), last = 0, idx;
+        while ((idx = low.indexOf(ql, last)) >= 0) {
+          if (idx > last) frag.appendChild(pDoc.createTextNode(text.slice(last, idx)));
+          var mk = pDoc.createElement('mark'); mk.className = 'dr-mark';
+          mk.textContent = text.slice(idx, idx + ql.length);
+          frag.appendChild(mk); last = idx + ql.length;
+        }
+        if (last < text.length) frag.appendChild(pDoc.createTextNode(text.slice(last)));
+        if (node.parentNode) node.parentNode.replaceChild(frag, node);
+      }
+    } catch (e) {}
+  }
   function applySearchHighlight() {
     try {
       var pDoc = window.parent.document, S = pDoc._danranSearch;
@@ -2684,16 +2717,30 @@
           (pDoc._danranView && pDoc._danranView !== 'chat' && pDoc._danranView !== ''))) {
         closeSearchBar(pDoc); return;
       }
-      var p1 = pDoc.querySelectorAll('.dr-search-hit');
-      for (var i = 0; i < p1.length; i++) p1[i].classList.remove('dr-search-hit');
-      var p2 = pDoc.querySelectorAll('.dr-search-cur');
-      for (var j = 0; j < p2.length; j++) p2[j].classList.remove('dr-search-cur');
-      if (!S || !S.open || !S.ids || !S.ids.length) return;
-      for (var k = 0; k < S.ids.length; k++) {        // 全ヒットを薄く（画面内ならその場で光る）
-        var e1 = pDoc.querySelector('[data-lp-msg="' + S.ids[k] + '"]');
-        if (e1) e1.classList.add('dr-search-hit');
+      var pc = pDoc.querySelectorAll('.dr-search-cur');
+      for (var i = 0; i < pc.length; i++) pc[i].classList.remove('dr-search-cur');
+
+      var q = (S && S.open && S.q) ? S.q.trim() : '';
+      var idset = {};
+      if (q && S.ids) for (var a = 0; a < S.ids.length; a++) idset[S.ids[a]] = 1;
+      // 対象外/クエリ変更の bubble は黄色マーク解除
+      var marked = pDoc.querySelectorAll('[data-dr-hlq]');
+      for (var b = 0; b < marked.length; b++) {
+        var mid = marked[b].getAttribute('data-lp-msg');
+        if (!q || !idset[mid] || marked[b].getAttribute('data-dr-hlq') !== q) {
+          _unwrapMarks(pDoc, marked[b]); marked[b].removeAttribute('data-dr-hlq');
+        }
       }
-      var cur = pDoc.querySelector('[data-lp-msg="' + S.ids[S.idx] + '"]');  // 現在のヒットを強調
+      if (!q || !S || !S.open || !S.ids || !S.ids.length) return;
+      // 対象 bubble の一致文字を <mark> で黄色に（未マーク/再描画で消えた時だけ＝チラつかない）
+      for (var k = 0; k < S.ids.length; k++) {
+        var el = pDoc.querySelector('[data-lp-msg="' + S.ids[k] + '"]');
+        if (!el) continue;
+        if (el.getAttribute('data-dr-hlq') !== q || !el.querySelector('mark.dr-mark')) {
+          _unwrapMarks(pDoc, el); _markText(pDoc, el, q); el.setAttribute('data-dr-hlq', q);
+        }
+      }
+      var cur = pDoc.querySelector('[data-lp-msg="' + S.ids[S.idx] + '"]');  // 現在のヒットに枠
       if (cur) cur.classList.add('dr-search-cur');
     } catch (e) {}
   }
@@ -2724,8 +2771,10 @@
   }
   function closeSearchBar(pDoc) {
     pDoc._danranSearch = { open: false, q: '', ids: [], idx: 0 };
-    var prev = pDoc.querySelectorAll('.dr-search-hit');
-    for (var i = 0; i < prev.length; i++) prev[i].classList.remove('dr-search-hit');
+    var cur = pDoc.querySelectorAll('.dr-search-cur');
+    for (var i = 0; i < cur.length; i++) cur[i].classList.remove('dr-search-cur');
+    var mk = pDoc.querySelectorAll('[data-dr-hlq]');
+    for (var j = 0; j < mk.length; j++) { _unwrapMarks(pDoc, mk[j]); mk[j].removeAttribute('data-dr-hlq'); }
     var bar = pDoc.getElementById('_danran_search_bar'); if (bar) bar.remove();
   }
   function openSearchBar(pDoc) {
@@ -2734,12 +2783,13 @@
     var bar = pDoc.createElement('div'); bar.id = '_danran_search_bar';
     bar.style.cssText = 'position:fixed;top:52px;left:0;right:0;z-index:2147483646;'
       + 'background:#241f1c;border-bottom:1px solid rgba(255,255,255,0.12);'
-      + 'display:flex;align-items:center;gap:4px;padding:7px 10px;'
-      + 'box-shadow:0 4px 14px rgba(0,0,0,0.4);';
+      + 'display:flex;align-items:center;gap:4px;padding:7px 10px;box-sizing:border-box;'
+      + 'box-shadow:0 4px 14px rgba(0,0,0,0.4);transform:translateZ(0);';   // translateZ=iOSで固定を安定化
     bar.innerHTML =
         '<input id="_danran_search_input" type="search" placeholder="このルームを検索" '
+      // ★ font-size は必ず 16px 以上（iOS が入力フォーカス時に自動ズームして画面が崩れるのを防ぐ）
       + 'style="flex:1;min-width:0;background:#1a1614;border:1px solid rgba(255,255,255,0.15);'
-      + 'border-radius:18px;color:#f0e8e0;font-size:0.95rem;padding:7px 12px;outline:none">'
+      + 'border-radius:18px;color:#f0e8e0;font-size:16px;padding:7px 12px;outline:none">'
       + '<span id="_danran_search_count" style="color:rgba(240,232,224,0.55);font-size:0.78rem;'
       + 'min-width:34px;text-align:center">0</span>'
       + '<button id="_danran_search_prev" style="background:none;border:none;color:#f0e8e0;'

@@ -234,6 +234,20 @@ def notify_owner(title, body, to_support=True):
             pass
     print(f"[danran-bridge] 🔔 notify_owner: {title} / {body[:60]}")
 
+# ── bridge 自己監視（同じ通知の連投を防ぐクールダウン付き）──
+_last_alert = {}
+def alert_owner_once(key, title, body, cooldown=3600):
+    now = time.time()
+    if now - _last_alert.get(key, 0) < cooldown:
+        return
+    _last_alert[key] = now
+    notify_owner(title, body)
+
+def looks_logged_out(text):
+    """claude CLI の『未ログイン』出力か（keychain切れ・トークン失効でよく出る）。"""
+    t = (text or "").lower()
+    return ("not logged in" in t) or ("please run /login" in t) or ("invalid api key" in t)
+
 
 def split_flags(text):
     """claude 返信末尾の `TASK:` / `DESTRUCTIVE:` 行を取り出して本文から除去。
@@ -436,14 +450,26 @@ def _git(*a):
     return subprocess.run(["git", *a], cwd=REPO_DIR, capture_output=True, text=True, timeout=60)
 
 def _compile_guard():
-    """push 済みツリーの app.py がコンパイル（構文）OK か。実装役の自己チェックすり抜け対策。"""
+    """push 済みツリーの app.py の健全性チェック（実装役の自己チェックすり抜け対策）。
+    1) py_compile で構文 2) pyflakes で未定義参照(undefined name)等の静的検出。
+    どちらも実行時エラーの代表例を、アプリを起動せずに捕まえる。"""
     try:
         r = subprocess.run([sys.executable, "-m", "py_compile", "app.py"],
                            cwd=REPO_DIR, capture_output=True, text=True, timeout=60)
         if r.returncode != 0:
             return (False, "app.py 構文エラー: " + (r.stderr or "")[-200:])
+        # pyflakes: undefined name / invalid syntax のみをロールバック対象に（未使用import等は無視）
+        try:
+            pf = subprocess.run([sys.executable, "-m", "pyflakes", "app.py"],
+                                cwd=REPO_DIR, capture_output=True, text=True, timeout=60)
+            bad = [ln for ln in (pf.stdout or "").splitlines()
+                   if ("undefined name" in ln or "invalid syntax" in ln)]
+            if bad:
+                return (False, "未定義参照など: " + " / ".join(bad[:3])[:200])
+        except Exception:
+            pass   # pyflakes が無い/失敗 → 静的チェックはスキップ（誤爆防止）
         return (True, "")
-    except Exception as e:
+    except Exception:
         return (True, "")   # チェック自体が失敗したらロールバックはしない（誤爆防止）
 
 def _http_ok(url, timeout=10):
@@ -610,6 +636,11 @@ def run_implementer(request_text, convo):
     except Exception as e:
         return ("failed", f"実装の起動に失敗: {e}")
 
+    if looks_logged_out(out):
+        alert_owner_once("claude_logout", "danran AI 停止中",
+                         "claude が未ログインです。mini で再ログイン＋bridge 再起動が必要です。")
+        return ("failed", "claude が未ログインのため実装できませんでした")
+
     if "NEEDS_OWNER" in out:
         reason = out.split("NEEDS_OWNER", 1)[1].lstrip(": ：").strip()[:300]
         return ("needs_owner", reason or "破壊的/要注意のため保留")
@@ -770,6 +801,14 @@ def main():
                                "内容を確認し、回答に反映してください: " + ", ".join(imgs))
                 reply = run_claude(prompt, has_images=bool(imgs))
                 cleanup_tmp()
+                # claude 未ログイン検知 → まさとに通知し、家族には「Not logged in」を見せない
+                if looks_logged_out(reply):
+                    alert_owner_once("claude_logout", "danran AI 停止中",
+                                     "claude が未ログインです。mini で claude にログインし直して "
+                                     "bridge を再起動してください（@AI が応答できません）。")
+                    post_reply("ごめん、いま調子が悪いみたい…まさとに連絡しておくね🙏", rn)
+                    last_by_room[rn] = nts
+                    continue
                 # 末尾の TASK / DESTRUCTIVE フラグを取り出し、本文からは除去して家族に見せる
                 clean, is_task, is_destr = split_flags(reply)
                 post_reply(clean or "⚠️ うまく応答できませんでした。もう一度試してください。", rn)

@@ -2779,6 +2779,11 @@
     var mk = pDoc.querySelectorAll('[data-dr-hlq]');
     for (var j = 0; j < mk.length; j++) { _unwrapMarks(pDoc, mk[j]); mk[j].removeAttribute('data-dr-hlq'); }
     var bar = pDoc.getElementById('_danran_search_bar'); if (bar) bar.remove();
+    try {   // visualViewport の貼り直しリスナを解除
+      var P = pDoc._danranSearchPin;
+      if (P && P.vv) { P.vv.removeEventListener('scroll', P.fn); P.vv.removeEventListener('resize', P.fn); }
+      pDoc._danranSearchPin = null;
+    } catch (e) {}
   }
   function openSearchBar(pDoc) {
     _searchCSS(pDoc);
@@ -2815,6 +2820,24 @@
     pDoc.getElementById('_danran_search_next').addEventListener('click', function (e) { e.preventDefault(); _searchStep(pDoc, 1); });
     pDoc.getElementById('_danran_search_close').addEventListener('click', function (e) { e.preventDefault(); closeSearchBar(pDoc); });
     try { inp.focus(); } catch (e) {}
+    // ★ iOS の position:fixed はスクロール/キーボードで消える/ずれるため、visualViewport に
+    //   合わせて毎回バーを貼り直す（消えなくなる）。非対応ブラウザは素の fixed のまま。
+    try {
+      var vv = (pDoc.defaultView || window.parent).visualViewport;
+      if (vv) {
+        var pin = function () {
+          var b = pDoc.getElementById('_danran_search_bar'); if (!b) return;
+          b.style.top   = (vv.offsetTop + 52) + 'px';
+          b.style.left  = vv.offsetLeft + 'px';
+          b.style.width = vv.width + 'px';
+          b.style.right = 'auto';
+        };
+        pin();
+        vv.addEventListener('scroll', pin);
+        vv.addEventListener('resize', pin);
+        pDoc._danranSearchPin = { vv: vv, fn: pin };
+      }
+    } catch (e) {}
   }
   function setupSearchBar(pDoc) {
     if (pDoc._danranSearchHook) return; pDoc._danranSearchHook = true;
@@ -3141,12 +3164,14 @@
         var h = pDoc.body.scrollHeight;
         if (h === lastH) { stable++; } else { stable = 0; lastH = h; }
         var elapsed = Date.now() - startT;
-        if ((stable >= 3 && elapsed > 140) || elapsed > 750) {
+        if ((stable >= 5 && elapsed > 220) || elapsed > 1100) {   // 高さ安定をより厳しく見る
           top();
           if (hasEditCover && cover && cover.parentNode) {
             cover.style.opacity = '0';
             setTimeout(function () { if (cover.parentNode) cover.remove(); }, 160);
           }
+          // カバー除去後の Streamlit 遅延レイアウトでの跳ねを数回つぶす
+          [120, 300, 550].forEach(function (ms) { setTimeout(top, ms); });
         } else {
           pWin.requestAnimationFrame(settle);
         }

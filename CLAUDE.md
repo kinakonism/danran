@@ -516,28 +516,31 @@ vapid_subject     = "mailto:..."
   ```
 - システムプロンプト `AI_SYSTEM_PROMPT` に danran の使い方要点を内蔵。画像の中身は見ない（テキストのみ）。バグ報告はこのルームに残るので管理者(まさと)も読める。
 
-### bridge（Mac mini）と Claude Code の協調 = 自動実装ループ
+### bridge（Mac mini）= 受付＋自動実装ループ（イベント駆動）
 
-**役割分担**: bridge＝受付＆トリアージ（会話で即レス・実装はしない） / Claude Code＝実装担当（実コード変更・push・完了報告）。共有キューは Supabase の `ai_tasks` テーブル（machine が別でも協調できるよう DB を介す）。
+bridge（`tools/ai_bridge.py`）が **受付（会話）も実装も両方** mini 上で行う。実装役は mini で起動する `claude`（ツール使用・Max プラン＝API課金なし）。GUIドメインの LaunchAgent で動かすこと（Keychain＝claude認証に必要）。詳細運用は [[bridge-mini-launchagent]] メモ参照。**cron による実装は廃止**（完全イベント駆動）。
 
 ```
-家族が @AI でバグ報告/要望（どの部屋でも）
+家族が @AI でバグ報告/要望（どの部屋でも。AIサポートは @AI 不要）
    │
-   ▼  tools/ai_bridge.py（Mac mini 常駐・claude -p）
-   ├─ 会話で即レス（🤖アシスタントとして投稿。「実装はClaude Codeが対応します」と伝える）
-   └─ claude 返信末尾の「TASK: yes/no」を解析（家族には非表示で除去）
-        └─ yes なら ai_tasks に status='pending' で enqueue（source_message_id 一意で二重防止）
+   ▼  bridge 会話AI（claude -p・ツールなし）
+   ├─ 「こう直すね、進めていい？OKか👍で教えて」と提案（実装内容を1〜2文）
+   └─ 返信末尾の TASK / DESTRUCTIVE フラグを解析（家族には非表示で除去）
+        ├─ TASK:yes & DESTRUCTIVE:no  → ai_tasks(status='proposed')＝合図待ち
+        └─ TASK:yes & DESTRUCTIVE:yes → ai_tasks(status='needs_review') ＋ まさとに通知（実装しない）
    │
-   ▼  まさとの Claude Code（cron・2時間ごと・**起動中のみ**／session-only）
-   ├─ ai_tasks の pending を取得 → 明確・低リスクなら実装→構文チェック→commit→push
-   │    （JS 変更時は danran_lp_vNN を +1）
-   ├─ 完了: status='done' + 依頼の部屋へ「✅ 実装しました」を投稿
-   ├─ 曖昧/大: status='needs_review'（投稿せずまさとへ報告）
-   └─ 不要(質問/既済): status='skipped'
+   ▼  依頼者が OK/👍/お願い 等で合図（is_affirmative・同一依頼者・30分以内）
+   ▼  実装役 claude（ツール使用・IMPL_LOCK で同時1件）
+   ├─ app.py / index.html / sw.js / manifest / config のみ編集可、Bash は git/python/node 等に限定
+   ├─ 構文チェック（ast / node --check、index.html 変更時は danran_lp_vNN を +1）→ commit → push
+   ├─ done: 部屋に「✅ 直したよ」＋ まさとに Web Push＋AIサポート報告（notify_owner）
+   ├─ 破壊的と判明: 実装役が「NEEDS_OWNER: 理由」で自衛 → needs_review＋まさと通知
+   └─ 否定の合図(いや/やめ等) → status='skipped'
 ```
 
-- bridge の `split_task_flag()` が TASK 行を抽出・除去、`enqueue_task()` が積む。`fetch_all_recent` は id も取得（キュー連携のため）。
-- cron は **session-only**（Claude Code を閉じると停止）。キューは Supabase に残るので、次に起動したとき溜まった分を消化できる。常時の一次対応は bridge が担う。
+- 線引き（まさと決定 2026-06-03）: **破壊的のみまさと確認 / 依頼者の合図で着手 / まさとに Web Push＋AIサポート報告**。
+- 主要関数: `build_prompt`(提案＋フラグ指示) / `split_flags` / `get_proposed_task` / `implement_flow` / `run_implementer`(実装役起動・push検証) / `notify_owner`(`push_to_owner`＝venv の pywebpush + VAPID)。
+- `IMPLEMENT_ON=False` で自動実装を止め、従来の「キューに積むだけ」に戻せる。`OWNER_NAME="まさと"`。
 - 注意: bridge は `[ai] api_key` 未設定前提（クラウド側 `_generate_ai_reply` と二重返信しないため）。
 
 #### `ai_tasks` テーブル
@@ -545,11 +548,11 @@ vapid_subject     = "mailto:..."
 | カラム | 型 | 説明 |
 |------|----|------|
 | id | uuid PK | |
-| room_name | text | 依頼が来た部屋（完了報告の投稿先） |
+| room_name | text | 依頼が来た部屋（提案・完了報告の投稿先） |
 | source_message_id | uuid | 元メッセージID（UNIQUE・二重enqueue防止） |
-| requester | text | 依頼者名 |
+| requester | text | 依頼者名（合図はこの人の発言のみ有効） |
 | request_text | text | 依頼本文 |
-| status | text | `pending`/`done`/`skipped`/`needs_review` |
+| status | text | `proposed`(合図待ち)/`implementing`/`done`/`needs_review`/`skipped`/`failed` |
 | result | text | 実装要約 or 保留理由 |
 | created_at / updated_at | timestamptz | |
 

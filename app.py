@@ -962,7 +962,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v128",   # プロフィール背景画像（cover_url）を全画面プロフィールの背景に表示
+    "danran_lp_v129",   # プロフィール編集にプレビュー（押された時の全画面表示）＋openUserProfileにcover直指定
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1991,6 +1991,20 @@ def show_profile(current_user: dict) -> None:
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 削除に失敗しました: {e}")
+
+        # ── プレビュー（押された時の全画面プロフィール表示）──
+        st.divider()
+        _prev_av = (new_avatar if atype == "絵文字" else av) or av
+        st.html(
+            f'<button data-preview-profile="1" '
+            f'data-preview-name="{_html.escape(new_name, quote=True)}" '
+            f'data-preview-avatar="{_html.escape(_prev_av, quote=True)}" '
+            f'data-preview-cover="{_html.escape(_cur_cover or "", quote=True)}" '
+            f'style="width:100%;padding:11px 0;border-radius:12px;border:1px solid rgba(240,168,104,0.5);'
+            f'background:rgba(240,168,104,0.12);color:#f0e8e0;font-size:0.95rem;cursor:pointer;'
+            f'-webkit-tap-highlight-color:transparent">👁 押された時の表示をプレビュー</button>'
+        )
+        st.caption("家族があなたのアイコンをタップした時の見た目です（写真アイコン・背景は保存後に反映）。")
 
         st.divider()
         c1, c2 = st.columns(2)

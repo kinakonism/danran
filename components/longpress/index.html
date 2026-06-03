@@ -1992,6 +1992,15 @@
           sendNav({ action: 'unpin_message', ts: Date.now() });
           return;
         }
+        // プロフィール編集のプレビュー → 全画面プロフィール（押された時の見た目）
+        var pv = t.closest('[data-preview-profile]');
+        if (pv) {
+          e.preventDefault(); e.stopPropagation();
+          openUserProfile(pv.getAttribute('data-preview-name') || '',
+                          pv.getAttribute('data-preview-avatar') || '',
+                          pv.getAttribute('data-preview-cover') || '');
+          return;
+        }
         // リアクションのピルをタップ → 自分のリアクションをトグル（再度押すと外れる）。
         //   他人のメッセージのみ（自分のメッセージにはリアクションを付けない）。
         //   長押し（誰が押したか表示）直後の合成 click は無視。
@@ -3031,7 +3040,7 @@
    *  背景タップ / ✕ で閉じる。（将来: FaceTime ボタンを足す余地あり）
    * ════════════════════════════════════════ */
   var USER_PROFILE_ID = '_danran_user_profile';
-  function openUserProfile(name, avatar) {
+  function openUserProfile(name, avatar, coverUrl) {
     try {
       var pDoc = window.parent.document;
       if (pDoc.getElementById(USER_PROFILE_ID)) return;
@@ -3056,18 +3065,23 @@
       coverOverlay.style.cssText = 'position:absolute;inset:0;display:none;'
         + 'background:linear-gradient(rgba(16,13,11,0.15),rgba(16,13,11,0.78));';
       ov.appendChild(coverOverlay);
-      // cover_url を取得して背景に反映（非同期・取れたら差し替え）
-      try {
-        sbGet('users?select=cover_url&name=eq.' + encodeURIComponent(name || '') + '&limit=1')
-          .then(function (rows) {
-            var cu = rows && rows[0] && rows[0].cover_url;
-            if (cu && pDoc.getElementById(USER_PROFILE_ID)) {
-              bg.style.filter = 'none'; bg.style.transform = 'none';
-              bg.style.backgroundImage = 'url("' + _escHtml(cu) + '")';
-              coverOverlay.style.display = 'block';
-            }
-          }).catch(function () {});
-      } catch (e) {}
+      function _applyCover(cu) {
+        if (cu && pDoc.getElementById(USER_PROFILE_ID)) {
+          bg.style.filter = 'none'; bg.style.transform = 'none';
+          bg.style.backgroundImage = 'url("' + _escHtml(cu) + '")';
+          coverOverlay.style.display = 'block';
+        }
+      }
+      if (coverUrl) {
+        _applyCover(coverUrl);   // プレビュー: cover を直接指定
+      } else {
+        // 他人タップ時: cover_url を名前から取得して背景に反映（非同期・取れたら差し替え）
+        try {
+          sbGet('users?select=cover_url&name=eq.' + encodeURIComponent(name || '') + '&limit=1')
+            .then(function (rows) { _applyCover(rows && rows[0] && rows[0].cover_url); })
+            .catch(function () {});
+        } catch (e) {}
+      }
       var av;
       if (isImg) {
         av = pDoc.createElement('img');

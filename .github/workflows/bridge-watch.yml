@@ -1,0 +1,26 @@
+name: bridge-watch
+
+# Mac mini の bridge 死活監視: heartbeat(ai_status) が古ければ まさとに Web Push。
+# 15分ごと（GitHub Actions の無料 cron）。手動実行も可。
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pywebpush
+      - run: python tools/bridge_watch.py
+        env:
+          SUPABASE_URL: "https://fyadpbzlvyzihynpcckw.supabase.co"
+          OWNER_NAME: "まさと"
+          STALE_MIN: "10"
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}

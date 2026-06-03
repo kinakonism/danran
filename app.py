@@ -976,7 +976,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v133",   # みんなでFaceTime: タップでリンクシート(開く/共有/コピー)を表示
+    "danran_lp_v134",   # みんなでFaceTime: 1:1と同じ target無し<a>を捕捉済みpDocでクリック（PWA対応）
     path=_LP_COMPONENT_DIR,
 )
 

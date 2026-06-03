@@ -3864,13 +3864,22 @@
         var act = item.getAttribute('data-rmenu');
         hide();
         if (!rid) return;
-        // みんなで FaceTime: リンクシートを出す（開く/共有/コピー）。cfg 経由で同期取得。
-        //   iOS PWA では target=_blank/window.open が無反応になりがちなため、実績のある
-        //   showLinkMenu（共有=FaceTimeアプリに渡せる）を使う。
+        // みんなで FaceTime: cfg 経由で同期取得したリンクを開く。
+        //   ★ 1:1 通話と同じく「捕捉済み pDoc に target 無しの <a> を作って即クリック」。
+        //     target=_blank/window.open は PWA で無反応、showLinkMenu は window.parent
+        //     依存で死んだ iframe だと効かないため、この方式に統一（out-of-scope は iOS が Safari で開く）。
         if (act === 'facetime') {
           var ft = ROOM_FACETIME || (pDoc._danranRoomFacetime || '');
-          if (ft) { try { showLinkMenu(ft); } catch (e) {} }
-          else { showToast('ルーム編集でFaceTimeリンクを設定してね'); }
+          if (ft) {
+            try {
+              var fa = pDoc.createElement('a');
+              fa.href = ft; fa.rel = 'noopener noreferrer'; fa.style.display = 'none';
+              pDoc.body.appendChild(fa); fa.click();
+              setTimeout(function () { try { if (fa.parentNode) fa.remove(); } catch (e) {} }, 400);
+            } catch (e) {}
+          } else {
+            try { showToast('ルーム編集でFaceTimeリンクを設定してね'); } catch (e) {}
+          }
           return;
         }
         showEditTransitionCover();   // 遷移スクロールの跳ねを隠す

@@ -923,6 +923,10 @@ _lp_detector = st.components.v1.declare_component(
 # ─────────────────────────────────────
 _URL_RE = re.compile(r'(https?://[^\s<>"\']+)')
 
+# リンクプレビュー（OGPカード）。描画時の同期取得が重く送信を不安定にしたため一旦オフ。
+# URL は linkify_body で常にクリック可能。将来、非同期プリフェッチ方式で再有効化する。
+LINK_PREVIEW_ON = False
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_og(url: str) -> dict | None:
     """URL の OGP（タイトル/画像/説明）を取得してリンクプレビュー用 dict を返す。
@@ -1418,7 +1422,11 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         content = _reply_quote_html(msg) + img_piece + body_esc
 
         # ── リンクプレビュー（本文に URL があれば先頭1件のカードを下に付ける）──
-        if not img_url:
+        #   ★ 一旦オフ：描画時に同期で OGP を取得（fetch_og）すると、取得の重い URL
+        #     （Google 共有リンク等）で 2秒ポーリング描画が引っかかり、入力・送信まで
+        #     不安定になることがあった。URL は linkify_body で常にクリック可能なリンクに
+        #     なっているので、プレビューは無くても貼って開ける。将来は非同期取得で再有効化する。
+        if LINK_PREVIEW_ON and not img_url:
             _um = _URL_RE.search(body)
             if _um:
                 _og = fetch_og(_um.group(1))

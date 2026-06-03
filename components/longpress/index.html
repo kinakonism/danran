@@ -3864,12 +3864,13 @@
         var act = item.getAttribute('data-rmenu');
         hide();
         if (!rid) return;
-        // みんなで FaceTime: リンクを cfg から同期的に開く（非同期だと iOS が
-        //   ユーザー操作の期限切れと判断して window.open をブロックするため）。
+        // みんなで FaceTime: リンクシートを出す（開く/共有/コピー）。cfg 経由で同期取得。
+        //   iOS PWA では target=_blank/window.open が無反応になりがちなため、実績のある
+        //   showLinkMenu（共有=FaceTimeアプリに渡せる）を使う。
         if (act === 'facetime') {
           var ft = ROOM_FACETIME || (pDoc._danranRoomFacetime || '');
-          if (ft) openExternalLink(pDoc, ft);
-          else showToast('ルーム編集でFaceTimeリンクを設定してね');
+          if (ft) { try { showLinkMenu(ft); } catch (e) {} }
+          else { showToast('ルーム編集でFaceTimeリンクを設定してね'); }
           return;
         }
         showEditTransitionCover();   // 遷移スクロールの跳ねを隠す

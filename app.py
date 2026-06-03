@@ -976,7 +976,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v132",   # みんなでFaceTime: リンクをcfg経由で同期的に開く(iOSのwindow.openブロック回避)
+    "danran_lp_v133",   # みんなでFaceTime: タップでリンクシート(開く/共有/コピー)を表示
     path=_LP_COMPONENT_DIR,
 )
 

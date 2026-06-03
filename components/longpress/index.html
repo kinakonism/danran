@@ -730,9 +730,9 @@
         'max-width:96vw;box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
       // 2行分のコンテナ（絵文字行・アクション行）。各行は中央寄せの flex 行で折り返し可。
       var rowEmoji  = pDoc.createElement('div');
-      rowEmoji.style.cssText  = 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px;';
+      rowEmoji.style.cssText  = 'display:flex;flex-wrap:nowrap;align-items:center;justify-content:center;gap:6px;';
       var rowAction = pDoc.createElement('div');
-      rowAction.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;';
+      rowAction.style.cssText = 'display:flex;flex-wrap:nowrap;align-items:center;justify-content:center;gap:8px;';
 
       function makeSep() {
         var s = pDoc.createElement('span');

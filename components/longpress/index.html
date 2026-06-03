@@ -2054,6 +2054,9 @@
       if (e.touches.length !== 1) return;
       if (pDoc.getElementById(IMG_VIEWER_ID)) return;   // 画像ビューア表示中はスワイプ戻り無効
       if (pDoc.getElementById('_danran_user_profile')) return;   // プロフィール全画面中も無効
+      // 入力欄(stChatInput/stBottom)上ではスワイプ追跡しない＝テキスト選択/ペーストの長押しを邪魔しない
+      if (e.target && e.target.closest &&
+          e.target.closest('[data-testid="stChatInput"], [data-testid="stBottom"], textarea, input')) return;
       var t = e.touches[0];
       if (t.clientX > screenWidth() * 0.5) return;   // 左 50% 以内で開始
       _sx = t.clientX; _sy = t.clientY; _st = Date.now();

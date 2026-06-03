@@ -53,6 +53,16 @@ iframe[title*="Streamlit Cloud"]   { display: none !important; }
 /* embed モードが chat input を隠す場合の保険 */
 [data-testid="stBottom"]           { display: block !important; visibility: visible !important; }
 [data-testid="stChatInput"]        { display: flex !important; visibility: visible !important; }
+/* ── iOS で入力欄にペースト/選択できない問題対策 ──
+   親要素の -webkit-user-select:none を継承して iOS のペーストメニューが出ない場合がある。
+   入力欄(textarea)では明示的に選択・コールアウトを許可して打ち消す。 */
+[data-testid="stChatInput"] textarea,
+[data-testid="stChatInputTextArea"] textarea,
+[data-testid="stChatInputTextArea"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default !important;
+}
 /* コンテンツの余白調整 */
 [data-testid="stMainBlockContainer"] > div:first-child { padding-top: 0.5rem; }
 /* ── スワイプ戻りのスライドイン演出 ── */
@@ -914,7 +924,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v111",   # 文字サイズ設定（localStorage→CSS変数 --dr-fs を本文に適用）
+    "danran_lp_v112",   # 入力欄のペースト不可を修正（input選択許可CSS＋スワイプ追跡を入力欄で無効化）
     path=_LP_COMPONENT_DIR,
 )
 

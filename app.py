@@ -431,13 +431,17 @@ def create_session(user_id: str) -> str:
     return supabase.table("sessions").insert({"user_id": user_id}).execute().data[0]["id"]
 
 def get_session_user(session_id: str) -> dict | None:
-    try:
-        sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute().data
-        if not sess:
-            return None
-        return supabase.table("users").select("id, name, avatar, phone").eq("id", sess["user_id"]).single().execute().data
-    except Exception:
+    """セッションIDからユーザーを返す。
+    戻り: dict=有効 / None=セッションが存在しない（無効・失効）。
+    ★ 通信/SSL等の一時エラーは握りつぶさず例外を投げる。呼び出し側が「一時失敗」として
+      ログアウトせず再試行できるようにするため（通信ブリップで誤ログアウトを防ぐ）。
+    ★ .single() は 0 行で例外＝『無効』と『通信失敗』が区別できないため limit(1) を使う。"""
+    rows = supabase.table("sessions").select("user_id").eq("id", session_id).limit(1).execute().data or []
+    if not rows:
         return None
+    urows = supabase.table("users").select("id, name, avatar, phone")\
+        .eq("id", rows[0]["user_id"]).limit(1).execute().data or []
+    return urows[0] if urows else None
 
 def delete_session(sid: str) -> None:
     try:
@@ -3338,8 +3342,15 @@ if isinstance(_lp_result, dict):
             # sandbox の allow-top-navigation がないため location.href が使えないための代替手段
             _sid = _lp_result.get("session_id", "")
             if _sid and "current_user" not in st.session_state:
-                _user = get_session_user(_sid)
+                try:
+                    _user = get_session_user(_sid)
+                except Exception:
+                    # 一時的な通信エラー → ログアウトしない。スプラッシュのまま再試行させる
+                    # （splashWatchdog が restore_session を再送 → 回復したらログイン）。
+                    st.session_state["_session_retry"] = True
+                    st.rerun()
                 if _user:
+                    st.session_state.pop("_session_retry", None)
                     st.session_state["current_user"] = _user
                     st.session_state["session_id"]   = _sid
                     # ★ setdefault ではなく直接代入：
@@ -3360,8 +3371,9 @@ if isinstance(_lp_result, dict):
                         st.session_state["_show_rooms"] = True   # 復元後はルーム選択画面から再開
                     st.rerun()
                 else:
-                    # 復元失敗（セッション失効・無効/漏洩SID 等）→ localStorage を消して
-                    # 古いSIDを送り続けないようにし、ログイン画面へ。
+                    # セッションが本当に存在しない（失効・無効/漏洩SID）→ localStorage を消して
+                    # 古いSIDを送り続けないようにし、ログイン画面へ。（通信エラーは上で別処理）
+                    st.session_state.pop("_session_retry", None)
                     st.session_state["_clear_session"] = True
                     st.toast("再ログインしてください。", icon="⚠️")
                     st.rerun()
@@ -3378,7 +3390,10 @@ if isinstance(_lp_result, dict):
 # JS は streamlit:render を受信したら必ず restore_session を送るので
 # ここでは空画面を出してその到着を待つ。
 # 招待リンクで register を表示する場合はスプラッシュを出さず即フォームを見せる
-_waiting_for_js = (_lp_result is None and "current_user" not in st.session_state
+# _session_retry 中（通信エラーで復元を一時保留）もスプラッシュを維持し、
+# splashWatchdog の restore_session 再送で回復を待つ（誤ログアウト＝ログイン画面を出さない）。
+_waiting_for_js = ((_lp_result is None or st.session_state.get("_session_retry"))
+                   and "current_user" not in st.session_state
                    and st.session_state.get("view") not in ("register",))
 if _waiting_for_js:
     # セッション復元待ちの間、意図的なスプラッシュを全画面で表示する。

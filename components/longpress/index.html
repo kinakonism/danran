@@ -718,17 +718,21 @@
       //   削除ポップアップに全画面ビューアが被さって削除操作できなくなる。
       pDoc._danranLpAt = Date.now();
       var rect  = el.getBoundingClientRect();
-      var topPx = rect.top - 68;
-      if (topPx < 8) topPx = rect.bottom + 8;
+      var topPx = rect.top - 100;            // 2行ぶん高くなったので上に多めに退避
+      if (topPx < 56) topPx = rect.bottom + 8;   // 上に入らなければメッセージの下に（ヘッダー52pxは避ける）
 
       var pop = pDoc.createElement('div');
       pop.id = POPUP_ID;
       pop.style.cssText =
         'position:fixed;z-index:2147483647;top:' + topPx + 'px;left:50%;transform:translateX(-50%);' +
         'background:#241f1c;border:1px solid rgba(255,255,255,0.13);border-radius:18px;' +
-        'padding:7px 9px;display:flex;flex-wrap:nowrap;align-items:center;justify-content:center;gap:4px;' +
-        'max-width:96vw;overflow-x:auto;-webkit-overflow-scrolling:touch;' +   // 1行固定。狭い端末は横スクロール
-        'box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
+        'padding:7px 9px;display:flex;flex-direction:column;align-items:center;gap:6px;' +   // 絵文字=1行目/アクション=2行目
+        'max-width:96vw;box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
+      // 2行分のコンテナ（絵文字行・アクション行）。各行は中央寄せの flex 行で折り返し可。
+      var rowEmoji  = pDoc.createElement('div');
+      rowEmoji.style.cssText  = 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px;';
+      var rowAction = pDoc.createElement('div');
+      rowAction.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;';
 
       function makeSep() {
         var s = pDoc.createElement('span');
@@ -750,10 +754,10 @@
         return b;
       }
 
-      // 他人のメッセージ → 絵文字リアクション（5種 ＋ ＋でもっと選ぶ）
+      // 他人のメッセージ → 絵文字リアクション（5種 ＋ ＋でもっと選ぶ）＝1行目
       if (!isMine) {
         EMOJIS.forEach(function (emoji) {
-          pop.appendChild(makeBtn(emoji, function (b) {
+          rowEmoji.appendChild(makeBtn(emoji, function (b) {
             b.style.transform = 'scale(1.35)';
             setTimeout(function () { b.style.transform = ''; }, 140);
             toggleReactionAndUpdate(msgId, emoji);   // 即 DOM 更新
@@ -762,13 +766,13 @@
         // ＋ → たくさんの絵文字から選ぶピッカー
         var plus = makeBtn('＋', function () { showEmojiPicker(msgId); });
         plus.style.opacity = '0.85';
-        pop.appendChild(plus);
+        rowEmoji.appendChild(plus);
       }
 
-      // 自分のメッセージ → 削除のみ（2段階確認）
+      // 自分のメッセージ → 削除（2段階確認）＝アクション行
       if (isMine) {
         var delStage = 0;
-        pop.appendChild(makeBtn('🗑️', function (b) {
+        rowAction.appendChild(makeBtn('🗑️', function (b) {
           if (!delStage) {
             delStage = 1;
             b.textContent = '✓ 削除';
@@ -807,9 +811,8 @@
         }));
       }
 
-      // 返信（全メッセージ・テキストラベル）。区切り線は各ボタンの前に置く
-      pop.appendChild(makeSep());
-      pop.appendChild(makeBtn('返信', function () {
+      // 返信（全メッセージ）＝アクション行
+      rowAction.appendChild(makeBtn('返信', function () {
         hidePopup();
         startReply(el);
       }, true));
@@ -817,19 +820,21 @@
       // Copy（テキストがあるメッセージのみ）
       var bodyText = el.getAttribute('data-lp-body') || '';
       if (bodyText.trim()) {
-        pop.appendChild(makeSep());
-        pop.appendChild(makeBtn('Copy', function () {
+        rowAction.appendChild(makeBtn('Copy', function () {
           copyText(bodyText);
           hidePopup();
         }, true));
       }
 
       // 📌 ピン留め（全メッセージ・1ルーム1件。ルーム上部に固定表示される）
-      pop.appendChild(makeSep());
-      pop.appendChild(makeBtn('📌 ピン', function () {
+      rowAction.appendChild(makeBtn('📌 ピン', function () {
         hidePopup();
         sendNav({ action: 'pin_message', msg_id: msgId, ts: Date.now() });
       }, true));
+
+      // 行を組み立て（絵文字があれば1行目、アクションは2行目）
+      if (rowEmoji.childNodes.length) pop.appendChild(rowEmoji);
+      pop.appendChild(rowAction);
 
       // ✕ 閉じるボタンは無し。外タップで閉じる：
       //  ① 透明バックドロップ（画面全体を覆うモーダル背面）への「新規タップ」で閉じる。

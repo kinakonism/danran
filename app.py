@@ -1944,6 +1944,24 @@ def show_profile(current_user: dict) -> None:
             st.session_state["view"] = "notifications"
             st.rerun()
 
+        # ── 文字サイズ（端末ごと・localStorage に保存し JS が即適用）──
+        st.divider()
+        st.markdown("### 🔤 文字サイズ")
+        st.caption("チャットの文字の大きさ（この端末だけに保存されます）")
+        st.html(
+            '<div id="_danran_fs_ctl" style="display:flex;gap:8px;margin:0 0 6px">'
+            '<button data-fontscale="0.9"  class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
+            'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:0.85rem;'
+            'cursor:pointer">小</button>'
+            '<button data-fontscale="1"    class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
+            'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:1rem;'
+            'cursor:pointer">中</button>'
+            '<button data-fontscale="1.15" class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
+            'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:1.2rem;'
+            'cursor:pointer">大</button>'
+            '</div>'
+        )
+
         # ── 家族を招待 ──
         st.divider()
         st.markdown("### 📨 家族を招待")
@@ -2753,28 +2771,6 @@ def show_install_page() -> None:
 def show_notifications(current_user: dict) -> None:
     """通知設定画面 — JS が Notification.permission を読んで UI を更新する。"""
 
-    # ── 文字サイズ（端末ごと・localStorage に保存し JS が即適用）──
-    st.markdown("#### 🔤 文字サイズ")
-    st.markdown(
-        '<div style="color:rgba(255,255,255,0.5);font-size:0.8rem;margin:-4px 2px 6px">'
-        'チャットの文字の大きさ（この端末だけに保存されます）</div>',
-        unsafe_allow_html=True,
-    )
-    st.html(
-        '<div id="_danran_fs_ctl" style="display:flex;gap:8px;margin:0 0 6px">'
-        '<button data-fontscale="0.9"  class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
-        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:0.85rem;'
-        'cursor:pointer">小</button>'
-        '<button data-fontscale="1"    class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
-        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:1rem;'
-        'cursor:pointer">中</button>'
-        '<button data-fontscale="1.15" class="dr-fsbtn" style="flex:1;padding:9px 0;border-radius:12px;'
-        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;font-size:1.2rem;'
-        'cursor:pointer">大</button>'
-        '</div>'
-    )
-    st.divider()
-
     # 現在の許可状態を JS が書き込むプレースホルダー
     st.html('<div id="_danran_notif_ui"></div>')
 
@@ -2788,90 +2784,54 @@ def show_notifications(current_user: dict) -> None:
 </div>
 """, unsafe_allow_html=True)
 
-    # ── デバッグパネル ──────────────────────────────────────────────────
-    with st.expander("🔧 デバッグ情報", expanded=True):
-        uid = current_user.get("id", "")
-        uname = current_user.get("name", "")
-
-        # VAPID 設定チェック
+    # ── 通知がうまく来ないとき（家族向けの自己対処・普段は折りたたみ）──
+    uid   = current_user.get("id", "")
+    uname = current_user.get("name", "")
+    with st.expander("🔔 通知がうまく来ないとき", expanded=False):
         vcfg = _vapid_cfg()
-        has_priv = bool(vcfg.get("vapid_private_key"))
-        has_pub  = bool(vcfg.get("vapid_public_key"))
-        has_subj = bool(vcfg.get("vapid_subject"))
-        st.markdown(f"**VAPID 設定**: 秘密鍵={has_priv} 公開鍵={has_pub} subject={has_subj}")
+        priv = vcfg.get("vapid_private_key", "")
+        subj = vcfg.get("vapid_subject", "")
 
-        # 購読状況チェック
-        try:
-            all_subs = supabase.table("push_subscriptions")\
-                .select("user_id, endpoint")\
-                .execute().data or []
-            my_subs = [s for s in all_subs if s.get("user_id") == uid]
-            st.markdown(f"**購読数（全体）**: {len(all_subs)} 件")
-            st.markdown(f"**購読数（自分）**: {len(my_subs)} 件")
-            if my_subs:
-                for s in my_subs:
-                    ep = s.get("endpoint", "")
-                    st.code(f"endpoint: ...{ep[-50:]}" if ep else "(空)", language=None)
-            else:
-                st.warning("⚠️ あなたの購読がDBに登録されていません")
-        except Exception as e:
-            st.error(f"購読取得エラー: {e}")
-
-        # 購読リセット（VapidPkHashMismatch などキー不一致の修復用）
-        st.markdown("---")
-        st.markdown("**購読をリセットする**（キー不一致エラーの修復）")
-        if st.button("🗑️ 購読をブラウザごとリセット", key="push_reset_btn"):
-            try:
-                supabase.table("push_subscriptions").delete().eq("user_id", uid).execute()
-                # JS へ「ブラウザ側も unsubscribe して再登録せよ」フラグをセット
-                st.session_state["_push_force_resubscribe"] = True
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ 削除エラー: {e}")
-
-        # テスト通知送信
-        st.markdown("---")
-        st.markdown("**自分宛にテスト通知を送る**")
-        if st.button("📤 テスト通知を送信", key="push_test_btn"):
+        st.markdown("通知をテストしたり、調子が悪いときにリセットできます。")
+        if st.button("📤 自分にテスト通知を送る", key="push_test_btn", use_container_width=True):
             try:
                 from pywebpush import webpush, WebPushException
-                priv = vcfg.get("vapid_private_key", "")
-                subj = vcfg.get("vapid_subject", "")
-                test_rows = supabase.table("push_subscriptions")\
-                    .select("endpoint, p256dh, auth")\
-                    .eq("user_id", uid)\
-                    .execute().data or []
-                if not test_rows:
-                    st.error("❌ 購読がありません。まず通知を許可してください。")
+                import json as _j
+                rows = supabase.table("push_subscriptions")\
+                    .select("endpoint, p256dh, auth").eq("user_id", uid).execute().data or []
+                if not rows:
+                    st.error("まだ通知が許可されていません。上の案内から許可してください。")
                 elif not (priv and subj):
-                    st.error("❌ VAPIDキーが設定されていません。")
+                    st.error("サーバー側の通知設定が未完了です（まさとに連絡）。")
                 else:
                     ok_cnt = 0
-                    for row in test_rows:
+                    for row in rows:
                         try:
-                            import json as _j
                             webpush(
-                                subscription_info={
-                                    "endpoint": row["endpoint"],
-                                    "keys": {"p256dh": row["p256dh"], "auth": row["auth"]},
-                                },
-                                data=_j.dumps({
-                                    "title": "danran テスト通知",
-                                    "body": f"{uname} さん、通知は正常に動作しています！",
-                                    "url": "/",
-                                }, ensure_ascii=False),
-                                vapid_private_key=priv,
-                                vapid_claims={"sub": subj},
-                            )
+                                subscription_info={"endpoint": row["endpoint"],
+                                    "keys": {"p256dh": row["p256dh"], "auth": row["auth"]}},
+                                data=_j.dumps({"title": "danran テスト通知",
+                                    "body": f"{uname} さん、通知は正常に動いています！", "url": "/"},
+                                    ensure_ascii=False),
+                                vapid_private_key=priv, vapid_claims={"sub": subj})
                             ok_cnt += 1
-                        except WebPushException as ex:
-                            st.error(f"❌ WebPushException: {ex}")
-                        except Exception as ex:
-                            st.error(f"❌ 送信エラー: {ex}")
+                        except Exception:
+                            pass
                     if ok_cnt:
-                        st.success(f"✅ {ok_cnt} 件送信しました！通知が届くか確認してください。")
-            except Exception as e:
-                st.error(f"❌ 予期しないエラー: {e}")
+                        st.success("送信しました！通知が届くか確認してください。")
+                    else:
+                        st.error("送信に失敗しました。下の「通知をリセット」を試してください。")
+            except Exception:
+                st.error("送信に失敗しました。少し待って再度お試しください。")
+
+        if st.button("🗑️ 通知をリセットする", key="push_reset_btn", use_container_width=True,
+                     help="通知が来ない/エラーが続くときに、登録し直します"):
+            try:
+                supabase.table("push_subscriptions").delete().eq("user_id", uid).execute()
+                st.session_state["_push_force_resubscribe"] = True
+                st.rerun()
+            except Exception:
+                st.error("リセットに失敗しました。少し待って再度お試しください。")
 
 # ─────────────────────────────────────
 # エントリーポイント

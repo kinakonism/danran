@@ -370,6 +370,13 @@
       var pDoc = window.parent.document;
       var sp = pDoc.getElementById('_danran_splash_wait');
       if (!sp) { _splashFirstSeen = 0; return; }   // スプラッシュ無し＝正常
+      // ★ スプラッシュ（復元中）表示中は、前のセッションで開いていたポップアップ類を消す。
+      //   iOS PWA を再開すると DOM が残ったまま再接続→スプラッシュが出るため、長押しポップアップ等が
+      //   スプラッシュ上に見えてしまうバグの対策。スプラッシュ中は操作不要なので消して問題ない。
+      [POPUP_ID, POPUP_BACK_ID, RMENU_ID, '_danran_emoji_picker', '_danran_link_menu',
+       USER_PROFILE_ID, IMG_VIEWER_ID, '_danran_search_bar', '_danran_mention_pop'].forEach(function (id) {
+        var el = pDoc.getElementById(id); if (el) el.remove();
+      });
       var now = Date.now();
       if (!_splashFirstSeen) { _splashFirstSeen = now; return; }
       if (now - _splashFirstSeen < 1200) return;   // 一瞬の正常スプラッシュは許容

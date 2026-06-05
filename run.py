@@ -11,11 +11,26 @@ PWA + Web Push を実現する。
 """
 import base64
 import os
+import socket
 import sys
 import uuid
 
 # カレントディレクトリをこのファイルと同じ場所に固定
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# ── IPv4 優先（mini 自前ホストの TLS handshake ストール対策）─────────────────
+#   macOS の mini では Supabase 等への IPv6/Happy Eyeballs 経路がたまに ~20秒ストールし、
+#   起動時 get_session_user() 等の DB クエリが刺さって「暗色スプラッシュのまま真っ暗」になる。
+#   プロセス全体の getaddrinfo を IPv4 に絞って回避する（supabase-py/httpx/requests/pywebpush
+#   すべて socket.getaddrinfo 経由なので一括で効く）。bridge(tools/ai_bridge.py) と同じ対策。
+_USE_IPV4_ONLY = os.environ.get("DANRAN_IPV4_ONLY", "1") != "0"
+if _USE_IPV4_ONLY:
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _getaddrinfo_v4(host, *a, **kw):
+        res = _orig_getaddrinfo(host, *a, **kw)
+        v4 = [r for r in res if r[0] == socket.AF_INET]
+        return v4 or res
+    socket.getaddrinfo = _getaddrinfo_v4
 
 # ────────────────────────────────────────────────
 # Starlette の create_streamlit_routes を上書き

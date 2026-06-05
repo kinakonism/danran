@@ -11,7 +11,10 @@ LOG=/tmp/danran_tunnel.log
 : > "$LOG"
 # ★ 127.0.0.1 を明示（localhost だと ::1=IPv6 が先に解決され、app は IPv4 のみ listen のため
 #   cloudflared が origin 到達失敗→断続的 502→「真っ暗」になる。IPv4 直指定で根絶）。
-"$CF" tunnel --no-autoupdate --url http://127.0.0.1:8501 >> "$LOG" 2>&1 &
+# ★ --edge-ip-version 4：cloudflared→Cloudflareエッジを IPv4 に固定。mini の IPv6 経路が
+#   不安定で、QUIC/IPv6 だと HTTP 遅延・WS中継(client→server)不調・URL不安定を招くため。
+# ★ --protocol http2：QUIC(UDP) より TCP の方が不安定網で安定しやすい。
+"$CF" tunnel --no-autoupdate --edge-ip-version 4 --protocol http2 --url http://127.0.0.1:8501 >> "$LOG" 2>&1 &
 CFPID=$!
 URL=""
 for i in $(seq 1 40); do

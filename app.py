@@ -978,7 +978,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v140",   # AI考え中バブル: 現ルーム判定を #_danran_cfg 直読みに（最も確実）
+    "danran_lp_v141",   # AI考え中バブル: ポーリング駆動(最後のメッセージ状態で判定)に変更
     path=_LP_COMPONENT_DIR,
 )
 

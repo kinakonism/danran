@@ -1947,7 +1947,7 @@
     try { setupMentionAutocomplete(window.parent.document); } catch (e) {}  // @ メンション補完（SendHook より先に張る）
     try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
     reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
-    reconcileAiThinking();  // AI考え中バブル: 返信到着/部屋移動/タイムアウトで消す
+    updateAiThinking();     // AI考え中バブル: 最後のメッセージ状態から表示/非表示を判定（ポーリング駆動）
     sweepToast();           // 期限切れトーストの掃除（死んだ iframe タイマー対策）
     scrollToLatestOnEnter(); // チャット入室時に最新メッセージへ即移動
     scrollTopOnEditEnter();  // 編集系画面に入った瞬間だけ先頭へ（変なスクロール継承を防ぐ）
@@ -3800,24 +3800,7 @@
   function _aiRoom()  { return _cfgAttr('data-ai-room') || AI_ROOM_NAME; }
   function _aiBot()   { return _cfgAttr('data-ai-bot')  || AI_BOT_NAME; }
   function _curRoom() { return _cfgAttr('data-room') || (function(){ try { return window.parent.document._danranActiveRoom || ACTIVE_ROOM; } catch (e) { return ACTIVE_ROOM; } })(); }
-  // 表示中のボット(AI)バブル数を数える（新着検知の基準）
-  function countBotBubbles() {
-    var n = 0, bot = _aiBot();
-    try {
-      var els = window.parent.document.querySelectorAll('[data-lp-msg][data-lp-name]');
-      for (var i = 0; i < els.length; i++) {
-        if ((els[i].getAttribute('data-lp-name') || '') === bot) n++;
-      }
-    } catch (e) {}
-    return n;
-  }
-  // この送信が AI 応答を生むか（AIルーム or 本文に @AI/＠AI）
-  function willGetAiReply(text) {
-    var cur = _curRoom(), ar = _aiRoom();
-    if (cur && ar && cur === ar) return true;
-    return /[@＠]\s*AI(?![0-9A-Za-z])/i.test(text || '');
-  }
-  function addAiThinking() {
+  function addAiThinking(msgId) {
     try {
       var pDoc = window.parent.document;
       if (pDoc.querySelector('[data-danran-aithink]')) return;   // 1つだけ
@@ -3833,35 +3816,42 @@
         '<div style="background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:12px 16px;' +
         'display:inline-flex;gap:5px;align-items:center;box-shadow:0 2px 10px rgba(0,0,0,0.35)">' +
         '<span class="dr-aidot"></span><span class="dr-aidot"></span><span class="dr-aidot"></span></div>';
-      wrap._aiBase = countBotBubbles();
-      wrap._aiTime = Date.now();
-      wrap._aiRoom = _curRoom();
+      wrap._aiMsgId = msgId || '';
+      wrap._aiTime  = Date.now();
       pDoc.body.appendChild(wrap);
     } catch (e) {}
   }
-  var _lastAiThink = 0;
-  function maybeAiThinking(text) {
-    if (!willGetAiReply(text)) return;
-    var now = Date.now();
-    if (now - _lastAiThink < 800) return;   // 二重発火防止
-    _lastAiThink = now;
-    addAiThinking();
-  }
-  // scan() から毎回: ボット返信が届いた/部屋移動/タイムアウトで消す
-  function reconcileAiThinking() {
+  // ★ ポーリング駆動: 送信検知に頼らず「実際のメッセージ状態」で判定する（確実・全員に表示）。
+  //   その部屋の最後のメッセージが「ボット以外」かつ「AIルーム or 本文に @AI」なら AI 応答待ち＝表示。
+  //   ボットの返信が最後になったら（=返信到着）消す。2.5分で諦め（同じメッセージには再表示しない）。
+  var _aiAbandoned = {};
+  function updateAiThinking() {
     try {
-      var els = window.parent.document.querySelectorAll('[data-danran-aithink]');
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i];
-        var age = Date.now() - (el._aiTime || 0);
-        if (_curRoom() !== el._aiRoom) { el.remove(); continue; }       // 部屋を離れた
-        if (countBotBubbles() > (el._aiBase || 0)) { el.remove(); continue; }  // 返信到着
-        if (age > 150000) { el.remove(); continue; }                    // 2.5分で諦め
-        if (age > 75000) {                                              // 遅延時は文言を変える
-          var st = el.querySelector('._aistatus');
+      var pDoc = window.parent.document;
+      var bubble = pDoc.querySelector('[data-danran-aithink]');
+      var msgs = pDoc.querySelectorAll('[data-lp-msg]');
+      if (!msgs.length) { if (bubble) bubble.remove(); return; }   // チャット非表示中
+      var last = msgs[msgs.length - 1];
+      var lastId   = last.getAttribute('data-lp-msg')  || '';
+      var lastName = last.getAttribute('data-lp-name') || '';
+      var lastBody = last.getAttribute('data-lp-body') || '';
+      var bot = _aiBot();
+      var cur = _curRoom(), ar = _aiRoom();
+      var inAi = !!(cur && ar && cur === ar);
+      var atAI = /[@＠]\s*AI(?![0-9A-Za-z])/i.test(lastBody);
+      var pending = (lastName !== bot) && (inAi || atAI);
+      if (!pending || _aiAbandoned[lastId]) { if (bubble) bubble.remove(); return; }
+      if (bubble) {
+        if (bubble._aiMsgId !== lastId) { bubble._aiMsgId = lastId; bubble._aiTime = Date.now(); }
+        var age = Date.now() - (bubble._aiTime || 0);
+        if (age > 150000) { _aiAbandoned[lastId] = 1; bubble.remove(); return; }   // 2.5分で諦め
+        if (age > 75000) {
+          var st = bubble.querySelector('._aistatus');
           if (st && st.textContent.indexOf('時間がかかって') < 0) st.textContent = '🤖 応答に時間がかかっています…';
         }
+        return;
       }
+      addAiThinking(lastId);
     } catch (e) {}
   }
 
@@ -4258,7 +4248,7 @@
         var val0 = (ta.value || '').trim();
         var sb = pDoc.querySelector('[data-testid="stChatInputSubmitButton"]');
         e.stopImmediatePropagation(); e.preventDefault();
-        if (val0) { maybeOptimistic(val0); maybeAiThinking(val0); }
+        if (val0) maybeOptimistic(val0);
         if (sb) sb.click();
         return;
       }
@@ -4271,7 +4261,7 @@
       if (!btn) return;
       var ta = pDoc.querySelector('[data-testid="stChatInput"] textarea');
       var val = ta ? (ta.value || '').trim() : '';
-      if (val) { maybeOptimistic(val); maybeAiThinking(val); }
+      if (val) maybeOptimistic(val);
     }, true);
   }
 

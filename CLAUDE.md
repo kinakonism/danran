@@ -9,14 +9,62 @@
 
 | 項目 | 値 |
 |------|-----|
-| **本番 URL** | `https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/` |
-| **ホスティング** | Streamlit Community Cloud（無料枠） |
+| **本番 URL（家族の入口）** | `https://danran-chat.kinakonism.workers.dev/`（Cloudflare Worker） |
+| **ホスティング** | **Mac mini 自前ホスト**（`run.py` を LaunchAgent 常駐）＋ Cloudflare Tunnel ＋ Cloudflare Worker（PWA入口）。2026-06-05 に Streamlit Community Cloud から移行 |
 | **GitHub リポジトリ** | `https://github.com/kinakonism/danran` |
-| **デプロイ方法** | `main` ブランチへ push → Streamlit Cloud が自動デプロイ（1〜2分） |
+| **デプロイ方法** | `main` へ push → **mini で `git pull` → app を再起動**（`ssh mini` で `launchctl kickstart -k gui/$(id -u)/com.danran.app`）。※Streamlit Cloud の自動デプロイは廃止 |
 | **Supabase プロジェクト** | `https://fyadpbzlvyzihynpcckw.supabase.co` |
-| **PWA インストール URL** | `https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/install.mobileconfig` |
+| **PWA インストール URL** | `https://danran-chat.kinakonism.workers.dev/install.mobileconfig` |
+| **旧 URL（現在は使用不可）** | `https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/`（Streamlit Cloud。`/~/+/` 封鎖で直アクセス不可） |
 
 > `install.mobileconfig` は iOS 向け Web Clip プロファイル。Safari でタップ→設定でインストール→ホーム画面に自動追加。
+
+---
+
+## ホスティング構成（2026-06-05〜 Mac mini 自前ホスト）
+
+### 経緯
+Streamlit Community Cloud が 2026-06 にプラットフォームを刷新し、Worker が依存していた
+`/~/+/` 認証バイパス（uvicorn 直結）を封鎖（cookie 付きでも 400）。全アプリが
+「cookie 認証バウンス＋管理ラッパーSPA＋iframe」方式になり、Worker から最上位でアプリを
+配信できなくなった（＝白画面/404）。これを機に **Streamlit Cloud から離脱し、常時起動の
+Mac mini で自前ホスト**する構成へ移行した。
+
+### 構成図
+```
+家族のホーム画面(Worker URL) → Cloudflare Worker → Cloudflare Tunnel → Mac mini: run.py(:8501)
+```
+- **Worker**（`cloudflare/worker.js` v6）= 固定の公開入口。`/sw.js` `/manifest.json` `/icons` は
+  Worker が直接配信、それ以外と WebSocket をトンネルへプロキシ。`SELF_HOSTED=true`。
+- **上流ホストは Supabase から動的取得**（`app_config.tunnel_host`、60s キャッシュ）。クイック
+  トンネルの URL が再起動で変わっても Worker が自動追従する。デプロイは `cd cloudflare && npx wrangler deploy`。
+- **Mac mini の LaunchAgent**（GUIドメイン・KeepAlive/RunAtLoad、`~/Library/LaunchAgents/`）:
+  - `com.danran.app` = `uv run python run.py`（env: `PORT=8501` / `STREAMLIT_SERVER_ENABLE_CORS=false`
+    / `STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false`）
+  - `com.danran.tunnel` = `bash tools/tunnel_run.sh`（cloudflared 起動＋現 URL を `app_config` に登録）
+  - 確認: `launchctl print gui/$(id -u)/com.danran.app` ／ ログ `/tmp/danran_app.log`・`/tmp/danran_tunnel*.log`
+  - ※GUIドメインなので mini ログイン中のみ稼働（mini は常時ログイン運用）。bridge(`com.danran.bridge`) と同流儀。
+
+### ★ デプロイ手順（重要・変更点）
+`main` への push **だけでは本番に反映されない**（Streamlit Cloud 自動デプロイは廃止）。
+コード反映には mini での pull＋再起動が必要:
+```bash
+ssh mini 'cd ~/danran && git pull --ff-only -q && launchctl kickstart -k gui/$(id -u)/com.danran.app'
+```
+> **bridge 自動実装ループへの影響**: 実装役 claude が push して「✅ 直したよ」と報告しても、
+> 上記の mini pull＋app 再起動をしない限り家族の画面には反映されない。将来 bridge 側に
+> 「push 後に自動で pull＋kickstart」を組み込むのが望ましい（現状は手動 or 別途対応）。
+
+### リソース消費（実測 2026-06-05・mini は M4 Pro 系 64GB/14コア）
+- **メモリ**: Streamlit 本体 ~260MB＋cloudflared ~46MB＋uv ~30MB ＝ **合計 ~340MB**（64GB の約 0.5%）。
+  同時セッションや画像処理で多少増えるが 1GB 未満で収まる見込み。
+- **CPU**: アイドル時ほぼ 0〜1%。送信/画像 EXIF 回転・リサイズ時に瞬間的に上がる程度で M4 Pro では無視できる。
+- **ネットワーク**: 2 秒ポーリング×アクティブ端末数（数人＝軽量）。画像アップロード時のみ帯域を使う。
+- 結論: 家族数人規模では mini の常用に**ほぼ影響なし**。bridge と十分共存できる。
+
+### 任意の改善（急ぎではない）
+- trycloudflare クイックトンネルは本来テスト用。**独自ドメイン＋named tunnel** にすれば URL 固定で
+  より安定（自己追従の Supabase 仕組みも不要に）。Cloudflare にゾーンがあれば移行可能。
 
 ---
 

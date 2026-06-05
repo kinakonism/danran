@@ -12,7 +12,7 @@
 | **本番 URL（家族の入口）** | `https://danran-chat.kinakonism.workers.dev/`（Cloudflare Worker） |
 | **ホスティング** | **Mac mini 自前ホスト**（`run.py` を LaunchAgent 常駐）＋ Cloudflare Tunnel ＋ Cloudflare Worker（PWA入口）。2026-06-05 に Streamlit Community Cloud から移行 |
 | **GitHub リポジトリ** | `https://github.com/kinakonism/danran` |
-| **デプロイ方法** | `main` へ push → **mini で `git pull` → app を再起動**（`ssh mini` で `launchctl kickstart -k gui/$(id -u)/com.danran.app`）。※Streamlit Cloud の自動デプロイは廃止 |
+| **デプロイ方法** | `main` へ push → **mini の watcher が自動で pull＋app 再起動**（~30秒以内・`tools/deploy_watch.sh` / LaunchAgent `com.danran.deploy`）。ランタイム変更時のみ再起動 |
 | **Supabase プロジェクト** | `https://fyadpbzlvyzihynpcckw.supabase.co` |
 | **PWA インストール URL** | `https://danran-chat.kinakonism.workers.dev/install.mobileconfig` |
 | **旧 URL（現在は使用不可）** | `https://danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app/`（Streamlit Cloud。`/~/+/` 封鎖で直アクセス不可） |
@@ -42,18 +42,22 @@ Mac mini で自前ホスト**する構成へ移行した。
   - `com.danran.app` = `uv run python run.py`（env: `PORT=8501` / `STREAMLIT_SERVER_ENABLE_CORS=false`
     / `STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false`）
   - `com.danran.tunnel` = `bash tools/tunnel_run.sh`（cloudflared 起動＋現 URL を `app_config` に登録）
-  - 確認: `launchctl print gui/$(id -u)/com.danran.app` ／ ログ `/tmp/danran_app.log`・`/tmp/danran_tunnel*.log`
+  - `com.danran.deploy` = `bash tools/deploy_watch.sh`（30秒ごと・自動デプロイ。下記）
+  - 確認: `launchctl print gui/$(id -u)/com.danran.app` ／ ログ `/tmp/danran_app.log`・`/tmp/danran_tunnel*.log`・`/tmp/danran_deploy.log`
   - ※GUIドメインなので mini ログイン中のみ稼働（mini は常時ログイン運用）。bridge(`com.danran.bridge`) と同流儀。
 
-### ★ デプロイ手順（重要・変更点）
-`main` への push **だけでは本番に反映されない**（Streamlit Cloud 自動デプロイは廃止）。
-コード反映には mini での pull＋再起動が必要:
-```bash
-ssh mini 'cd ~/danran && git pull --ff-only -q && launchctl kickstart -k gui/$(id -u)/com.danran.app'
-```
-> **bridge 自動実装ループへの影響**: 実装役 claude が push して「✅ 直したよ」と報告しても、
-> 上記の mini pull＋app 再起動をしない限り家族の画面には反映されない。将来 bridge 側に
-> 「push 後に自動で pull＋kickstart」を組み込むのが望ましい（現状は手動 or 別途対応）。
+### ★ デプロイ（自動・2026-06-05〜）
+`main` に push すれば **mini の watcher (`tools/deploy_watch.sh` / `com.danran.deploy`, 30秒間隔) が
+自動で取り込み＋app 再起動**する（~30秒以内に反映）。手動操作は不要。
+- 取り込みは `origin/main` を ff のみ（ローカルが ancestor のときだけ）。**bridge のローカルコミット**
+  （push 済み＝HEAD が進む）も**別マシンからの push**（origin が進む）も両対応。
+- 再起動するのは**ランタイム変更時のみ**（`app.py` `run.py` `components/` `sw.js` `manifest.json`
+  `icons/` `.streamlit/`）。doc / `cloudflare/` / `tools/` だけの変更では再起動しない（無駄な WS 切断回避）。
+- 実装途中（tracked ファイルに未コミット変更）があるティックは触らない（bridge 編集中のクロバー防止）。
+- 最終デプロイ SHA は `~/.danran_last_deployed`（リポジトリ外）。手動強制は
+  `ssh mini 'cd ~/danran && git pull --ff-only -q && launchctl kickstart -k gui/$(id -u)/com.danran.app'`。
+- これにより **bridge 自動実装ループの「✅ 直したよ」= 実際に ~30秒で家族の画面へ反映**されるようになった。
+  ただし `index.html` 変更時の `danran_lp_vNN` インクリメントは従来どおり実装役が行う必要がある。
 
 ### リソース消費（実測 2026-06-05・mini は M4 Pro 系 64GB/14コア）
 - **メモリ**: Streamlit 本体 ~260MB＋cloudflared ~46MB＋uv ~30MB ＝ **合計 ~340MB**（64GB の約 0.5%）。

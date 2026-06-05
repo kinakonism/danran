@@ -978,7 +978,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v142",   # AI考え中バブルの位置を上げる(bottom 78->110)
+    "danran_lp_v143",   # 直前部屋ヒントを sessionStorage に(完全終了→再起動でルーム選択から開始)
     path=_LP_COMPONENT_DIR,
 )
 

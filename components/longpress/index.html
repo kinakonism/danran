@@ -85,7 +85,7 @@
 
   var LP_MS           = 500;
   var STORAGE_KEY     = 'danran_session';
-  var ROOM_KEY        = 'danran_last_room';   // 直前にいた部屋（再接続で復帰するため）
+  var ROOM_KEY        = 'danran_last_room';   // 直前にいた部屋（sessionStorage＝再接続で復帰/完全終了で消える）
   var CHAT_IMG_BUCKET = 'chat-images';
   var CFG_ID          = '_danran_cfg';
   var CAM_BTN_ID      = '_danran_cam_btn';
@@ -360,7 +360,7 @@
         //   写真ピッカーでアプリがバックグラウンド→再接続した時に一覧へ飛ばされるのを防ぐ。
         var er = '';
         try {
-          var raw = localStorage.getItem(ROOM_KEY);
+          var raw = sessionStorage.getItem(ROOM_KEY);
           if (raw) { var o = JSON.parse(raw); if (o && o.r && (Date.now() - (o.t || 0) < 120000)) er = o.r; }
         } catch (e) {}
         dlog('[danran] → stSetValue restore_session firing, sid=' + (lsSid ? lsSid.slice(0, 8) + '…' : '(empty)') + ', room=' + er);
@@ -398,7 +398,7 @@
       try { lsSid = localStorage.getItem(STORAGE_KEY) || ''; } catch (e) {}
       var er = '';
       try {
-        var raw = localStorage.getItem(ROOM_KEY);
+        var raw = sessionStorage.getItem(ROOM_KEY);
         if (raw) { var o = JSON.parse(raw); if (o && o.r && (Date.now() - (o.t || 0) < 120000)) er = o.r; }
       } catch (e) {}
       _sessionRestoreSent = true;
@@ -408,14 +408,17 @@
     } catch (e) {}
   }
 
-  // 直前にいた部屋を localStorage に記録（チャット表示中のみ）。一覧にいた時は消す。
+  // 直前にいた部屋を sessionStorage に記録（チャット表示中のみ）。一覧にいた時は消す。
+  // ★ sessionStorage はアプリ完全終了で消える/バックグラウンド復帰・リロードでは残る。
+  //   → アプリを落として再起動した時はルーム選択画面から開始、写真ピッカー等の一時離脱では
+  //     元の部屋へ復帰、という挙動になる（localStorage だと再起動でも部屋に戻ってしまう）。
   function rememberRoom() {
     try {
       if (!ME) return;
       if (!SHOW_ROOMS && ACTIVE_ROOM && (VIEW === 'chat' || VIEW === '')) {
-        localStorage.setItem(ROOM_KEY, JSON.stringify({ r: ACTIVE_ROOM, t: Date.now() }));
+        sessionStorage.setItem(ROOM_KEY, JSON.stringify({ r: ACTIVE_ROOM, t: Date.now() }));
       } else if (SHOW_ROOMS) {
-        localStorage.removeItem(ROOM_KEY);
+        sessionStorage.removeItem(ROOM_KEY);
       }
     } catch (e) {}
   }

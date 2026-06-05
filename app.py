@@ -3102,10 +3102,12 @@ _cur_view    = st.session_state.get("view", "")
 _vapid_pub = _vapid_cfg().get("vapid_public_key", "")
 
 # ── メンション候補（@ を打つと出る補完ドロップダウン用）──
-# 先頭に AI アシスタント、その後に自分以外の家族。tag = 実際に挿入される文字（@{tag}）。
-# AI は bridge が「@AI/＠AI」で拾うため tag を "AI" 固定にする。
+# 先頭に AI アシスタント、その後に「このルームに参加している」自分以外の家族のみ。
+# tag = 実際に挿入される文字（@{tag}）。AI は bridge が「@AI/＠AI」で拾うため tag を "AI" 固定。
+# ★ そのルームに参加していない人は候補に出さない（room_members で絞る）。
 _mention_list = [{"name": "AI アシスタント", "avatar": "🤖", "tag": "AI"}]
-for _mu in fetch_all_users():
+_mention_users = fetch_room_members(_active_room_id) if _active_room_id else fetch_all_users()
+for _mu in _mention_users:
     if _mu.get("id") == _cu.get("id"):
         continue   # 自分はメンション候補に出さない
     _nm = _mu.get("name", "")

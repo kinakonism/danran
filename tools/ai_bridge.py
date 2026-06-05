@@ -795,7 +795,10 @@ def main():
                     continue
                 print(f"[danran-bridge] 新着 ← [{rn}] {sender}: {(content or '(画像)')[:50]}")
                 prompt = build_prompt(msgs, is_ai_room)
-                imgs = download_images(msgs)   # 直近の画像があれば落として Vision で見せる
+                # ★ 写真は「今回送られた最新メッセージの画像」だけ Vision で見せる。
+                #   以前は直近3枚を毎回見せていたため、AI が同じ写真に毎回反応して鬱陶しかった。
+                #   トリガーが画像メッセージのときだけ1回反応する（テキスト送信では過去写真を蒸し返さない）。
+                imgs = download_images([newest])
                 if imgs:
                     prompt += ("\n\n--- 添付画像 ---\n次の画像ファイルを Read ツールで開いて"
                                "内容を確認し、回答に反映してください: " + ", ".join(imgs))

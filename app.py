@@ -978,7 +978,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v137",   # スプラッシュ復元中に残存ポップアップ類を消す（長押しポップアップが見えるバグ）
+    "danran_lp_v138",   # AI応答待ちの「考え中…」吹き出し（AIルーム/＠AI送信時に表示し返信で消す）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -3270,6 +3270,9 @@ st.html(
     f'data-push-resub="{str(_push_resub).lower()}" '
     f'data-mentions-json="{_html.escape(_mentions_json, quote=True)}" '
     f'data-room-facetime="{_html.escape(_room_ft, quote=True)}" '
+    # ── AI 応答待ちインジケータ用（JS が「考え中…」吹き出しを出す判定に使う）──
+    f'data-ai-room="{_html.escape(AI_ROOM_NAME)}" '
+    f'data-ai-bot="{_html.escape(AI_BOT_NAME)}" '
     # ── 引用返信ターゲット（JS が入力欄の上に固定バーを描画する）──
     f'data-reply-id="{_html.escape((st.session_state.get("_reply_to") or {}).get("id","") or "")}" '
     f'data-reply-name="{_html.escape((st.session_state.get("_reply_to") or {}).get("name","") or "")}" '

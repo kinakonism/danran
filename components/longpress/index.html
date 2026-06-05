@@ -107,6 +107,8 @@
   var REPLY_ID    = '', REPLY_NAME = '', REPLY_TEXT = '', REPLY_IMG = '';  // 引用返信ターゲット
   var MENTIONS    = [];     // メンション候補 [{name, avatar, tag}] （data-mentions-json 由来）
   var ROOM_FACETIME = '';   // アクティブルームのグループ FaceTime リンク（data-room-facetime 由来）
+  var AI_ROOM_NAME  = '🤖 AIサポート';   // AI ルーム名（data-ai-room で上書き）
+  var AI_BOT_NAME   = '🤖 アシスタント'; // AI ボット表示名（data-ai-bot で上書き）
   var _embedFixed          = false;  // embed=true 除去リダイレクトを1回のみ実行
   var _sessionRestoreSent = false;  // restore_session postMessage を1回のみ送る
   var _gotRender          = false;  // streamlit:render を受信済みかどうか
@@ -202,6 +204,8 @@
       try { MENTIONS = JSON.parse(cfg.getAttribute('data-mentions-json') || '[]'); } catch (e) { MENTIONS = []; }
       ROOM_FACETIME = cfg.getAttribute('data-room-facetime') || '';
       try { window.parent.document._danranRoomFacetime = ROOM_FACETIME; } catch (e) {}
+      AI_ROOM_NAME = cfg.getAttribute('data-ai-room') || AI_ROOM_NAME;
+      AI_BOT_NAME  = cfg.getAttribute('data-ai-bot')  || AI_BOT_NAME;
       // ★ 死んだ iframe 問題対策: メンション補完リスナは最初に張った iframe が所有する。
       //   その iframe が死ぬとローカル var MENTIONS は更新されないので、親ドキュメント
       //   経由で共有し、リスナ側は pDoc._danranMentions を都度読む。
@@ -1935,6 +1939,7 @@
     try { setupMentionAutocomplete(window.parent.document); } catch (e) {}  // @ メンション補完（SendHook より先に張る）
     try { setupChatSendHook(window.parent.document); } catch (e) {}  // 送信検知フックを1回張る
     reconcileOptimistic();  // 楽観バブル: 本物が届いたら消す/失敗表示
+    reconcileAiThinking();  // AI考え中バブル: 返信到着/部屋移動/タイムアウトで消す
     sweepToast();           // 期限切れトーストの掃除（死んだ iframe タイマー対策）
     scrollToLatestOnEnter(); // チャット入室時に最新メッセージへ即移動
     scrollTopOnEditEnter();  // 編集系画面に入った瞬間だけ先頭へ（変なスクロール継承を防ぐ）
@@ -3761,6 +3766,87 @@
     } catch (e) {}
   }
 
+  /* ════════════════════════════════════════
+   *  AI 応答待ちインジケータ（「考え中…」吹き出し）
+   *  AIサポートルーム or 本文に @AI を含む送信時に、左側へタイピング風の吹き出しを出し、
+   *  ボット(🤖 アシスタント)の新着バブルが届いたら消す。送信中バブルと同じく React 管理外の
+   *  fixed 要素として body 直下に出す（再描画と衝突させない）。
+   * ════════════════════════════════════════ */
+  function ensureAiThinkCss(pDoc) {
+    if (pDoc.getElementById('_danran_aithink_css')) return;
+    var s = pDoc.createElement('style');
+    s.id = '_danran_aithink_css';
+    s.textContent =
+      '.dr-aidot{width:7px;height:7px;border-radius:50%;background:#f0a868;display:inline-block;' +
+      'animation:drAiBlink 1.25s infinite ease-in-out}' +
+      '.dr-aidot:nth-child(2){animation-delay:.18s}.dr-aidot:nth-child(3){animation-delay:.36s}' +
+      '@keyframes drAiBlink{0%,75%,100%{opacity:.25;transform:translateY(0)}38%{opacity:1;transform:translateY(-4px)}}';
+    pDoc.head.appendChild(s);
+  }
+  // 表示中のボット(AI)バブル数を数える（新着検知の基準）
+  function countBotBubbles() {
+    var n = 0;
+    try {
+      var els = window.parent.document.querySelectorAll('[data-lp-msg][data-lp-name]');
+      for (var i = 0; i < els.length; i++) {
+        if ((els[i].getAttribute('data-lp-name') || '') === AI_BOT_NAME) n++;
+      }
+    } catch (e) {}
+    return n;
+  }
+  // この送信が AI 応答を生むか（AIルーム or 本文に @AI/＠AI）
+  function willGetAiReply(text) {
+    if (ACTIVE_ROOM && AI_ROOM_NAME && ACTIVE_ROOM === AI_ROOM_NAME) return true;
+    return /[@＠]\s*AI(?![0-9A-Za-z])/i.test(text || '');
+  }
+  function addAiThinking() {
+    try {
+      var pDoc = window.parent.document;
+      if (pDoc.querySelector('[data-danran-aithink]')) return;   // 1つだけ
+      ensureAiThinkCss(pDoc);
+      var wrap = pDoc.createElement('div');
+      wrap.setAttribute('data-danran-aithink', '1');
+      wrap.style.cssText =
+        'position:fixed;left:10px;bottom:78px;z-index:2147483500;max-width:75vw;' +
+        'pointer-events:none;text-align:left;';
+      wrap.innerHTML =
+        '<div class="_aistatus" style="font-size:0.66rem;color:rgba(240,232,224,0.55);margin-bottom:3px">' +
+        '🤖 ' + (AI_BOT_NAME.replace(/^🤖\s*/, '')) + ' が考え中…</div>' +
+        '<div style="background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:12px 16px;' +
+        'display:inline-flex;gap:5px;align-items:center;box-shadow:0 2px 10px rgba(0,0,0,0.35)">' +
+        '<span class="dr-aidot"></span><span class="dr-aidot"></span><span class="dr-aidot"></span></div>';
+      wrap._aiBase = countBotBubbles();
+      wrap._aiTime = Date.now();
+      wrap._aiRoom = ACTIVE_ROOM;
+      pDoc.body.appendChild(wrap);
+    } catch (e) {}
+  }
+  var _lastAiThink = 0;
+  function maybeAiThinking(text) {
+    if (!willGetAiReply(text)) return;
+    var now = Date.now();
+    if (now - _lastAiThink < 800) return;   // 二重発火防止
+    _lastAiThink = now;
+    addAiThinking();
+  }
+  // scan() から毎回: ボット返信が届いた/部屋移動/タイムアウトで消す
+  function reconcileAiThinking() {
+    try {
+      var els = window.parent.document.querySelectorAll('[data-danran-aithink]');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var age = Date.now() - (el._aiTime || 0);
+        if (ACTIVE_ROOM !== el._aiRoom) { el.remove(); continue; }      // 部屋を離れた
+        if (countBotBubbles() > (el._aiBase || 0)) { el.remove(); continue; }  // 返信到着
+        if (age > 150000) { el.remove(); continue; }                    // 2.5分で諦め
+        if (age > 75000) {                                              // 遅延時は文言を変える
+          var st = el.querySelector('._aistatus');
+          if (st && st.textContent.indexOf('時間がかかって') < 0) st.textContent = '🤖 応答に時間がかかっています…';
+        }
+      }
+    } catch (e) {}
+  }
+
   // チャット入力の送信検知（rerun で作り直されるため document に委譲）
   /* ════════════════════════════════════════
    *  チャットヘッダー ☰ メニュー（写真アルバム / ルーム編集）
@@ -4154,7 +4240,7 @@
         var val0 = (ta.value || '').trim();
         var sb = pDoc.querySelector('[data-testid="stChatInputSubmitButton"]');
         e.stopImmediatePropagation(); e.preventDefault();
-        if (val0) maybeOptimistic(val0);
+        if (val0) { maybeOptimistic(val0); maybeAiThinking(val0); }
         if (sb) sb.click();
         return;
       }
@@ -4167,7 +4253,7 @@
       if (!btn) return;
       var ta = pDoc.querySelector('[data-testid="stChatInput"] textarea');
       var val = ta ? (ta.value || '').trim() : '';
-      if (val) maybeOptimistic(val);
+      if (val) { maybeOptimistic(val); maybeAiThinking(val); }
     }, true);
   }
 

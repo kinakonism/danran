@@ -58,6 +58,10 @@ Mac mini で自前ホスト**する構成へ移行した。
   `ssh mini 'cd ~/danran && git pull --ff-only -q && launchctl kickstart -k gui/$(id -u)/com.danran.app'`。
 - これにより **bridge 自動実装ループの「✅ 直したよ」= 実際に ~30秒で家族の画面へ反映**されるようになった。
   ただし `index.html` 変更時の `danran_lp_vNN` インクリメントは従来どおり実装役が行う必要がある。
+- **再起動時の黒画面対策**: app 再起動で開いている端末の WS が切れ「真っ暗のまま」になるのを防ぐため、
+  Worker が全ページ `<head>` に復帰ウォッチドッグを注入（`cloudflare/worker.js`）。フォアグラウンド復帰／
+  再オンライン時に `/_stcore/health` を確認し、サーバ再起動中なら戻り次第リロード、長時間離脱(>=20s)後は
+  健康でもリロードして再接続する。初回ロード詰まり用の18秒ウォッチドッグも併存。
 
 ### リソース消費（実測 2026-06-05・mini は M4 Pro 系 64GB/14コア）
 - **メモリ**: Streamlit 本体 ~260MB＋cloudflared ~46MB＋uv ~30MB ＝ **合計 ~340MB**（64GB の約 0.5%）。

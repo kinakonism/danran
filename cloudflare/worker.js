@@ -363,6 +363,20 @@ async function proxyHttp(request, url) {
             '}catch(e){}},18000);}catch(e){}})();</script>',
             { html: true },
           );
+          // ★ 復帰ウォッチドッグ。app 再起動(自動デプロイ)や iOS バックグラウンド復帰で WS が切れて
+          //   「真っ暗のまま」になるのを防ぐ。フォアグラウンド復帰/再オンライン時に health を確認し、
+          //   サーバが落ちていれば戻り次第リロード、長時間離脱(>=20s)後は健康でもリロードして再接続。
+          el.append(
+            '<script>(function(){var h=0;' +
+            'function rl(){var t=0;(function p(){fetch("/_stcore/health",{cache:"no-store"}).then(function(r){' +
+            'if(r.ok){location.reload();}else{if(++t<20)setTimeout(p,1500);}}).catch(function(){if(++t<20)setTimeout(p,1500);});})();}' +
+            'function res(){if(document.visibilityState!=="visible")return;var a=h?(Date.now()-h):0;h=0;' +
+            'fetch("/_stcore/health",{cache:"no-store"}).then(function(r){if(!r.ok){rl();}else if(a>=20000){location.reload();}}).catch(function(){rl();});}' +
+            'document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden"){h=Date.now();}else{res();}});' +
+            'window.addEventListener("pageshow",function(e){if(e.persisted)res();});' +
+            'window.addEventListener("online",res);})();</script>',
+            { html: true },
+          );
           el.append('<link rel="icon" type="image/png" href="/icons/icon-192.png">', { html: true });
           el.append('<link rel="apple-touch-icon" href="/icons/icon-192.png">', { html: true });
           el.append('<link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-192.png">', { html: true });

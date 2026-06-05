@@ -206,6 +206,14 @@
       try { window.parent.document._danranRoomFacetime = ROOM_FACETIME; } catch (e) {}
       AI_ROOM_NAME = cfg.getAttribute('data-ai-room') || AI_ROOM_NAME;
       AI_BOT_NAME  = cfg.getAttribute('data-ai-bot')  || AI_BOT_NAME;
+      // ★ 死んだ iframe 対策: 送信フックは最初の iframe が所有し、その ACTIVE_ROOM 等が stale だと
+      //   AI 判定に失敗する。生きた iframe が毎回 親ドキュメントへ現在値を共有し、フック側はそれを読む。
+      try {
+        var _pd = window.parent.document;
+        _pd._danranAiRoom = AI_ROOM_NAME;
+        _pd._danranAiBot  = AI_BOT_NAME;
+        _pd._danranActiveRoom = newRoom;
+      } catch (e) {}
       // ★ 死んだ iframe 問題対策: メンション補完リスナは最初に張った iframe が所有する。
       //   その iframe が死ぬとローカル var MENTIONS は更新されないので、親ドキュメント
       //   経由で共有し、リスナ側は pDoc._danranMentions を都度読む。
@@ -3783,20 +3791,25 @@
       '@keyframes drAiBlink{0%,75%,100%{opacity:.25;transform:translateY(0)}38%{opacity:1;transform:translateY(-4px)}}';
     pDoc.head.appendChild(s);
   }
+  // ★ 共有値ゲッタ（死んだ iframe でも生きた iframe が書いた親ドキュメント値を読む）
+  function _aiRoom()  { try { return window.parent.document._danranAiRoom || AI_ROOM_NAME; } catch (e) { return AI_ROOM_NAME; } }
+  function _aiBot()   { try { return window.parent.document._danranAiBot  || AI_BOT_NAME;  } catch (e) { return AI_BOT_NAME; } }
+  function _curRoom() { try { return window.parent.document._danranActiveRoom || ACTIVE_ROOM; } catch (e) { return ACTIVE_ROOM; } }
   // 表示中のボット(AI)バブル数を数える（新着検知の基準）
   function countBotBubbles() {
-    var n = 0;
+    var n = 0, bot = _aiBot();
     try {
       var els = window.parent.document.querySelectorAll('[data-lp-msg][data-lp-name]');
       for (var i = 0; i < els.length; i++) {
-        if ((els[i].getAttribute('data-lp-name') || '') === AI_BOT_NAME) n++;
+        if ((els[i].getAttribute('data-lp-name') || '') === bot) n++;
       }
     } catch (e) {}
     return n;
   }
   // この送信が AI 応答を生むか（AIルーム or 本文に @AI/＠AI）
   function willGetAiReply(text) {
-    if (ACTIVE_ROOM && AI_ROOM_NAME && ACTIVE_ROOM === AI_ROOM_NAME) return true;
+    var cur = _curRoom(), ar = _aiRoom();
+    if (cur && ar && cur === ar) return true;
     return /[@＠]\s*AI(?![0-9A-Za-z])/i.test(text || '');
   }
   function addAiThinking() {
@@ -3811,13 +3824,13 @@
         'pointer-events:none;text-align:left;';
       wrap.innerHTML =
         '<div class="_aistatus" style="font-size:0.66rem;color:rgba(240,232,224,0.55);margin-bottom:3px">' +
-        '🤖 ' + (AI_BOT_NAME.replace(/^🤖\s*/, '')) + ' が考え中…</div>' +
+        '🤖 ' + (_aiBot().replace(/^🤖\s*/, '')) + ' が考え中…</div>' +
         '<div style="background:#2e2926;color:#f0e8e0;border-radius:18px 18px 18px 4px;padding:12px 16px;' +
         'display:inline-flex;gap:5px;align-items:center;box-shadow:0 2px 10px rgba(0,0,0,0.35)">' +
         '<span class="dr-aidot"></span><span class="dr-aidot"></span><span class="dr-aidot"></span></div>';
       wrap._aiBase = countBotBubbles();
       wrap._aiTime = Date.now();
-      wrap._aiRoom = ACTIVE_ROOM;
+      wrap._aiRoom = _curRoom();
       pDoc.body.appendChild(wrap);
     } catch (e) {}
   }
@@ -3836,7 +3849,7 @@
       for (var i = 0; i < els.length; i++) {
         var el = els[i];
         var age = Date.now() - (el._aiTime || 0);
-        if (ACTIVE_ROOM !== el._aiRoom) { el.remove(); continue; }      // 部屋を離れた
+        if (_curRoom() !== el._aiRoom) { el.remove(); continue; }       // 部屋を離れた
         if (countBotBubbles() > (el._aiBase || 0)) { el.remove(); continue; }  // 返信到着
         if (age > 150000) { el.remove(); continue; }                    // 2.5分で諦め
         if (age > 75000) {                                              // 遅延時は文言を変える

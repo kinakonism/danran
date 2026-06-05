@@ -978,7 +978,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v138",   # AI応答待ちの「考え中…」吹き出し（AIルーム/＠AI送信時に表示し返信で消す）
+    "danran_lp_v139",   # AI考え中バブル: 死んだiframe対策で現ルーム判定を親doc共有値に
     path=_LP_COMPONENT_DIR,
 )
 

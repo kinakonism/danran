@@ -9,7 +9,9 @@ SB_KEY=$(grep -E '^[[:space:]]*anon_key[[:space:]]*=' "$SECRETS" | head -1 | sed
 CF="$HOME/.local/bin/cloudflared"
 LOG=/tmp/danran_tunnel.log
 : > "$LOG"
-"$CF" tunnel --no-autoupdate --url http://localhost:8501 >> "$LOG" 2>&1 &
+# ★ 127.0.0.1 を明示（localhost だと ::1=IPv6 が先に解決され、app は IPv4 のみ listen のため
+#   cloudflared が origin 到達失敗→断続的 502→「真っ暗」になる。IPv4 直指定で根絶）。
+"$CF" tunnel --no-autoupdate --url http://127.0.0.1:8501 >> "$LOG" 2>&1 &
 CFPID=$!
 URL=""
 for i in $(seq 1 40); do

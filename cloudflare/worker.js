@@ -1,26 +1,29 @@
 /**
- * danran Cloudflare Worker — v4
+ * danran Cloudflare Worker — v5
  *
- * 発見: Streamlit Community Cloud の実際の Streamlit アプリは
- *       /~/+/ 以下で nginx 認証をバイパスして Uvicorn に直接アクセスできる。
- *       セッション管理不要。
+ * 履歴: v3/v4 は Streamlit Community Cloud の /~/+/ 認証バイパスで Uvicorn に直結していたが、
+ *       2026-06 に Streamlit がこのバイパスを封鎖（/~/+/ が 400）。全アプリへ cookie 認証
+ *       バウンス（/ →share.streamlit.io/-/auth→ /-/login→ /）が導入された。
  *
- * v4 の変更:
- *   - WebSocket プロキシを cloudflare:sockets (手動TCP) から
- *     fetch() WebSocket API (ネイティブ) に変更。
- *     → フレームエンコーダー/デコーダー不要、Mac Chrome での安定性向上。
+ * v5 の変更:
+ *   - 認証 cookie ハンドシェイク（ensureSession / doHandshake）を実装し、取得した
+ *     streamlit_session 等を全上流リクエスト（HTTP + WebSocket）に注入。
+ *   - プロキシ先を /~/+/{path} から正規の /{path} に戻した。
+ *   - session 失効時は張り直して1回リトライ（isAuthBounce）。
  *
  * 役割:
  *   - /sw.js /manifest.json /icons/* を直接配信（PWA 実現）
- *   - /{path} → /~/+/{path} として Streamlit Uvicorn にリバースプロキシ
- *   - WebSocket: fetch() WebSocket API で /~/+/_stcore/stream にプロキシ
- *   - cron: 12時間ごとに Streamlit を warm-up
+ *   - /{path} → 上流 /{path} に cookie 認証付きでリバースプロキシ
+ *   - WebSocket: fetch() WebSocket API で /_stcore/stream にプロキシ（cookie 注入）
+ *   - cron: 15分ごとに Streamlit を warm-up＆セッション張り直し
  */
 
-const STREAMLIT_HOST   = 'danran-dhawa6nhapcwnq6lrjqzhw.streamlit.app';
+// ★ v6: 上流を Streamlit Community Cloud から「Mac mini 自前ホスト（Cloudflare Tunnel）」へ変更。
+//   Streamlit Cloud が /~/+/ バイパスを封鎖したため、mini で run.py を直接動かしトンネル公開する。
+//   トンネルURLが変わったらここを更新（将来は named tunnel / 独自ドメインで固定化）。
+const STREAMLIT_HOST   = 'underlying-contributors-guests-dining.trycloudflare.com';
 const STREAMLIT_ORIGIN = 'https://' + STREAMLIT_HOST;
-// 実際の Streamlit アプリは /~/+/ 以下に存在
-const APP_BASE_PATH    = '/~/+';
+const SELF_HOSTED      = true;   // 自前ホストは認証ハンドシェイク不要
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
 // ── Service Worker スクリプト ─────────────────────────────────────────
@@ -94,13 +97,90 @@ const MANIFEST_JSON = JSON.stringify({
   ],
 });
 
+// ── Streamlit Community Cloud 認証 cookie ハンドシェイク ───────────────────
+//
+// 2026-06 に Streamlit Community Cloud は全アプリへ cookie 認証バウンスを導入し、
+// 旧来の /~/+/ 認証バイパス（v3/v4）は 400 で封鎖された。
+// 正規ブラウザは次の連鎖で streamlit_session cookie を取得してからアプリを開く:
+//   GET /  →303→ share.streamlit.io/-/auth/app?redirect_uri=…
+//          →303→ /-/login?payload=…（_streamlit_csrf / streamlit_session 発行）
+//          →303→ /（streamlit_session 更新）  →200 アプリ本体（proxy-tracking-id 発行）
+// Worker がこの連鎖をサーバ側で実行して取得した cookie を全上流リクエストに注入する。
+// danran のユーザ認証は別途アプリ内（Supabase sessions）にあるため、
+// プラットフォーム session を全員で共有しても各ブラウザの WS=独立 Streamlit session で問題ない。
+let SESSION = { cookie: '', at: 0 };
+let SESSION_PROMISE = null;
+const SESSION_TTL_MS = 25 * 60 * 1000;   // 25分でリフレッシュ（streamlit_session は数時間有効）
+
+function parseSetCookies(resp, jar) {
+  let lines = [];
+  try { if (typeof resp.headers.getSetCookie === 'function') lines = resp.headers.getSetCookie(); } catch (e) {}
+  if (!lines.length) { const one = resp.headers.get('set-cookie'); if (one) lines = [one]; }
+  for (const line of lines) {
+    const m = /^\s*([^=;\s]+)=([^;]*)/.exec(line);
+    if (!m) continue;
+    const name = m[1], val = m[2];
+    if (val === '' || /(?:^|;)\s*max-age=0\b/i.test(line)) delete jar[name];
+    else jar[name] = val;
+  }
+}
+function jarToHeader(jar) {
+  return Object.keys(jar).map((k) => `${k}=${jar[k]}`).join('; ');
+}
+
+// 認証連鎖をたどって cookie を集める
+async function doHandshake() {
+  const jar = {};
+  let url = `${STREAMLIT_ORIGIN}/`;
+  for (let i = 0; i < 8; i++) {
+    const r = await fetch(url, {
+      headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Cookie': jarToHeader(jar) },
+      redirect: 'manual',
+    });
+    parseSetCookies(r, jar);
+    try { if (r.body) await r.body.cancel(); } catch (e) {}
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      if (!loc) break;
+      url = new URL(loc, url).toString();
+      continue;
+    }
+    break;   // 200 到達
+  }
+  const cookie = jarToHeader(jar);
+  console.log('[auth] handshake done, cookies=' + Object.keys(jar).join(','));
+  return cookie;
+}
+
+// 有効な session cookie を返す（キャッシュ＋同時実行は1本に集約）
+async function ensureSession(force) {
+  if (SELF_HOSTED) return '';   // 自前ホストは cookie 認証不要
+  const now = Date.now();
+  if (!force && SESSION.cookie && (now - SESSION.at) < SESSION_TTL_MS) return SESSION.cookie;
+  if (!SESSION_PROMISE) {
+    SESSION_PROMISE = doHandshake()
+      .then((c) => { if (c) SESSION = { cookie: c, at: Date.now() }; SESSION_PROMISE = null; return SESSION.cookie; })
+      .catch((e) => { SESSION_PROMISE = null; console.error('[auth] handshake failed:', e.message); return SESSION.cookie; });
+  }
+  return SESSION_PROMISE;
+}
+
+// 認証バウンス（session 失効）への 30x かどうか
+function isAuthBounce(res) {
+  if (res.status < 300 || res.status >= 400) return false;
+  const loc = (res.headers.get('location') || '').toLowerCase();
+  return loc.includes('/-/login') || loc.includes('/-/auth') || loc.includes('share.streamlit.io');
+}
+
 // ── メインハンドラ ────────────────────────────────────────────────────
 export default {
   async scheduled(event, env, ctx) {
-    // Streamlit warm-up（スリープ防止）
+    // Streamlit warm-up（スリープ防止）＋ セッション張り直し
     try {
-      const r = await fetch(`${STREAMLIT_ORIGIN}${APP_BASE_PATH}/`, {
-        headers: { 'User-Agent': UA },
+      const cookie = await ensureSession(true);
+      const r = await fetch(`${STREAMLIT_ORIGIN}/`, {
+        headers: { 'User-Agent': UA, 'Cookie': cookie },
+        redirect: 'manual',
       });
       console.log('[cron] warm-up:', r.status);
     } catch (e) {
@@ -168,44 +248,60 @@ export default {
   },
 };
 
-// ── HTTP プロキシ: /{path} → /~/+/{path} ──────────────────────────────
-async function proxyHttp(request, url) {
-  const upstreamPath = APP_BASE_PATH + url.pathname + url.search;
-  const upstream = `${STREAMLIT_ORIGIN}${upstreamPath}`;
-
+// 1 回分の上流リクエスト（cookie 注入）
+async function fetchUpstream(request, url, cookie, bodyBuf) {
+  const upstream = `${STREAMLIT_ORIGIN}${url.pathname}${url.search}`;
   const headers = new Headers();
   for (const [k, v] of request.headers.entries()) {
     const kl = k.toLowerCase();
-    if (kl === 'host') continue;
+    if (kl === 'host' || kl === 'cookie') continue;   // host と cookie は worker が決める
     headers.set(k, v);
   }
   headers.set('Host', STREAMLIT_HOST);
   headers.set('User-Agent', UA);
+  if (cookie) headers.set('Cookie', cookie);
 
-  const res = await fetch(upstream, {
+  const isBodyless = ['GET', 'HEAD'].includes(request.method);
+  return fetch(upstream, {
     method: request.method,
     headers,
-    body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
+    body: isBodyless ? undefined : bodyBuf,
     redirect: 'manual',
   });
+}
+
+// ── HTTP プロキシ: /{path} → 上流 /{path}（cookie 認証注入）──────────────
+async function proxyHttp(request, url) {
+  // リトライで body を再送できるよう、非 GET はバッファ化
+  const isBodyless = ['GET', 'HEAD'].includes(request.method);
+  const bodyBuf = isBodyless ? undefined : await request.arrayBuffer();
+
+  let cookie = await ensureSession(false);
+  let res = await fetchUpstream(request, url, cookie, bodyBuf);
+
+  // session 失効で認証バウンスに飛ばされたら、張り直して1回だけリトライ
+  if (isAuthBounce(res)) {
+    try { if (res.body) await res.body.cancel(); } catch (e) {}
+    cookie = await ensureSession(true);
+    res = await fetchUpstream(request, url, cookie, bodyBuf);
+  }
 
   const newHeaders = new Headers();
   for (const [k, v] of res.headers.entries()) {
     newHeaders.append(k, v);
   }
 
-  // リダイレクト先を Worker URL に書き換え
+  // リダイレクト先が streamlit.app を指していたら Worker URL に書き換え
   const loc = res.headers.get('location') || '';
   if (loc && res.status >= 300 && res.status < 400) {
     try {
       const locUrl = new URL(loc.startsWith('http') ? loc : `${STREAMLIT_ORIGIN}${loc}`);
-      let newPath = locUrl.pathname;
-      if (newPath.startsWith(APP_BASE_PATH)) newPath = newPath.slice(APP_BASE_PATH.length) || '/';
-      locUrl.hostname = url.hostname;
-      locUrl.protocol = url.protocol;
-      locUrl.port     = '';
-      locUrl.pathname = newPath;
-      newHeaders.set('Location', locUrl.toString());
+      if (locUrl.hostname === STREAMLIT_HOST) {
+        locUrl.hostname = url.hostname;
+        locUrl.protocol = url.protocol;
+        locUrl.port     = '';
+        newHeaders.set('Location', locUrl.toString());
+      }
     } catch (_) {}
   }
 
@@ -274,7 +370,7 @@ async function proxyHttp(request, url) {
 // v4: cloudflare:sockets (手動TCP) を廃止し fetch() WebSocket API に変更。
 //     フレームエンコーダー/デコーダー不要でシンプルかつ安定。
 async function handleWebSocket(request, url, ctx) {
-  const wsPath = APP_BASE_PATH + url.pathname + url.search;
+  const wsPath = url.pathname + url.search;
 
   // ブラウザ向け WebSocket ペア
   const [client, server] = Object.values(new WebSocketPair());
@@ -298,8 +394,8 @@ async function handleWebSocket(request, url, ctx) {
   const wsProtocol = request.headers.get('Sec-WebSocket-Protocol');
   if (wsProtocol) upstreamHeaders.set('Sec-WebSocket-Protocol', wsProtocol);
 
-  // Cookie があれば転送
-  const cookie = request.headers.get('Cookie');
+  // ★ 認証 cookie を注入（旧 /~/+/ バイパス廃止により必須）
+  const cookie = await ensureSession(false);
   if (cookie) upstreamHeaders.set('Cookie', cookie);
 
   let upstreamWS;

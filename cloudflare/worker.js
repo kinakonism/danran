@@ -21,9 +21,31 @@
 // ★ v6: 上流を Streamlit Community Cloud から「Mac mini 自前ホスト（Cloudflare Tunnel）」へ変更。
 //   Streamlit Cloud が /~/+/ バイパスを封鎖したため、mini で run.py を直接動かしトンネル公開する。
 //   トンネルURLが変わったらここを更新（将来は named tunnel / 独自ドメインで固定化）。
-const STREAMLIT_HOST   = 'underlying-contributors-guests-dining.trycloudflare.com';
+const STREAMLIT_HOST   = 'underlying-contributors-guests-dining.trycloudflare.com';  // フォールバック
 const STREAMLIT_ORIGIN = 'https://' + STREAMLIT_HOST;
 const SELF_HOSTED      = true;   // 自前ホストは認証ハンドシェイク不要
+
+// ★ トンネルURL自己追従: mini が現在のトンネルホストを Supabase app_config(tunnel_host) に書き、
+//   worker がそれを読む。クイックトンネルのURLが再起動で変わっても worker が自動追従する。
+const SB_URL  = 'https://fyadpbzlvyzihynpcckw.supabase.co';
+const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ5YWRwYnpsdnl6aWh5bnBjY2t3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3OTE3NTYsImV4cCI6MjA5NTM2Nzc1Nn0.Kf9kV1OBO5qxitqhmx32DgijXrxhRRbr8pHaM7q5Jy8';
+let HOST_CACHE = { host: STREAMLIT_HOST, at: 0 };
+const HOST_TTL_MS = 60 * 1000;   // 60秒キャッシュ
+
+async function getUpstreamHost() {
+  const now = Date.now();
+  if (HOST_CACHE.host && (now - HOST_CACHE.at) < HOST_TTL_MS) return HOST_CACHE.host;
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/app_config?key=eq.tunnel_host&select=value`, {
+      headers: { apikey: SB_ANON, Authorization: 'Bearer ' + SB_ANON },
+    });
+    const rows = await r.json();
+    const v = rows && rows[0] && rows[0].value;
+    if (v) { HOST_CACHE = { host: v, at: now }; return v; }
+  } catch (e) { console.error('[host] supabase lookup failed:', e.message); }
+  HOST_CACHE.at = now;   // 失敗時も叩きすぎない
+  return HOST_CACHE.host || STREAMLIT_HOST;
+}
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
 // ── Service Worker スクリプト ─────────────────────────────────────────
@@ -249,15 +271,15 @@ export default {
 };
 
 // 1 回分の上流リクエスト（cookie 注入）
-async function fetchUpstream(request, url, cookie, bodyBuf) {
-  const upstream = `${STREAMLIT_ORIGIN}${url.pathname}${url.search}`;
+async function fetchUpstream(request, url, cookie, bodyBuf, host) {
+  const upstream = `https://${host}${url.pathname}${url.search}`;
   const headers = new Headers();
   for (const [k, v] of request.headers.entries()) {
     const kl = k.toLowerCase();
     if (kl === 'host' || kl === 'cookie') continue;   // host と cookie は worker が決める
     headers.set(k, v);
   }
-  headers.set('Host', STREAMLIT_HOST);
+  headers.set('Host', host);
   headers.set('User-Agent', UA);
   if (cookie) headers.set('Cookie', cookie);
 
@@ -276,14 +298,15 @@ async function proxyHttp(request, url) {
   const isBodyless = ['GET', 'HEAD'].includes(request.method);
   const bodyBuf = isBodyless ? undefined : await request.arrayBuffer();
 
+  const host = await getUpstreamHost();
   let cookie = await ensureSession(false);
-  let res = await fetchUpstream(request, url, cookie, bodyBuf);
+  let res = await fetchUpstream(request, url, cookie, bodyBuf, host);
 
   // session 失効で認証バウンスに飛ばされたら、張り直して1回だけリトライ
   if (isAuthBounce(res)) {
     try { if (res.body) await res.body.cancel(); } catch (e) {}
     cookie = await ensureSession(true);
-    res = await fetchUpstream(request, url, cookie, bodyBuf);
+    res = await fetchUpstream(request, url, cookie, bodyBuf, host);
   }
 
   const newHeaders = new Headers();
@@ -295,8 +318,8 @@ async function proxyHttp(request, url) {
   const loc = res.headers.get('location') || '';
   if (loc && res.status >= 300 && res.status < 400) {
     try {
-      const locUrl = new URL(loc.startsWith('http') ? loc : `${STREAMLIT_ORIGIN}${loc}`);
-      if (locUrl.hostname === STREAMLIT_HOST) {
+      const locUrl = new URL(loc.startsWith('http') ? loc : `https://${host}${loc}`);
+      if (locUrl.hostname === host) {
         locUrl.hostname = url.hostname;
         locUrl.protocol = url.protocol;
         locUrl.port     = '';
@@ -371,19 +394,20 @@ async function proxyHttp(request, url) {
 //     フレームエンコーダー/デコーダー不要でシンプルかつ安定。
 async function handleWebSocket(request, url, ctx) {
   const wsPath = url.pathname + url.search;
+  const host = await getUpstreamHost();
 
   // ブラウザ向け WebSocket ペア
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
 
   // upstream へ WebSocket 接続（fetch() API）
-  const upstreamUrl = `https://${STREAMLIT_HOST}${wsPath}`;
+  const upstreamUrl = `https://${host}${wsPath}`;
 
   // upstream への接続ヘッダー
   const upstreamHeaders = new Headers();
-  upstreamHeaders.set('Host', STREAMLIT_HOST);
+  upstreamHeaders.set('Host', host);
   upstreamHeaders.set('User-Agent', UA);
-  upstreamHeaders.set('Origin', STREAMLIT_ORIGIN);
+  upstreamHeaders.set('Origin', `https://${host}`);
   upstreamHeaders.set('Upgrade', 'websocket');
   upstreamHeaders.set('Connection', 'Upgrade');
   upstreamHeaders.set('Sec-WebSocket-Version', '13');

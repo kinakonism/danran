@@ -3,6 +3,8 @@ danran - 家族専用チャットアプリ  Streamlit × Supabase
 セッション: Supabase sessions + URL ?s=SESSION_ID
 リアルタイム: @st.fragment(run_every="2s")
 通知: PWA Web Push (static/ → /app/static/ で配信、enableStaticServing=true)
+ホスティング: Mac mini 自前(run.py)+Cloudflare Tunnel+Worker。main へ push すると
+  mini の watcher(tools/deploy_watch.sh) が pull→app 自動再起動する（2026-06-05〜）。
 """
 
 import html as _html

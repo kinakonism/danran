@@ -3791,10 +3791,15 @@
       '@keyframes drAiBlink{0%,75%,100%{opacity:.25;transform:translateY(0)}38%{opacity:1;transform:translateY(-4px)}}';
     pDoc.head.appendChild(s);
   }
-  // ★ 共有値ゲッタ（死んだ iframe でも生きた iframe が書いた親ドキュメント値を読む）
-  function _aiRoom()  { try { return window.parent.document._danranAiRoom || AI_ROOM_NAME; } catch (e) { return AI_ROOM_NAME; } }
-  function _aiBot()   { try { return window.parent.document._danranAiBot  || AI_BOT_NAME;  } catch (e) { return AI_BOT_NAME; } }
-  function _curRoom() { try { return window.parent.document._danranActiveRoom || ACTIVE_ROOM; } catch (e) { return ACTIVE_ROOM; } }
+  // ★ 最も確実: 常に Python が最新で再描画する #_danran_cfg の属性を直接読む。
+  //   どの iframe が送信フックを所有していても（死んだ iframe でも）親ドキュメントの cfg は最新。
+  function _cfgAttr(name) {
+    try { var c = window.parent.document.getElementById(CFG_ID); return (c && c.getAttribute(name)) || ''; }
+    catch (e) { return ''; }
+  }
+  function _aiRoom()  { return _cfgAttr('data-ai-room') || AI_ROOM_NAME; }
+  function _aiBot()   { return _cfgAttr('data-ai-bot')  || AI_BOT_NAME; }
+  function _curRoom() { return _cfgAttr('data-room') || (function(){ try { return window.parent.document._danranActiveRoom || ACTIVE_ROOM; } catch (e) { return ACTIVE_ROOM; } })(); }
   // 表示中のボット(AI)バブル数を数える（新着検知の基準）
   function countBotBubbles() {
     var n = 0, bot = _aiBot();

@@ -349,18 +349,19 @@ async function proxyHttp(request, url) {
       .on('title', { element(el) { el.setInnerContent('danran'); } })
       .on('head', {
         element(el) {
-          // ★ 起動詰まり自動復旧ウォッチドッグ。長時間アイドル後の起動で Streamlit との接続が
-          //   確立せず「スプラッシュのまま/暗転」になることがある（手動で落とし再起動すると直る）。
-          //   18秒経っても通常画面が出ない（_danran_cfg 無し or スプラッシュ常駐）なら自動リロード。
-          //   sessionStorage で最大2回まで（無限ループ防止）、正常表示でカウンタ解除。
+          // ★ 起動詰まり自動復旧ウォッチドッグ。しばらく放置後の初回起動でコールドな WS 接続が
+          //   失敗し「スプラッシュのまま＝真っ暗」になることがある（手動で再起動すると直る＝
+          //   再接続が warm で通る）。これを自動化：7秒経っても通常画面が出ない（スプラッシュ常駐 or
+          //   _danran_cfg 無し）なら自動リロードして再接続させる。手動再起動と同じ効果。
+          //   sessionStorage で最大3回まで（無限ループ防止）、正常表示でカウンタ解除。
           el.append(
             '<script>(function(){try{setTimeout(function(){try{' +
             'var stuck=(!document.getElementById("_danran_cfg"))||document.getElementById("_danran_splash_wait");' +
             'var ok=document.querySelector("[data-testid=\\"stChatInput\\"]")||document.querySelector("input[type=password]");' +
             'if(stuck&&!ok){var n=parseInt(sessionStorage.getItem("_dwd")||"0",10);' +
-            'if(n<2){sessionStorage.setItem("_dwd",String(n+1));location.reload();}}' +
+            'if(n<3){sessionStorage.setItem("_dwd",String(n+1));location.reload();}}' +
             'else{sessionStorage.removeItem("_dwd");}' +
-            '}catch(e){}},18000);}catch(e){}})();</script>',
+            '}catch(e){}},7000);}catch(e){}})();</script>',
             { html: true },
           );
           // ★ 復帰ウォッチドッグ。app 再起動(自動デプロイ)や iOS バックグラウンド復帰で WS が切れて
@@ -436,21 +437,29 @@ async function handleWebSocket(request, url, ctx) {
   const cookie = await ensureSession(false);
   if (cookie) upstreamHeaders.set('Cookie', cookie);
 
-  let upstreamWS;
+  // ★ 上流 WS 接続はコールド時（しばらく放置後の初回）に失敗しやすいので最大3回リトライ。
+  //   これで「初回起動だけ真っ暗→手動再起動で直る」を、ユーザー操作なしで吸収する。
+  let upstreamWS = null;
   let agreedProtocol = null;
-  try {
-    const upstreamResp = await fetch(upstreamUrl, { headers: upstreamHeaders });
-    if (!upstreamResp.webSocket) {
-      const body = await upstreamResp.text().catch(() => '');
-      throw new Error(`upstream returned ${upstreamResp.status}: ${body.slice(0, 120)}`);
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3 && !upstreamWS; attempt++) {
+    try {
+      const upstreamResp = await fetch(upstreamUrl, { headers: upstreamHeaders });
+      if (!upstreamResp.webSocket) {
+        const body = await upstreamResp.text().catch(() => '');
+        throw new Error(`upstream returned ${upstreamResp.status}: ${body.slice(0, 80)}`);
+      }
+      upstreamWS = upstreamResp.webSocket;
+      agreedProtocol = upstreamResp.headers.get('Sec-WebSocket-Protocol');
+      upstreamWS.accept();
+      console.log(`[WS] connected to upstream (try ${attempt + 1}): ${wsPath}, protocol=${agreedProtocol}`);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 350));
     }
-    upstreamWS = upstreamResp.webSocket;
-    // upstream が選択したサブプロトコルを取得（ブラウザへの 101 にも echo する）
-    agreedProtocol = upstreamResp.headers.get('Sec-WebSocket-Protocol');
-    upstreamWS.accept();
-    console.log(`[WS] connected to upstream: ${wsPath}, protocol=${agreedProtocol}`);
-  } catch (err) {
-    console.error('[WS] upstream connect failed:', err.message);
+  }
+  if (!upstreamWS) {
+    console.error('[WS] upstream connect failed after retries:', lastErr && lastErr.message);
     server.close(1011, 'upstream connect failed');
     return new Response(null, { status: 101, webSocket: client });
   }

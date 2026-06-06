@@ -381,7 +381,11 @@
     try {
       var pDoc = window.parent.document;
       var sp = pDoc.getElementById('_danran_splash_wait');
-      if (!sp) { _splashFirstSeen = 0; return; }   // スプラッシュ無し＝正常
+      if (!sp) {                                   // スプラッシュ無し＝正常
+        _splashFirstSeen = 0;
+        try { sessionStorage.removeItem('_dsr'); } catch (e) {}  // 正常表示でリロード回数リセット
+        return;
+      }
       // ★ スプラッシュ（復元中）表示中は、前のセッションで開いていたポップアップ類を消す。
       //   iOS PWA を再開すると DOM が残ったまま再接続→スプラッシュが出るため、長押しポップアップ等が
       //   スプラッシュ上に見えてしまうバグの対策。スプラッシュ中は操作不要なので消して問題ない。
@@ -391,6 +395,22 @@
       });
       var now = Date.now();
       if (!_splashFirstSeen) { _splashFirstSeen = now; return; }
+      // ★ 久しぶりの立ち上げ(長時間バックグラウンド後の復帰)で真っ暗固着する保険。
+      //   restore_session の再送だけでは復帰できない（Python/接続ごと固まっている）ことが
+      //   あるので、スプラッシュが一定時間(>=9s)消えなければ手動再起動と同じく一度だけ
+      //   ページをリロードして接続し直す。Worker の起動時ウォッチドッグは load 時の
+      //   ワンショットで復帰時には再発火しないため、scan 駆動のここで補う。無限ループ
+      //   防止に sessionStorage で最大2回まで・正常表示でカウンタ解除。
+      if (now - _splashFirstSeen >= 9000) {
+        var rc = 0;
+        try { rc = parseInt(sessionStorage.getItem('_dsr') || '0', 10); } catch (e) {}
+        if (rc < 2) {
+          try { sessionStorage.setItem('_dsr', String(rc + 1)); } catch (e) {}
+          dlog('[danran] splash watchdog → hard reload (stuck ' + (now - _splashFirstSeen) + 'ms)');
+          try { window.parent.location.reload(); } catch (e) { try { location.reload(); } catch (e2) {} }
+          return;
+        }
+      }
       if (now - _splashFirstSeen < 1200) return;   // 一瞬の正常スプラッシュは許容
       if (now - _splashLastKick   < 1800) return;  // 連打防止（届くまで間隔を空けて再送）
       _splashLastKick = now;

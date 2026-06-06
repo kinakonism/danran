@@ -978,7 +978,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v143",   # 直前部屋ヒントを sessionStorage に(完全終了→再起動でルーム選択から開始)
+    "danran_lp_v144",   # 久しぶりの起動で真っ暗固着→スプラッシュ9s超で一度だけ自動リロード復旧
     path=_LP_COMPONENT_DIR,
 )
 

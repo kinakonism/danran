@@ -393,11 +393,19 @@ async function proxyHttp(request, url) {
             'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;transition:opacity .25s ease;";' +
             'd.innerHTML="<div style=\'font-size:3.2rem;animation:_drBootPulse 1.2s ease-in-out infinite\'>\\ud83c\\udfe0</div>' +
             '<div style=\'color:rgba(240,232,224,.5);font-size:.85rem;font-weight:700;letter-spacing:.12em\'>danran</div>";' +
-            'document.body.appendChild(d);var t0=Date.now();' +
-            '(function chk(){var ready=document.getElementById("_danran_cfg")||' +
-            'document.querySelector("input[type=password]")||document.getElementById("_danran_splash_wait");' +
-            'if(ready||Date.now()-t0>12000){d.style.opacity="0";setTimeout(function(){if(d.parentNode)d.remove();},260);}' +
-            'else{setTimeout(chk,150);}})();' +
+            'document.body.appendChild(d);var t0=Date.now();var cfgAt=0;' +
+            'function fade(){d.style.opacity="0";setTimeout(function(){if(d.parentNode)d.remove();},260);}' +
+            // 剥がすのは「最終画面が実際に描画されたとき」: ルーム一覧 or チャット入力欄 or ログインフォーム。
+            // cfg(設定タグ)だけで剥がすと組み立て途中がチラ見えする。出現後 250ms 待って塗り完了させてから。
+            // フォールバック: cfg 出現から 3s 経過(0ルーム招待待ち等のレア画面) / 12s 強制。
+            '(function chk(){' +
+            'var hard=document.getElementById("_danran_room_list")||' +
+            'document.querySelector("[data-testid=\\u0022stChatInput\\u0022]")||' +
+            'document.querySelector("input[type=password]");' +
+            'if(!cfgAt&&document.getElementById("_danran_cfg"))cfgAt=Date.now();' +
+            'if(hard){setTimeout(fade,250);return;}' +
+            'if((cfgAt&&Date.now()-cfgAt>3000)||Date.now()-t0>12000){fade();return;}' +
+            'setTimeout(chk,150);})();' +
             '}catch(e){}}' +
             'if(document.body){mk();}else{document.addEventListener("DOMContentLoaded",mk);}' +
             '})();</script>',

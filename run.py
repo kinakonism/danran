@@ -32,6 +32,24 @@ if _USE_IPV4_ONLY:
         return v4 or res
     socket.getaddrinfo = _getaddrinfo_v4
 
+# ── FD 上限の引き上げ（LaunchAgent のデフォルト soft limit=256 対策）──────────
+#   アイドルでも ~150 FD 消費しており、家族同時利用＋リロードで 256 に当たると
+#   accept() が EMFILE で止まり、cloudflared から「dial tcp 127.0.0.1:8501: i/o timeout」
+#   → 利用中にバーストで 502/真っ暗、の原因になる。プロセス内で引き上げる。
+try:
+    import resource
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    for _target in (10240, 8192, 4096, 2048):
+        if _soft >= _target:
+            break
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (_target, _hard))
+            break
+        except (ValueError, OSError):
+            continue
+except Exception:
+    pass
+
 # ────────────────────────────────────────────────
 # Starlette の create_streamlit_routes を上書き
 # → /sw.js と /manifest.json を最優先ルートとして追加

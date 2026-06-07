@@ -385,7 +385,7 @@ async function proxyHttp(request, url) {
           //   リロード後も同じスプラッシュが出るので連続演出になる）。
           el.append(
             '<style>@keyframes _drBootPulse{0%,100%{opacity:.5;transform:scale(.96)}50%{opacity:1;transform:scale(1)}}' +
-            '[data-testid="stAppSkeleton"]{display:none!important}</style>' +
+            '[data-testid="stAppSkeleton"],[data-testid="stSkeleton"]{display:none!important}</style>' +
             '<script>(function(){function mk(){try{' +
             'if(document.getElementById("_danran_boot_splash"))return;' +
             'var d=document.createElement("div");d.id="_danran_boot_splash";' +

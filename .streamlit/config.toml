@@ -5,6 +5,14 @@ toolbarMode = "minimal"
 [browser]
 gatherUsageStats = false
 
+[server]
+# ★ ファイル監視を無効化（2026-06-07・「断続的に固まる」の根本対策）
+#   watchdog 未導入だと Streamlit は純Pythonポーリング監視（全監視ファイルを定期再読込
+#   ＋ハッシュ計算）で動き、このバーストが GIL を握って接続受付を断続停止させていた
+#   （プローブ実測: アイドルでも loopback 接続の 4〜10% が 10秒超ストール）。
+#   本番のコード反映は deploy_watch.sh の再起動が担うため Streamlit の監視は不要。
+fileWatcherType = "none"
+
 # ── テーマ: あたたかダーク（団欒）──
 # 灯りのような暖色。青黒ではなく茶寄りの黒＋琥珀アクセント。
 [theme]

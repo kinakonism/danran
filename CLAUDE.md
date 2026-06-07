@@ -32,14 +32,14 @@ Mac mini で自前ホスト**する構成へ移行した。
 
 ### 構成図
 ```
-家族のホーム画面(Worker URL) → Cloudflare Worker → Cloudflare Tunnel → Mac mini: run.py(:8501)
+家族のホーム画面(Worker URL) → Cloudflare Worker → Cloudflare Tunnel → Mac mini: run.py(:8601)
 ```
 - **Worker**（`cloudflare/worker.js` v6）= 固定の公開入口。`/sw.js` `/manifest.json` `/icons` は
   Worker が直接配信、それ以外と WebSocket をトンネルへプロキシ。`SELF_HOSTED=true`。
 - **上流ホストは Supabase から動的取得**（`app_config.tunnel_host`、60s キャッシュ）。クイック
   トンネルの URL が再起動で変わっても Worker が自動追従する。デプロイは `cd cloudflare && npx wrangler deploy`。
 - **Mac mini の LaunchAgent**（GUIドメイン・KeepAlive/RunAtLoad、`~/Library/LaunchAgents/`）:
-  - `com.danran.app` = `uv run python run.py`（env: `PORT=8501` / `STREAMLIT_SERVER_ENABLE_CORS=false`
+  - `com.danran.app` = `uv run python run.py`（env: `PORT=8601`（※2026-06-07 に 8501→8601 移転。8501 は TIME_WAIT ゾンビ汚染のため放棄） / `STREAMLIT_SERVER_ENABLE_CORS=false`
     / `STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false`）
   - `com.danran.tunnel` = `bash tools/tunnel_run.sh`（cloudflared 起動＋現 URL を `app_config` に登録）
   - `com.danran.deploy` = `bash tools/deploy_watch.sh`（30秒ごと・自動デプロイ。下記）

@@ -32,6 +32,32 @@ if _USE_IPV4_ONLY:
         return v4 or res
     socket.getaddrinfo = _getaddrinfo_v4
 
+# ── ストール自己診断（真っ暗調査・2026-06-07）────────────────────────────────
+#   症状: CPU 0%・資源余裕なのに localhost への health が 10 秒以上応答しない瞬間がある
+#   （= イベントループが同期処理で固まっている疑い）。固まった瞬間に全スレッドの
+#   スタックを /tmp/danran_stall.log へダンプして犯人の行を特定する。
+def _start_stall_watch():
+    import threading, faulthandler, urllib.request, time as _t, datetime as _dt
+    port = os.environ.get("PORT", "8501")
+    def _watch():
+        _t.sleep(30)   # 起動完了を待つ
+        while True:
+            try:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/_stcore/health", timeout=6)
+                _t.sleep(7)
+            except Exception as e:
+                try:
+                    with open("/tmp/danran_stall.log", "a") as f:
+                        f.write(f"\n===== {_dt.datetime.now():%m-%d %H:%M:%S} "
+                                f"stall: {type(e).__name__} {e} =====\n")
+                        faulthandler.dump_traceback(file=f)
+                except Exception:
+                    pass
+                _t.sleep(30)   # 連発抑制
+    threading.Thread(target=_watch, daemon=True, name="danran-stall-watch").start()
+_start_stall_watch()
+
 # ── FD 上限の引き上げ（LaunchAgent のデフォルト soft limit=256 対策）──────────
 #   アイドルでも ~150 FD 消費しており、家族同時利用＋リロードで 256 に当たると
 #   accept() が EMFILE で止まり、cloudflared から「dial tcp 127.0.0.1:8501: i/o timeout」

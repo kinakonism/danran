@@ -44,6 +44,9 @@ Mac mini で自前ホスト**する構成へ移行した。
   - `com.danran.tunnel` = `bash tools/tunnel_run.sh`（cloudflared 起動＋現 URL を `app_config` に登録）
   - `com.danran.deploy` = `bash tools/deploy_watch.sh`（30秒ごと・自動デプロイ。下記）
   - `com.danran.caffeinate` = `/usr/bin/caffeinate -s`（**システムスリープ恒久抑止**。2026-06-07 追加）
+  - `com.danran.health` = `bash tools/health_watch.sh`（1時間ごと健康監視。TCP残骸>5000 or ローカル接続
+    2/5失敗で まさと に Web Push「再起動どき」。12hに1回まで。2026-06-07 追加 — 82日稼働で
+    カーネルのTCP残骸掃除が停止→ポート枯渇→真っ暗、の再発を早期検知する）
   - 確認: `launchctl print gui/$(id -u)/com.danran.app` ／ ログ `/tmp/danran_app.log`・`/tmp/danran_tunnel*.log`・`/tmp/danran_deploy.log`
   - ※GUIドメインなので mini ログイン中のみ稼働（mini は常時ログイン運用）。bridge(`com.danran.bridge`) と同流儀。
 - **★ mini のスリープ/App Nap 対策（2026-06-07・「久しぶりに開くと真っ暗」の根本原因）**:

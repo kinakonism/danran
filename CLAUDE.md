@@ -43,8 +43,16 @@ Mac mini で自前ホスト**する構成へ移行した。
     / `STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false`）
   - `com.danran.tunnel` = `bash tools/tunnel_run.sh`（cloudflared 起動＋現 URL を `app_config` に登録）
   - `com.danran.deploy` = `bash tools/deploy_watch.sh`（30秒ごと・自動デプロイ。下記）
+  - `com.danran.caffeinate` = `/usr/bin/caffeinate -s`（**システムスリープ恒久抑止**。2026-06-07 追加）
   - 確認: `launchctl print gui/$(id -u)/com.danran.app` ／ ログ `/tmp/danran_app.log`・`/tmp/danran_tunnel*.log`・`/tmp/danran_deploy.log`
   - ※GUIドメインなので mini ログイン中のみ稼働（mini は常時ログイン運用）。bridge(`com.danran.bridge`) と同流儀。
+- **★ mini のスリープ/App Nap 対策（2026-06-07・「久しぶりに開くと真っ暗」の根本原因）**:
+  mini の電源設定が `sleep 1`（1分でスリープ）で、他アプリのスリープ抑止アサーションが外れると居眠り
+  → cloudflared が `dial tcp 127.0.0.1:8501: i/o timeout`（同一マシン内なのに!）→ 真っ暗、という断続障害だった。
+  対策: ① `com.danran.caffeinate`（`caffeinate -s` 常駐＝PreventSystemSleep forever）
+  ② app/tunnel の plist に `ProcessType=Interactive`（App Nap 除外）。
+  `sudo pmset -a sleep 0` はパスワード要のため未実施（caffeinate で実質同等）。
+  症状再発時はまず `ssh mini 'pmset -g assertions | grep -i caffeinate'` と `/tmp/danran_tunnel.log` の dial timeout を確認。
 
 ### ★ デプロイ（自動・2026-06-05〜）
 `main` に push すれば **mini の watcher (`tools/deploy_watch.sh` / `com.danran.deploy`, 30秒間隔) が

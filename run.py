@@ -45,7 +45,7 @@ def _start_stall_watch():
             try:
                 urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/_stcore/health", timeout=6)
-                _t.sleep(7)
+                _t.sleep(30)   # 7s→30s: ループバック接続の浪費を抑える（TIME_WAIT蓄積対策）
             except Exception as e:
                 try:
                     with open("/tmp/danran_stall.log", "a") as f:

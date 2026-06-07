@@ -32,9 +32,11 @@ const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsIn
 let HOST_CACHE = { host: STREAMLIT_HOST, at: 0 };
 const HOST_TTL_MS = 60 * 1000;   // 60秒キャッシュ
 
-async function getUpstreamHost() {
+async function getUpstreamHost(force) {
+  // force=true でキャッシュを無視して Supabase から取り直す
+  // （トンネル再起動直後の stale ホスト固着 → 最大60秒つながらない、を接続失敗時に即解消）
   const now = Date.now();
-  if (HOST_CACHE.host && (now - HOST_CACHE.at) < HOST_TTL_MS) return HOST_CACHE.host;
+  if (!force && HOST_CACHE.host && (now - HOST_CACHE.at) < HOST_TTL_MS) return HOST_CACHE.host;
   try {
     const r = await fetch(`${SB_URL}/rest/v1/app_config?key=eq.tunnel_host&select=value`, {
       headers: { apikey: SB_ANON, Authorization: 'Bearer ' + SB_ANON },
@@ -47,6 +49,21 @@ async function getUpstreamHost() {
   return HOST_CACHE.host || STREAMLIT_HOST;
 }
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
+// ── 上流完全死亡時の自動リトライページ（🏠スプラッシュ＋health回復で自動リロード）──
+//   素の 502 を返すと PWA 起動が「真っ暗な失敗画面」で止まり手動再起動が必要になる。
+//   このページは 4 秒ごとに health を払い、回復したら勝手に本物のアプリへ戻る。
+const RETRY_HTML = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes"><title>danran</title>
+<style>body{margin:0;background:#1a1614;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:12px;font-family:-apple-system,sans-serif}
+@keyframes p{0%,100%{opacity:.5;transform:scale(.96)}50%{opacity:1;transform:scale(1)}}</style></head><body>
+<div style="font-size:3.2rem;animation:p 1.2s ease-in-out infinite">\u{1F3E0}</div>
+<div style="color:rgba(240,232,224,.5);font-size:.85rem;font-weight:700;letter-spacing:.12em">danran</div>
+<div style="color:rgba(240,232,224,.35);font-size:.75rem">つなぎ直しています…</div>
+<script>(function p(){fetch("/_stcore/health",{cache:"no-store"}).then(function(r){
+if(r.ok){location.reload();}else{setTimeout(p,4000);}}).catch(function(){setTimeout(p,4000);});})();</script>
+</body></html>`;
 
 // ── Service Worker スクリプト ─────────────────────────────────────────
 const SW_JS = `
@@ -298,9 +315,41 @@ async function proxyHttp(request, url) {
   const isBodyless = ['GET', 'HEAD'].includes(request.method);
   const bodyBuf = isBodyless ? undefined : await request.arrayBuffer();
 
-  const host = await getUpstreamHost();
+  let host = await getUpstreamHost();
   let cookie = await ensureSession(false);
-  let res = await fetchUpstream(request, url, cookie, bodyBuf, host);
+  // ★ 接続失敗(throw)や 502/530（トンネル死亡）はホストをキャッシュ無視で取り直して
+  //   1回だけリトライ。トンネル再起動直後の stale ホスト固着（最大60秒 502）を自己修復する。
+  let res = null;
+  try {
+    res = await fetchUpstream(request, url, cookie, bodyBuf, host);
+  } catch (e) {
+    res = null;
+  }
+  if (!res || res.status === 502 || res.status === 530) {
+    try { if (res && res.body) await res.body.cancel(); } catch (e) {}
+    const host2 = await getUpstreamHost(true);
+    if (host2 !== host || !res) {
+      host = host2;
+      try {
+        res = await fetchUpstream(request, url, cookie, bodyBuf, host);
+      } catch (e) {
+        res = null;
+      }
+    }
+  }
+  // それでもダメな場合、ページ要求には「🏠つなぎ直し」自動リトライページを返す
+  // （素の 502 だと PWA 起動が真っ暗な失敗画面で止まる。health 回復で自動リロード）
+  if (!res || res.status === 502 || res.status === 530) {
+    const accept = request.headers.get('accept') || '';
+    if (isBodyless && accept.includes('text/html')) {
+      try { if (res && res.body) await res.body.cancel(); } catch (e) {}
+      return new Response(RETRY_HTML, {
+        status: 503,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    }
+    if (!res) res = new Response('upstream unreachable', { status: 502 });
+  }
 
   // session 失効で認証バウンスに飛ばされたら、張り直して1回だけリトライ
   if (isAuthBounce(res)) {
@@ -354,13 +403,28 @@ async function proxyHttp(request, url) {
           //   再接続が warm で通る）。これを自動化：7秒経っても通常画面が出ない（スプラッシュ常駐 or
           //   _danran_cfg 無し）なら自動リロードして再接続させる。手動再起動と同じ効果。
           //   sessionStorage で最大3回まで（無限ループ防止）、正常表示でカウンタ解除。
+          //   3回の即時リロードで直らない場合も諦めず「持久戦モード」へ: スプラッシュを
+          //   保持したまま health を払い続け、通った時だけリロード（健全時のみ＝無限高速
+          //   ループにならない）。リロード間隔は _dws で漸増（8s→16s→…→60s 上限）。
+          //   正常表示で _dwd/_dws とも解除。これで「3回失敗→永久に真っ暗」を根絶する。
           el.append(
             '<script>(function(){try{setTimeout(function(){try{' +
             'var stuck=(!document.getElementById("_danran_cfg"))||document.getElementById("_danran_splash_wait");' +
             'var ok=document.querySelector("[data-testid=\\"stChatInput\\"]")||document.querySelector("input[type=password]");' +
-            'if(stuck&&!ok){var n=parseInt(sessionStorage.getItem("_dwd")||"0",10);' +
-            'if(n<3){sessionStorage.setItem("_dwd",String(n+1));location.reload();}}' +
-            'else{sessionStorage.removeItem("_dwd");}' +
+            'if(!stuck||ok){sessionStorage.removeItem("_dwd");sessionStorage.removeItem("_dws");return;}' +
+            'var n=parseInt(sessionStorage.getItem("_dwd")||"0",10);' +
+            'if(n<3){sessionStorage.setItem("_dwd",String(n+1));location.reload();return;}' +
+            'var s=parseInt(sessionStorage.getItem("_dws")||"0",10);' +
+            'var wait=Math.min(8000*(s+1),60000);' +
+            'if(window._danranBootSplash)window._danranBootSplash(true,"\\u3064\\u306a\\u304e\\u76f4\\u3057\\u3066\\u3044\\u307e\\u3059\\u2026");' +
+            'setTimeout(function poll(){' +
+            'var ok2=document.querySelector("[data-testid=\\"stChatInput\\"]")||document.getElementById("_danran_room_list");' +
+            'if(ok2){sessionStorage.removeItem("_dwd");sessionStorage.removeItem("_dws");' +
+            'if(window._danranBootSplash)window._danranBootSplash(false,"");return;}' +
+            'fetch("/_stcore/health",{cache:"no-store"}).then(function(r){' +
+            'if(r.ok){sessionStorage.setItem("_dws",String(s+1));location.reload();}' +
+            'else{setTimeout(poll,wait);}}).catch(function(){setTimeout(poll,wait);});' +
+            '},wait);' +
             '}catch(e){}},7000);}catch(e){}})();</script>',
             { html: true },
           );
@@ -386,28 +450,37 @@ async function proxyHttp(request, url) {
           el.append(
             '<style>@keyframes _drBootPulse{0%,100%{opacity:.5;transform:scale(.96)}50%{opacity:1;transform:scale(1)}}' +
             '[data-testid="stAppSkeleton"],[data-testid="stSkeleton"]{display:none!important}</style>' +
-            '<script>(function(){function mk(){try{' +
-            'if(document.getElementById("_danran_boot_splash"))return;' +
-            'var d=document.createElement("div");d.id="_danran_boot_splash";' +
+            // mk(sticky): sticky=true（持久戦リカバリ中）は時間切れで剥がさず、実画面が出るまで保持。
+            // window._danranBootSplash として公開し、7秒ウォッチドッグの持久戦モードからも呼べる。
+            '<script>(function(){function mk(sticky,label){try{' +
+            'var d=document.getElementById("_danran_boot_splash");' +
+            'if(!d){' +
+            'd=document.createElement("div");d.id="_danran_boot_splash";' +
             'd.style.cssText="position:fixed;inset:0;z-index:2147483647;background:#1a1614;pointer-events:none;' +
             'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;transition:opacity .25s ease;";' +
             'd.innerHTML="<div style=\'font-size:3.2rem;animation:_drBootPulse 1.2s ease-in-out infinite\'>\\ud83c\\udfe0</div>' +
-            '<div style=\'color:rgba(240,232,224,.5);font-size:.85rem;font-weight:700;letter-spacing:.12em\'>danran</div>";' +
+            '<div style=\'color:rgba(240,232,224,.5);font-size:.85rem;font-weight:700;letter-spacing:.12em\'>danran</div>' +
+            '<div id=_danran_boot_sub style=\'color:rgba(240,232,224,.35);font-size:.75rem;min-height:1em\'></div>";' +
             'document.body.appendChild(d);var t0=Date.now();var cfgAt=0;' +
-            'function fade(){d.style.opacity="0";setTimeout(function(){if(d.parentNode)d.remove();},260);}' +
+            'var fade=function(){d.style.opacity="0";setTimeout(function(){if(d.parentNode)d.remove();},260);};' +
             // 剥がすのは「最終画面が実際に描画されたとき」: ルーム一覧 or チャット入力欄 or ログインフォーム。
             // cfg(設定タグ)だけで剥がすと組み立て途中がチラ見えする。出現後 250ms 待って塗り完了させてから。
-            // フォールバック: cfg 出現から 3s 経過(0ルーム招待待ち等のレア画面) / 12s 強制。
+            // フォールバック: cfg 出現から 3s 経過(0ルーム招待待ち等のレア画面) / 12s 強制（sticky 中は無効）。
             '(function chk(){' +
             'var hard=document.getElementById("_danran_room_list")||' +
             'document.querySelector("[data-testid=\\u0022stChatInput\\u0022]")||' +
             'document.querySelector("input[type=password]");' +
             'if(!cfgAt&&document.getElementById("_danran_cfg"))cfgAt=Date.now();' +
             'if(hard){setTimeout(fade,250);return;}' +
-            'if((cfgAt&&Date.now()-cfgAt>3000)||Date.now()-t0>12000){fade();return;}' +
+            'if(d.getAttribute("data-sticky")!=="1"&&((cfgAt&&Date.now()-cfgAt>3000)||Date.now()-t0>12000)){fade();return;}' +
             'setTimeout(chk,150);})();' +
+            '}' +
+            'if(sticky)d.setAttribute("data-sticky","1");' +
+            'var sub=document.getElementById("_danran_boot_sub");' +
+            'if(sub&&label!==undefined)sub.textContent=label||"";' +
             '}catch(e){}}' +
-            'if(document.body){mk();}else{document.addEventListener("DOMContentLoaded",mk);}' +
+            'window._danranBootSplash=mk;' +
+            'if(document.body){mk();}else{document.addEventListener("DOMContentLoaded",function(){mk();});}' +
             '})();</script>',
             { html: true },
           );
@@ -442,40 +515,38 @@ async function proxyHttp(request, url) {
 //     フレームエンコーダー/デコーダー不要でシンプルかつ安定。
 async function handleWebSocket(request, url, ctx) {
   const wsPath = url.pathname + url.search;
-  const host = await getUpstreamHost();
 
   // ブラウザ向け WebSocket ペア
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
 
-  // upstream へ WebSocket 接続（fetch() API）
-  const upstreamUrl = `https://${host}${wsPath}`;
-
-  // upstream への接続ヘッダー
-  const upstreamHeaders = new Headers();
-  upstreamHeaders.set('Host', host);
-  upstreamHeaders.set('User-Agent', UA);
-  upstreamHeaders.set('Origin', `https://${host}`);
-  upstreamHeaders.set('Upgrade', 'websocket');
-  upstreamHeaders.set('Connection', 'Upgrade');
-  upstreamHeaders.set('Sec-WebSocket-Version', '13');
-
   // ★ 重要: Sec-WebSocket-Protocol を転送（streamlit + auth token）
   // Streamlit JS は new WebSocket(url, ['streamlit', 'PLACEHOLDER_AUTH_TOKEN']) で接続する
   // このサブプロトコルをそのまま upstream に転送しないと Streamlit が認証できない
   const wsProtocol = request.headers.get('Sec-WebSocket-Protocol');
-  if (wsProtocol) upstreamHeaders.set('Sec-WebSocket-Protocol', wsProtocol);
 
   // ★ 認証 cookie を注入（旧 /~/+/ バイパス廃止により必須）
   const cookie = await ensureSession(false);
-  if (cookie) upstreamHeaders.set('Cookie', cookie);
 
-  // ★ 上流 WS 接続はコールド時（しばらく放置後の初回）に失敗しやすいので最大3回リトライ。
-  //   これで「初回起動だけ真っ暗→手動再起動で直る」を、ユーザー操作なしで吸収する。
+  // ★ 上流 WS 接続はコールド時（しばらく放置後の初回）に失敗しやすいので最大4回リトライ。
+  //   2回目以降は上流ホストを「キャッシュ無視」で取り直す。トンネル再起動直後は worker の
+  //   ホストキャッシュ(60s)が死んだ旧ホストを指し続け、その間ずっと繋がらない＝
+  //   「真っ暗/スプラッシュのまま」の一因だった。接続失敗をトリガーに即時自己修復する。
   let upstreamWS = null;
   let agreedProtocol = null;
   let lastErr = null;
-  for (let attempt = 0; attempt < 3 && !upstreamWS; attempt++) {
+  for (let attempt = 0; attempt < 4 && !upstreamWS; attempt++) {
+    const host = await getUpstreamHost(attempt > 0);
+    const upstreamUrl = `https://${host}${wsPath}`;
+    const upstreamHeaders = new Headers();
+    upstreamHeaders.set('Host', host);
+    upstreamHeaders.set('User-Agent', UA);
+    upstreamHeaders.set('Origin', `https://${host}`);
+    upstreamHeaders.set('Upgrade', 'websocket');
+    upstreamHeaders.set('Connection', 'Upgrade');
+    upstreamHeaders.set('Sec-WebSocket-Version', '13');
+    if (wsProtocol) upstreamHeaders.set('Sec-WebSocket-Protocol', wsProtocol);
+    if (cookie) upstreamHeaders.set('Cookie', cookie);
     try {
       const upstreamResp = await fetch(upstreamUrl, { headers: upstreamHeaders });
       if (!upstreamResp.webSocket) {
@@ -488,7 +559,7 @@ async function handleWebSocket(request, url, ctx) {
       console.log(`[WS] connected to upstream (try ${attempt + 1}): ${wsPath}, protocol=${agreedProtocol}`);
     } catch (err) {
       lastErr = err;
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 350));
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
     }
   }
   if (!upstreamWS) {

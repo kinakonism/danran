@@ -378,6 +378,31 @@ async function proxyHttp(request, url) {
             'window.addEventListener("online",res);})();</script>',
             { html: true },
           );
+          // ★ 起動ブートスプラッシュ。Streamlit はロード直後に「スケルトン（灰色の角丸
+          //   プレースホルダ）」をチラ見せするため、最初から地色＋🏠パルスで覆い隠す。
+          //   本物の画面（_danran_cfg / ログインフォーム / Python 側スプラッシュ）が出たら
+          //   フェードアウト。12秒で強制除去（7秒ウォッチドッグのリロードとも共存し、
+          //   リロード後も同じスプラッシュが出るので連続演出になる）。
+          el.append(
+            '<style>@keyframes _drBootPulse{0%,100%{opacity:.5;transform:scale(.96)}50%{opacity:1;transform:scale(1)}}' +
+            '[data-testid="stAppSkeleton"]{display:none!important}</style>' +
+            '<script>(function(){function mk(){try{' +
+            'if(document.getElementById("_danran_boot_splash"))return;' +
+            'var d=document.createElement("div");d.id="_danran_boot_splash";' +
+            'd.style.cssText="position:fixed;inset:0;z-index:2147483647;background:#1a1614;pointer-events:none;' +
+            'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;transition:opacity .25s ease;";' +
+            'd.innerHTML="<div style=\'font-size:3.2rem;animation:_drBootPulse 1.2s ease-in-out infinite\'>\\ud83c\\udfe0</div>' +
+            '<div style=\'color:rgba(240,232,224,.5);font-size:.85rem;font-weight:700;letter-spacing:.12em\'>danran</div>";' +
+            'document.body.appendChild(d);var t0=Date.now();' +
+            '(function chk(){var ready=document.getElementById("_danran_cfg")||' +
+            'document.querySelector("input[type=password]")||document.getElementById("_danran_splash_wait");' +
+            'if(ready||Date.now()-t0>12000){d.style.opacity="0";setTimeout(function(){if(d.parentNode)d.remove();},260);}' +
+            'else{setTimeout(chk,150);}})();' +
+            '}catch(e){}}' +
+            'if(document.body){mk();}else{document.addEventListener("DOMContentLoaded",mk);}' +
+            '})();</script>',
+            { html: true },
+          );
           el.append('<link rel="icon" type="image/png" href="/icons/icon-192.png">', { html: true });
           el.append('<link rel="apple-touch-icon" href="/icons/icon-192.png">', { html: true });
           el.append('<link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-192.png">', { html: true });

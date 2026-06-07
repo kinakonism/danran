@@ -14,7 +14,10 @@ LOG=/tmp/danran_tunnel.log
 # ★ --edge-ip-version 4：cloudflared→Cloudflareエッジを IPv4 に固定。mini の IPv6 経路が
 #   不安定で、QUIC/IPv6 だと HTTP 遅延・WS中継(client→server)不調・URL不安定を招くため。
 # ★ --protocol http2：QUIC(UDP) より TCP の方が不安定網で安定しやすい。
-"$CF" tunnel --no-autoupdate --edge-ip-version 4 --protocol http2 --url http://127.0.0.1:8501 >> "$LOG" 2>&1 &
+# ★ ポートは 8601（2026-06-07 に 8501 から移転）。8501 は過去の接続嵐で TIME_WAIT ゾンビが
+#   ~2800 個恒久滞留し、新規接続が約1割の確率で衝突→SYN握りつぶし→「真っ暗」の原因だった。
+#   PORT は app の LaunchAgent 環境変数と一致させること。
+"$CF" tunnel --no-autoupdate --edge-ip-version 4 --protocol http2 --url http://127.0.0.1:${DANRAN_PORT:-8601} >> "$LOG" 2>&1 &
 CFPID=$!
 URL=""
 for i in $(seq 1 40); do

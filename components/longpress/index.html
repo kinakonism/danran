@@ -2142,8 +2142,10 @@
       if (now - (pDoc._danranSwipeLastFire || 0) < 800) return;
       pDoc._danranSwipeLastFire = now;
       if (action === 'go_rooms') { try { showBackCover(); } catch (e) {} }  // 戻り遷移を覆う
-      if (pDoc._danranNav) { pDoc._danranNav(action, now); }
-      else { stSetValue({ action: action, ts: now }); }
+      // ★ sendNav と同じ併送方式: ライブ iframe(_danranNav) と自分の stSetValue の両方で送る。
+      //   同一 ts なので Python 側 dedup(_last_nav_ts) により1回だけ処理される。
+      try { if (pDoc._danranNav) pDoc._danranNav(action, now); } catch (e) {}
+      try { stSetValue({ action: action, ts: now }); } catch (e) {}
     }
 
     // ドラッグ transform をクリア（withTransition=true でバネ戻し）
@@ -3295,9 +3297,33 @@
 
   // 戻り（チャット→ルーム選択）用の軽いカバー。ロゴ無し・地色のみで往復ラグを隠す。
   // ルーム選択が表示されたら scrollToLatestOnEnter 内で除去する。
+  // ★ 親ウィンドウ常駐のカバー掃除役（1回だけ注入）。
+  //   カバー除去は通常 scan()／作成元 iframe のタイマー駆動だが、遷移中に Streamlit が
+  //   旧 iframe を破棄→新 iframe の描画が詰まると「掃除役不在」になり、真っ黒カバーが
+  //   永久に残る（スワイプ戻りで たまに真っ暗 の正体）。親 window は iframe 入れ替えの
+  //   影響を受けないので、ここに最後の砦の setInterval を置く。
+  function installCoverSweeper() {
+    try {
+      var pDoc = window.parent.document;
+      if (pDoc.getElementById('_danran_cover_sweeper')) return;
+      var s = pDoc.createElement('script');
+      s.id = '_danran_cover_sweeper';
+      s.textContent =
+        '(function(){if(window._danranCoverIv)return;' +
+        'window._danranCoverIv=setInterval(function(){try{' +
+        'var c=document.getElementById("_danran_enter_cover");if(!c)return;' +
+        'var e=parseInt(c.getAttribute("data-cover-expire")||"0",10);' +
+        'if(e&&Date.now()>e){c.style.opacity="0";' +
+        'setTimeout(function(){if(c.parentNode)c.remove();},200);}' +
+        '}catch(err){}},400);})();';
+      (pDoc.body || pDoc.head).appendChild(s);
+    } catch (e) {}
+  }
+
   function showBackCover() {
     try {
       var pDoc = window.parent.document;
+      installCoverSweeper();   // 万一 scan 前にカバーが出る場合の保険
       if (pDoc.getElementById('_danran_enter_cover')) return;
       var cover = pDoc.createElement('div');
       cover.id = '_danran_enter_cover';

@@ -111,7 +111,15 @@ def get_supabase() -> Client:
     if not url or not key:
         st.error("⚠️ Supabase の設定が見つかりません。Streamlit Cloud の Secrets に [supabase] url と anon_key を設定してください。")
         st.stop()
-    return create_client(url, key)
+    # ★ タイムアウト必須: デフォルトだと httpx の接続が腐ったとき（アイドル後の
+    #   stale keep-alive 等）にクエリが分単位でハングし、「Running fetch_rooms(...)」の
+    #   薄暗い固着や、起動時に走れば「真っ暗で起動できない」の原因になる。
+    #   短く切って素早く失敗→次のポーリング/再実行で新しい接続により自然回復させる。
+    from supabase.lib.client_options import SyncClientOptions
+    return create_client(url, key, options=SyncClientOptions(
+        postgrest_client_timeout=10,
+        storage_client_timeout=25,   # アバター等のアップロードは少し長め
+    ))
 
 supabase = get_supabase()
 
@@ -123,21 +131,28 @@ def fetch_rooms(user_id: str = "") -> list[dict]:
     """ルーム一覧 (id, name, icon) を取得。
     user_id を渡すと room_members で「参加ルームのみ」に絞る（招待制）。
     user_id="" は全ルーム（重複名チェック等の管理用途）。"""
-    try:
-        if user_id:
-            mrows = supabase.table("room_members").select("room_id")\
-                .eq("user_id", user_id).execute().data or []
-            rids = [m["room_id"] for m in mrows]
-            if not rids:
-                return []                      # 参加ルームなし＝空（招待待ち）
-            return supabase.table("rooms").select("id, name, icon")\
-                .in_("id", rids).order("created_at").execute().data or []
-        # user_id なし: 全ルーム
-        data = supabase.table("rooms").select("id, name, icon").order("created_at").execute().data or []
-        if data:
-            return data
-    except Exception:
-        pass
+    # ★ 例外時は1回だけリトライ: アイドル後の stale keep-alive 接続は最初の1発だけ
+    #   即エラー/タイムアウトになりがちで、リトライは新しい接続で通る。リトライ無しだと
+    #   フォールバック（偽のルーム一覧）が cache_data に60秒残ってしまう。
+    import time as _time
+    for _attempt in (1, 2):
+        try:
+            if user_id:
+                mrows = supabase.table("room_members").select("room_id")\
+                    .eq("user_id", user_id).execute().data or []
+                rids = [m["room_id"] for m in mrows]
+                if not rids:
+                    return []                      # 参加ルームなし＝空（招待待ち）
+                return supabase.table("rooms").select("id, name, icon")\
+                    .in_("id", rids).order("created_at").execute().data or []
+            # user_id なし: 全ルーム
+            data = supabase.table("rooms").select("id, name, icon").order("created_at").execute().data or []
+            if data:
+                return data
+            break                                  # 空は正当な応答＝リトライしない
+        except Exception:
+            if _attempt == 1:
+                _time.sleep(0.4)
     return [{"id": r, "name": r, "icon": "💬"} for r in ROOMS_FALLBACK]
 
 def invalidate_rooms_cache() -> None:
@@ -978,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v144",   # 久しぶりの起動で真っ暗固着→スプラッシュ9s超で一度だけ自動リロード復旧
+    "danran_lp_v145",   # スワイプ戻りカバー固着→親window常駐の掃除役で必ず剥がす＋fireNav併送
     path=_LP_COMPONENT_DIR,
 )
 

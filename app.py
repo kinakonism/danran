@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v146",   # 編集系遷移(👥/⚙️/アバター/通知/設定)全てに遷移カバー→スクロール跳ね解消
+    "danran_lp_v147",   # 絵文字リアクション拡充(LINE風): 最近使った学習+検索+カテゴリピッカー
     path=_LP_COMPONENT_DIR,
 )
 

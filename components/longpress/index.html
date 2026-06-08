@@ -518,14 +518,69 @@
   /* ════════════════════════════════════════
    *  長押しポップアップ（親ドキュメントに注入）
    * ════════════════════════════════════════ */
-  var EMOJIS = ['👍', '❤️', '😂', '😲', '🙏'];
-  // ＋ボタンで開く絵文字ピッカーの候補（スペース区切り→配列）
-  var EMOJI_PICK = ('😀 😃 😄 😁 😆 😅 😂 🤣 🙂 😉 😊 😍 🥰 😘 😋 😎 🤩 🥳 🤔 😴 '
-    + '😢 😭 😡 😱 😲 😮 🥺 😬 🙄 😏 '
-    + '👍 👎 👏 🙏 🙌 💪 🤝 ✌️ 🤞 👌 '
-    + '❤️ 🧡 💛 💚 💙 💜 🤍 💕 💖 💔 '
-    + '🎉 🎊 ✨ 🔥 💯 ⭐ 🌟 👀 🍀 🌸 '
-    + '🍻 🍰 🎂 🍣 🍙 ☕ 🐶 🐱 🚗 🏠').split(' ');
+  // 長押しポップアップのクイック行の「定番」（最近使った絵文字を前に足す）
+  var EMOJI_BASE = ['👍', '❤️', '😂', '🙏', '😮', '🎉'];
+
+  // ＋ピッカーのカテゴリ（LINE風）。検索は EMOJI_KW（キーワード）＋絵文字そのものに一致。
+  var EMOJI_CATS = [
+    { key: 'face', name: '顔', list: ('😀 😃 😄 😁 😆 😅 😂 🤣 🥲 ☺️ 😊 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🥳 🤩 😏 😒 😞 😔 😟 😕 🙁 ☹️ 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🫣 🤗 🤔 🫡 🤭 🤫 😶 😐 😑 😬 🙄 😯 😦 😧 😮 😲 🥱 😴 🤤 😪 😵 🤐 🥴 🤢 🤮 🤧 😷 🤒 🤕 🤑 🤠 😈 👿 👻 💀 ☠️ 👽 🤖 🎃 😺 😸 😹 😻 😼 😽 🙀 😿 😾').split(' ') },
+    { key: 'hand', name: '手・人', list: ('👍 👎 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ 👋 🤚 🖐️ ✋ 🖖 👏 🙌 🫶 👐 🤲 🙏 🤝 💪 🦾 ✊ 👊 🤛 🤜 ✍️ 🫵 💅 👀 👁️ 🫦 👶 🧒 👦 👧 🧑 👨 👩 🧓 👴 👵 🙇 🙆 🙅 💁 🙋 🧏 🤦 🤷 🙎 🙍 💆 💇 🚶 🏃 💃 🕺 👫 👬 👭 👪').split(' ') },
+    { key: 'heart', name: 'ハート', list: ('❤️ 🧡 💛 💚 💙 💜 🤎 🖤 🤍 ❤️‍🔥 ❤️‍🩹 💖 💗 💓 💞 💕 💟 ❣️ 💔 💋 💌 💘 💝 💯 💢 💥 💫 💦 💨 🕳️ 💬 💭 🗯️').split(' ') },
+    { key: 'celebrate', name: 'お祝い', list: ('🎉 🎊 ✨ 🔥 ⭐ 🌟 💫 🎈 🎁 🎀 🎂 🍰 🧁 🥳 🪅 🎆 🎇 🧨 🎐 🎏 🎍 🎎 🏆 🏅 🥇 🥈 🥉 🎖️ 👑 💎 🔔 📣 📢').split(' ') },
+    { key: 'food', name: '食べ物', list: ('🍎 🍏 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍈 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🥑 🍆 🥔 🥕 🌽 🌶️ 🫑 🥒 🥬 🥦 🧄 🧅 🍄 🥜 🌰 🍞 🥐 🥖 🥨 🥯 🥞 🧇 🧀 🍖 🍗 🥩 🥓 🍔 🍟 🍕 🌭 🥪 🌮 🌯 🥙 🧆 🥚 🍳 🥘 🍲 🍝 🍜 🍣 🍱 🍙 🍘 🍚 🍛 🍤 🍥 🥟 🍢 🍡 🍧 🍨 🍦 🥧 🍪 🍩 🍫 🍬 🍭 🍮 ☕ 🍵 🍶 🍺 🍻 🥂 🍷 🥃 🍸 🍹 🧃 🥤 🧋').split(' ') },
+    { key: 'animal', name: '動物・自然', list: ('🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🐤 🦆 🦅 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🐛 🦋 🐌 🐞 🐜 🪲 🐢 🐍 🦖 🐙 🦑 🦐 🦀 🐟 🐠 🐡 🐬 🐳 🐋 🦈 🐊 🐅 🐆 🦓 🦍 🐘 🦛 🐪 🐫 🦒 🦘 🐑 🐐 🦌 🐕 🐩 🐈 🐓 🦚 🦜 🌸 💐 🌹 🌺 🌻 🌷 🌼 🌱 🌿 🍀 🍁 🍂 🍃 🌳 🌲 🌴 🌵 🌊 🌈 ☀️ ⭐ 🌙 ☁️ ⚡ ❄️ 🔥 💧').split(' ') },
+    { key: 'activity', name: '遊び・物', list: ('⚽ 🏀 🏈 ⚾ 🎾 🏐 🏉 🎱 🏓 🏸 🥅 ⛳ 🎣 🎽 🎿 🛷 🥌 🎯 🎮 🕹️ 🎲 🧩 🎰 🎳 🚗 🚕 🚙 🚌 🏎️ 🚓 🚑 🚒 🚐 🚚 🚲 🛵 🏍️ ✈️ 🚀 🛸 🚁 ⛵ 🚤 🚢 🏠 🏡 🏢 🏥 🏦 🏨 🏫 ⛪ 🗼 🗽 🎡 🎢 🎠 💻 📱 ⌚ 📷 🎥 📺 🎧 🎤 🎸 🎹 🥁 🎺 🎻 📚 ✏️ 📝 💰 💵 🔑 🔒 💡 🔋 🧸 🎈 ⏰ 📅').split(' ') }
+  ];
+  // 全絵文字のフラット配列（後方互換: EMOJI_PICK を参照する旧コード用）
+  var EMOJI_PICK = [];
+  EMOJI_CATS.forEach(function (c) { EMOJI_PICK = EMOJI_PICK.concat(c.list); });
+  // 検索キーワード（日本語＋英語・代表的なものだけ。無い絵文字も絵文字そのもので一致する）
+  var EMOJI_KW = {
+    '😂': 'わらう 笑 lol laugh', '🤣': 'バカわらい lol laugh', '😀': 'にこ smile',
+    '😍': 'すき love はーと', '🥰': 'すき love にこにこ', '😘': 'キス kiss ちゅー',
+    '😢': 'なく かなしい sad cry', '😭': 'おおなき なく cry sad', '😡': 'おこ いかり angry',
+    '😱': 'びっくり おどろき scream', '😮': 'おどろき surprise', '🥺': 'うるうる おねがい please',
+    '😴': 'ねる sleep', '🤔': 'かんがえる think', '😎': 'クール cool かっこいい',
+    '👍': 'いいね good ok りょうかい thumbsup', '👎': 'だめ bad thumbsdown',
+    '👏': 'はくしゅ clap すごい', '🙏': 'おねがい ありがとう thanks please おがむ',
+    '🙌': 'ばんざい yay', '💪': 'がんばる ちから power', '🤝': 'あくしゅ handshake',
+    '✌️': 'ぴーす peace', '👌': 'おっけー ok', '❤️': 'はーと love あか red すき',
+    '💔': 'しつれん broken かなしい', '🎉': 'おめでとう party おいわい congrats',
+    '🎊': 'おいわい party', '✨': 'きらきら sparkle', '🔥': 'ファイア fire ほのお あつい',
+    '💯': 'ひゃくてん 100 perfect', '⭐': 'ほし star', '🎂': 'たんじょうび cake birthday',
+    '🍰': 'けーき cake', '🍻': 'かんぱい beer のみ', '☕': 'こーひー coffee',
+    '🍣': 'すし sushi', '🍜': 'らーめん ramen', '🍙': 'おにぎり rice',
+    '🐶': 'いぬ dog', '🐱': 'ねこ cat', '🌸': 'さくら flower はな',
+    '🏠': 'いえ home house', '🚗': 'くるま car', '☀️': 'はれ sun たいよう',
+    '🌈': 'にじ rainbow', '⚽': 'さっかー soccer', '🎮': 'げーむ game',
+    '✈️': 'ひこうき plane りょこう', '💰': 'おかね money', '💻': 'ぱそこん pc'
+  };
+
+  // ── 最近使った絵文字（localStorage 学習）──
+  var RECENT_EMOJI_KEY = 'danran_recent_emoji';
+  function loadRecentEmoji() {
+    try {
+      var ls = window.parent.localStorage;
+      var arr = JSON.parse(ls.getItem(RECENT_EMOJI_KEY) || '[]');
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+  }
+  function pushRecentEmoji(em) {
+    try {
+      if (!em) return;
+      var ls = window.parent.localStorage;
+      var arr = loadRecentEmoji().filter(function (x) { return x !== em; });
+      arr.unshift(em);
+      if (arr.length > 24) arr = arr.slice(0, 24);
+      ls.setItem(RECENT_EMOJI_KEY, JSON.stringify(arr));
+    } catch (e) {}
+  }
+  // クイック行（最近 最大2 ＋ 定番、重複除去で最大6個。＋ボタンを足しても狭い画面で収まる幅）
+  function quickReactions() {
+    var out = loadRecentEmoji().slice(0, 2);
+    EMOJI_BASE.forEach(function (e) { if (out.indexOf(e) < 0) out.push(e); });
+    return out.slice(0, 6);
+  }
 
   var POPUP_BACK_ID = '_danran_lp_back';
   function hidePopup() {
@@ -585,6 +640,7 @@
 
   function toggleReactionAndUpdate(msgId, emoji) {
     hidePopup();
+    pushRecentEmoji(emoji);   // 最近使った絵文字を学習（クイック行/ピッカー先頭に出す）
     var pDoc = window.parent.document;
     startScrollHold(pDoc);   // タップ時点の位置を保持（rerun で飛ばさない）
     toggleReaction(msgId, emoji).then(function () {
@@ -715,7 +771,7 @@
     } catch (e) {}
   }
 
-  // ＋ から開く絵文字ピッカー（下から出るシート）。選ぶとそのリアクションを付ける。
+  // ＋ から開く絵文字ピッカー（下から出るシート・LINE風）。検索＋カテゴリ＋最近使った絵文字。
   function showEmojiPicker(msgId) {
     try {
       var pDoc = window.parent.document;
@@ -727,22 +783,68 @@
         + 'display:flex;align-items:flex-end;justify-content:center;';
       var card = pDoc.createElement('div');
       card.style.cssText = 'background:#241f1c;border-top-left-radius:18px;border-top-right-radius:18px;'
-        + 'width:100%;max-width:480px;max-height:55vh;overflow-y:auto;padding:14px 12px 24px;'
-        + 'box-shadow:0 -8px 28px rgba(0,0,0,0.5);-webkit-overflow-scrolling:touch;';
-      var html = '<div style="text-align:center;color:rgba(240,232,224,0.5);font-size:0.8rem;'
-        + 'margin-bottom:8px">リアクションを選ぶ</div>'
-        + '<div style="display:grid;grid-template-columns:repeat(8,1fr);gap:4px">';
-      for (var i = 0; i < EMOJI_PICK.length; i++) {
-        html += '<button data-pick="' + EMOJI_PICK[i] + '" style="background:none;border:none;'
-          + 'font-size:1.7rem;padding:7px 0;cursor:pointer;border-radius:10px;'
-          + '-webkit-tap-highlight-color:transparent">' + EMOJI_PICK[i] + '</button>';
+        + 'width:100%;max-width:480px;height:62vh;display:flex;flex-direction:column;'
+        + 'padding:10px 10px 14px;box-shadow:0 -8px 28px rgba(0,0,0,0.5);';
+
+      // 上部: つまみ＋検索ボックス
+      var head = pDoc.createElement('div');
+      head.style.cssText = 'flex-shrink:0;';
+      head.innerHTML =
+        '<div style="width:40px;height:4px;border-radius:2px;background:rgba(255,255,255,0.2);'
+        + 'margin:2px auto 10px"></div>'
+        + '<input id="_dr_emoji_q" type="text" inputmode="search" placeholder="🔍 絵文字を検索（例: わらう, はーと, cake）" '
+        + 'style="width:100%;box-sizing:border-box;background:#1a1614;border:1px solid rgba(255,255,255,0.12);'
+        + 'border-radius:12px;color:#f0e8e0;font-size:15px;padding:10px 12px;outline:none;-webkit-appearance:none">';
+      card.appendChild(head);
+
+      // スクロール領域（カテゴリ別グリッド or 検索結果）
+      var body = pDoc.createElement('div');
+      body.style.cssText = 'flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;margin-top:10px;';
+      card.appendChild(body);
+
+      function gridHtml(list) {
+        var h = '<div style="display:grid;grid-template-columns:repeat(8,1fr);gap:2px">';
+        for (var i = 0; i < list.length; i++) {
+          h += '<button data-pick="' + list[i] + '" style="background:none;border:none;'
+            + 'font-size:1.7rem;padding:7px 0;cursor:pointer;border-radius:10px;'
+            + '-webkit-tap-highlight-color:transparent">' + list[i] + '</button>';
+        }
+        return h + '</div>';
       }
-      html += '</div>';
-      card.innerHTML = html;
+      function sectionHtml(title, list) {
+        if (!list.length) return '';
+        return '<div style="color:rgba(240,232,224,0.45);font-size:0.72rem;font-weight:700;'
+          + 'letter-spacing:0.04em;margin:10px 4px 4px">' + title + '</div>' + gridHtml(list);
+      }
+      function renderDefault() {
+        var h = '';
+        var recent = loadRecentEmoji();
+        if (recent.length) h += sectionHtml('最近使った絵文字', recent.slice(0, 16));
+        EMOJI_CATS.forEach(function (c) { h += sectionHtml(c.name, c.list); });
+        body.innerHTML = h;
+      }
+      function renderSearch(q) {
+        q = q.toLowerCase().trim();
+        if (!q) { renderDefault(); return; }
+        var seen = {}, hits = [];
+        EMOJI_PICK.forEach(function (em) {
+          if (seen[em]) return;
+          var kw = (EMOJI_KW[em] || '').toLowerCase();
+          if (em.indexOf(q) >= 0 || kw.indexOf(q) >= 0) { seen[em] = 1; hits.push(em); }
+        });
+        body.innerHTML = hits.length
+          ? gridHtml(hits)
+          : '<div style="text-align:center;color:rgba(240,232,224,0.4);font-size:0.85rem;'
+            + 'padding:30px 0">見つかりませんでした</div>';
+      }
+      renderDefault();
+
       ov.appendChild(card);
       function close() { if (ov.parentNode) ov.remove(); }
       ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
-      card.addEventListener('click', function (e) {
+      var qInput = head.querySelector('#_dr_emoji_q');
+      if (qInput) qInput.addEventListener('input', function () { renderSearch(qInput.value || ''); });
+      body.addEventListener('click', function (e) {
         var b = e.target && e.target.closest ? e.target.closest('[data-pick]') : null;
         if (!b) return;
         e.preventDefault(); e.stopPropagation();
@@ -799,9 +901,9 @@
         return b;
       }
 
-      // 他人のメッセージ → 絵文字リアクション（5種 ＋ ＋でもっと選ぶ）＝1行目
+      // 他人のメッセージ → 絵文字リアクション（最近＋定番 ＋ ＋でもっと選ぶ）＝1行目
       if (!isMine) {
-        EMOJIS.forEach(function (emoji) {
+        quickReactions().forEach(function (emoji) {
           rowEmoji.appendChild(makeBtn(emoji, function (b) {
             b.style.transform = 'scale(1.35)';
             setTimeout(function () { b.style.transform = ''; }, 140);

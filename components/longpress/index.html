@@ -750,9 +750,12 @@
       showToast('保存中…');
       fetch(url).then(function (r) { return r.blob(); }).then(function (blob) {
         var base = (url.split('?')[0].split('/').pop()) || 'danran';
-        if (!/\.(jpe?g|png|webp|gif)$/i.test(base)) base += '.jpg';
+        // 画像・動画の拡張子が無ければ blob.type から補う（動画は .mp4 等を保持）
+        if (!/\.(jpe?g|png|webp|gif|mp4|mov|webm|m4v|3gp)$/i.test(base)) {
+          base += (blob.type && blob.type.indexOf('video/') === 0) ? '.mp4' : '.jpg';
+        }
         var file = null;
-        try { file = new File([blob], base, { type: blob.type || 'image/jpeg' }); } catch (e) {}
+        try { file = new File([blob], base, { type: blob.type || 'application/octet-stream' }); } catch (e) {}
         // iOS/モバイル: 共有シート → 「画像を保存」で写真に保存
         if (file && nav.canShare && nav.canShare({ files: [file] }) && nav.share) {
           nav.share({ files: [file] }).catch(function () {});
@@ -2234,6 +2237,13 @@
         if (unp) {
           e.preventDefault(); e.stopPropagation();
           sendNav({ action: 'unpin_message', ts: Date.now() });
+          return;
+        }
+        // 動画の保存ボタン（⬇）→ 写真と同じ saveImage（共有シート/ダウンロード）
+        var vdl = t.closest('[data-vid-dl]');
+        if (vdl) {
+          e.preventDefault(); e.stopPropagation();
+          saveImage(vdl.getAttribute('data-vid-dl'));
           return;
         }
         // プロフィール編集のプレビュー → 全画面プロフィール（押された時の見た目）

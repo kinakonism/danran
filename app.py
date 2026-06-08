@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v155",   # 動画送信(R2): 📷を画像+動画両対応に。動画はWorker経由でR2保存→Rangeでシーク再生
+    "danran_lp_v156",   # 動画にも保存(⬇)ボタン。saveImageを動画拡張子対応に
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1497,10 +1497,19 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         is_img_only = bool(img_url or vid_url) and not body.strip()  # 画像/動画のみ（テキスト無し）
         # ── 動画 HTML ──（R2 配信・Range でシーク可。Realtime化で再描画は変化時のみ＝直 <video> でOK）
         vid_piece = (
+            f'<span style="position:relative;display:inline-block;line-height:0;'
+            f'{"margin-bottom:6px" if body else ""}">'
             f'<video controls playsinline preload="metadata" '
             f'src="{_html.escape(vid_url)}" '
             f'style="display:block;max-width:240px;max-height:380px;border-radius:10px;'
-            f'background:#000;{"margin-bottom:6px" if body else ""}"></video>'
+            f'background:#000"></video>'
+            # 写真と同じ保存ボタン（右上・ネイティブ操作バーは下なので重ならない）
+            f'<button data-vid-dl="{_html.escape(vid_url)}" title="保存" '
+            f'style="position:absolute;top:6px;right:6px;width:30px;height:30px;border:none;'
+            f'border-radius:50%;background:rgba(0,0,0,0.55);color:#fff;font-size:0.95rem;'
+            f'line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;'
+            f'-webkit-tap-highlight-color:transparent">⬇</button>'
+            f'</span>'
         ) if vid_url else ""
         img_piece = (
             # ★ <img> を直接出さず JS 管理のスロットにする。

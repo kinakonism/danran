@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v147",   # 絵文字リアクション拡充(LINE風): 最近使った学習+検索+カテゴリピッカー
+    "danran_lp_v148",   # ポップアップ/ピッカーの押下を琥珀リングでフィードバック（即閉じ前に見せる）
     path=_LP_COMPONENT_DIR,
 )
 

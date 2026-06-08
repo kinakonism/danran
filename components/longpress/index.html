@@ -844,13 +844,18 @@
       ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
       var qInput = head.querySelector('#_dr_emoji_q');
       if (qInput) qInput.addEventListener('input', function () { renderSearch(qInput.value || ''); });
+      // 触れた瞬間に押下リング（即フィードバック）
+      body.addEventListener('touchstart', function (e) {
+        var b = e.target && e.target.closest ? e.target.closest('[data-pick]') : null;
+        if (b) b.classList.add('dr-pressed');
+      }, { passive: true });
       body.addEventListener('click', function (e) {
         var b = e.target && e.target.closest ? e.target.closest('[data-pick]') : null;
         if (!b) return;
         e.preventDefault(); e.stopPropagation();
         var em = b.getAttribute('data-pick');
-        close();
-        if (em) toggleReactionAndUpdate(msgId, em);
+        b.classList.add('dr-pressed');
+        setTimeout(function () { close(); if (em) toggleReactionAndUpdate(msgId, em); }, 150);
       }, true);
       pDoc.body.appendChild(ov);
     } catch (e) { console.error('[danran] emojiPicker:', e); }
@@ -896,7 +901,16 @@
             'white-space:nowrap;-webkit-tap-highlight-color:transparent;transition:transform 0.12s;'
           : 'background:none;border:none;font-size:1.4rem;cursor:pointer;padding:3px 3px;flex-shrink:0;' +
             'border-radius:10px;line-height:1;-webkit-tap-highlight-color:transparent;transition:transform 0.12s;';
-        b.addEventListener('click', function (e) { e.stopPropagation(); onClick(b); });
+        // 押下フィードバック: 触れた瞬間に琥珀リング → 150ms 見せてからアクション実行（即閉じ対策）
+        b.addEventListener('touchstart', function () { b.classList.add('dr-pressed'); }, { passive: true });
+        b.addEventListener('pointerdown', function () { b.classList.add('dr-pressed'); });
+        b.addEventListener('click', function (e) {
+          e.stopPropagation();
+          b.classList.add('dr-pressed');
+          setTimeout(function () { onClick(b); }, 160);
+          // リングは一瞬で消す（閉じない削除ボタン等が自前の色を持つため上書きしない）
+          setTimeout(function () { try { b.classList.remove('dr-pressed'); } catch (e2) {} }, 340);
+        });
         b.addEventListener('touchend', function (e) { e.stopPropagation(); }, { passive: true });
         return b;
       }
@@ -905,9 +919,7 @@
       if (!isMine) {
         quickReactions().forEach(function (emoji) {
           rowEmoji.appendChild(makeBtn(emoji, function (b) {
-            b.style.transform = 'scale(1.35)';
-            setTimeout(function () { b.style.transform = ''; }, 140);
-            toggleReactionAndUpdate(msgId, emoji);   // 即 DOM 更新
+            toggleReactionAndUpdate(msgId, emoji);   // 押下リングは makeBtn が表示（dr-pressed）
           }));
         });
         // ＋ → たくさんの絵文字から選ぶピッカー
@@ -1069,7 +1081,12 @@
       s.textContent =
         '[data-lp-msg]{' +
         '-webkit-user-select:none;user-select:none;' +
-        '-webkit-touch-callout:none;touch-action:manipulation;cursor:default;}';
+        '-webkit-touch-callout:none;touch-action:manipulation;cursor:default;}' +
+        // ★ 押下フィードバック: ポップアップ/ピッカーで選んだボタンを琥珀リングで囲む。
+        //   即閉じだと「押したのが分からない」ため、押した要素を一瞬ハイライトしてから閉じる。
+        '.dr-pressed{background:rgba(240,168,104,0.30)!important;' +
+        'box-shadow:0 0 0 2px #f0a868!important;transform:scale(1.12)!important;' +
+        'transition:transform .1s ease,box-shadow .1s ease,background .1s ease!important;}';
       (pDoc.head || pDoc.body).appendChild(s);
     } catch (e) {}
   }

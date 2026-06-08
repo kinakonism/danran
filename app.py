@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v148",   # ポップアップ/ピッカーの押下を琥珀リングでフィードバック（即閉じ前に見せる）
+    "danran_lp_v149",   # リアクション再描画のチラつき(ヘッダー裏を一瞬流れる)を最低高さ固定で解消
     path=_LP_COMPONENT_DIR,
 )
 

@@ -635,12 +635,16 @@
         'var o=[];for(var i=0;i<c.length;i++){var e=c[i];' +
         'if(e&&o.indexOf(e)<0&&e.scrollHeight>e.clientHeight+4)o.push(e);}return o;}' +
         'function tick(){try{var h=window._danranHold;' +
-        'if(h&&Date.now()<h.until){var s=scrs();' +
-        'for(var i=0;i<s.length;i++){if(Math.abs(s[i].scrollTop-h.y)>1)s[i].scrollTop=h.y;}' +
+        'if(h&&Date.now()<h.until){' +
+        // ★ 先に最低高さを確保（崩壊を防ぐ）→ その後に scrollTop を戻す。
+        //   min-height は内側コンテンツ(stMainBlockContainer/.block-container)だけに掛ける。
+        //   スクローラ自身(stMain等)に掛けると縦に伸びてスクロールが消え scrollTop=0 に張り付く。
         'var mh=document.getElementById("_danran_minh");' +
         'if(!mh){mh=document.createElement("style");mh.id="_danran_minh";document.head.appendChild(mh);}' +
-        'if(h.sh){var want="[data-testid=stMainBlockContainer],[data-testid=stMain],section.main{min-height:"+h.sh+"px!important}";' +
-        'if(mh.textContent!==want)mh.textContent=want;}}' +
+        'if(h.sh){var want="[data-testid=stMainBlockContainer],.block-container{min-height:"+h.sh+"px!important}";' +
+        'if(mh.textContent!==want)mh.textContent=want;}' +
+        'var s=scrs();' +
+        'for(var i=0;i<s.length;i++){if(Math.abs(s[i].scrollTop-h.y)>1)s[i].scrollTop=h.y;}}' +
         'else{if(window._danranHold)window._danranHold=null;' +
         'var m=document.getElementById("_danran_minh");if(m)m.remove();}' +
         '}catch(e){}requestAnimationFrame(tick);}requestAnimationFrame(tick);})();';

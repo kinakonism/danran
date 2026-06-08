@@ -616,21 +616,40 @@
 
   // リアクションのトグル等で refresh_chat（full rerun）が走るとスクロール位置が
   // 飛ぶ。タップ時点の scrollTop を一定時間 rAF でピン留めして「動かない」ようにする。
+  // スクロール可能な候補を全部返す（ピンの保険用）。
+  function danScrollersAll(pDoc) {
+    var out = [];
+    var cands = [
+      pDoc.querySelector('section.main'),
+      pDoc.querySelector('[data-testid="stMain"]'),
+      pDoc.querySelector('[data-testid="stAppViewContainer"]'),
+      pDoc.scrollingElement, pDoc.documentElement, pDoc.body,
+    ];
+    for (var i = 0; i < cands.length; i++) {
+      var el = cands[i];
+      if (el && out.indexOf(el) < 0 && el.scrollHeight > el.clientHeight + 4) out.push(el);
+    }
+    return out;
+  }
   function startScrollHold(pDoc) {
     try {
       var sc = danScroller(pDoc);
+      // ★ 保持開始時にスクローラ要素そのものを掴んで固定でピンする。
+      //   以前は毎フレーム danScroller() で再特定していたため、再描画で高さが潰れた瞬間に
+      //   「本物のスクローラ」を見失い別要素をピン→本物が上端へ飛んでいた。要素参照は
+      //   st.rerun を跨いでも Streamlit が stMain ノードを使い回すので安定。
+      var y = sc ? sc.scrollTop : 0;
       var already = !!pDoc._danranHoldScroll;
-      pDoc._danranHoldScroll = { y: sc ? sc.scrollTop : 0, until: Date.now() + 1500 };
-      // ★ 高さ崩壊クランプ対策: 再描画(st.rerun)でメッセージ領域が一瞬空になると scrollHeight が
-      //   縮み scrollTop が上端へクランプ→「ヘッダー裏をトップのメッセージが一瞬流れる」チラつき＆
-      //   スクロール上飛びになる。保持中はメッセージ領域に最低高さを固定して潰れさせない。
-      //   ★ inline style だと st.rerun で Streamlit が上書き消去するため、head の <style> ルールで
-      //     効かせる（rerun を跨いでも消えない）。
+      pDoc._danranHoldScroll = { y: y, until: Date.now() + 1800, el: sc };
+      // ★ 高さ崩壊クランプ対策: 再描画でメッセージ領域が一瞬空になると scrollHeight が縮み
+      //   scrollTop が上端へクランプする。保持中はメッセージ領域に最低高さを固定して潰させない。
+      //   inline style は st.rerun で Streamlit が消すため head の <style> ルール(!important)で効かせる。
       try {
         if (sc) {
           var mh = pDoc.getElementById('_danran_minh');
           if (!mh) { mh = pDoc.createElement('style'); mh.id = '_danran_minh'; (pDoc.head || pDoc.body).appendChild(mh); }
-          mh.textContent = '[data-testid="stMainBlockContainer"]{min-height:' + sc.scrollHeight + 'px!important}';
+          var sh = sc.scrollHeight;
+          mh.textContent = '[data-testid="stMainBlockContainer"],[data-testid="stMain"],section.main{min-height:' + sh + 'px!important}';
         }
       } catch (e) {}
       if (already) return;   // ピンループは1本だけ
@@ -640,19 +659,25 @@
           var h = pDoc._danranHoldScroll;
           if (!h || Date.now() > h.until) {
             pDoc._danranHoldScroll = null;
-            // 保持終了: 最低高さ固定を解除（この時点で実コンテンツが伸びており飛ばない）
             try { var m = pDoc.getElementById('_danran_minh'); if (m) m.remove(); } catch (e2) {}
             return;
           }
-          var s = danScroller(pDoc);
-          if (s && Math.abs(s.scrollTop - h.y) > 1) s.scrollTop = h.y;
+          // 掴んだ要素を最優先で固定（detach されていたら再取得）
+          var el = h.el;
+          if (!el || !el.isConnected) { el = danScroller(pDoc); h.el = el; }
+          if (el) el.scrollTop = h.y;
+          // 保険: 他のスクロール候補もズレていたら戻す（スクローラが入れ替わった場合に対応）
+          var all = danScrollersAll(pDoc);
+          for (var i = 0; i < all.length; i++) {
+            if (all[i] !== el && Math.abs(all[i].scrollTop - h.y) > 1) all[i].scrollTop = h.y;
+          }
         } catch (e) {}
         win.requestAnimationFrame(pin);
       })();
     } catch (e) {}
   }
   function extendScrollHold(pDoc) {
-    try { if (pDoc._danranHoldScroll) pDoc._danranHoldScroll.until = Date.now() + 1200; } catch (e) {}
+    try { if (pDoc._danranHoldScroll) pDoc._danranHoldScroll.until = Date.now() + 1500; } catch (e) {}
   }
 
   function toggleReactionAndUpdate(msgId, emoji) {

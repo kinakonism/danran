@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v150",   # リアクション: スワイプ判定除外で押せない解消＋最低高さを<style>固定でスクロール上飛び根治
+    "danran_lp_v151",   # リアクション上飛び根治: 掴んだスクローラを固定ピン+全候補保険+最低高さ<style>固定
     path=_LP_COMPONENT_DIR,
 )
 

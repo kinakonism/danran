@@ -621,14 +621,17 @@
       var sc = danScroller(pDoc);
       var already = !!pDoc._danranHoldScroll;
       pDoc._danranHoldScroll = { y: sc ? sc.scrollTop : 0, until: Date.now() + 1500 };
-      // ★ 高さ崩壊クランプ対策: refresh_chat の再描画でメッセージ領域が一瞬空になると
-      //   scrollHeight が縮み scrollTop が上端へクランプ→「ヘッダー裏をトップのメッセージが
-      //   一瞬流れる」チラつきになる。保持中はコンテンツに最低高さを固定して潰れさせない。
+      // ★ 高さ崩壊クランプ対策: 再描画(st.rerun)でメッセージ領域が一瞬空になると scrollHeight が
+      //   縮み scrollTop が上端へクランプ→「ヘッダー裏をトップのメッセージが一瞬流れる」チラつき＆
+      //   スクロール上飛びになる。保持中はメッセージ領域に最低高さを固定して潰れさせない。
+      //   ★ inline style だと st.rerun で Streamlit が上書き消去するため、head の <style> ルールで
+      //     効かせる（rerun を跨いでも消えない）。
       try {
-        var bc = pDoc.querySelector('[data-testid="stMainBlockContainer"]')
-              || pDoc.querySelector('.block-container')
-              || pDoc.querySelector('[data-testid="stAppViewBlockContainer"]');
-        if (bc && sc) { bc.style.minHeight = sc.scrollHeight + 'px'; pDoc._danranHoldBC = bc; }
+        if (sc) {
+          var mh = pDoc.getElementById('_danran_minh');
+          if (!mh) { mh = pDoc.createElement('style'); mh.id = '_danran_minh'; (pDoc.head || pDoc.body).appendChild(mh); }
+          mh.textContent = '[data-testid="stMainBlockContainer"]{min-height:' + sc.scrollHeight + 'px!important}';
+        }
       } catch (e) {}
       if (already) return;   // ピンループは1本だけ
       var win = pDoc.defaultView || window.parent;
@@ -638,7 +641,7 @@
           if (!h || Date.now() > h.until) {
             pDoc._danranHoldScroll = null;
             // 保持終了: 最低高さ固定を解除（この時点で実コンテンツが伸びており飛ばない）
-            try { if (pDoc._danranHoldBC) { pDoc._danranHoldBC.style.minHeight = ''; pDoc._danranHoldBC = null; } } catch (e2) {}
+            try { var m = pDoc.getElementById('_danran_minh'); if (m) m.remove(); } catch (e2) {}
             return;
           }
           var s = danScroller(pDoc);
@@ -916,8 +919,13 @@
           : 'background:none;border:none;font-size:1.4rem;cursor:pointer;padding:3px 3px;flex-shrink:0;' +
             'border-radius:10px;line-height:1;-webkit-tap-highlight-color:transparent;transition:transform 0.12s;';
         // 押下フィードバック: 触れた瞬間に琥珀リング → 150ms 見せてからアクション実行（即閉じ対策）
-        b.addEventListener('touchstart', function () { b.classList.add('dr-pressed'); }, { passive: true });
-        b.addEventListener('pointerdown', function () { b.classList.add('dr-pressed'); });
+        //   click が来ない（スワイプ判定等で握り潰された）場合の保険として 1.4s で必ず消す。
+        function _press() {
+          b.classList.add('dr-pressed');
+          setTimeout(function () { try { b.classList.remove('dr-pressed'); } catch (e2) {} }, 1400);
+        }
+        b.addEventListener('touchstart', _press, { passive: true });
+        b.addEventListener('pointerdown', _press);
         b.addEventListener('click', function (e) {
           e.stopPropagation();
           b.classList.add('dr-pressed');
@@ -2330,6 +2338,11 @@
       if (e.touches.length !== 1) return;
       if (pDoc.getElementById(IMG_VIEWER_ID)) return;   // 画像ビューア表示中はスワイプ戻り無効
       if (pDoc.getElementById('_danran_user_profile')) return;   // プロフィール全画面中も無効
+      // ★ ポップアップ/絵文字ピッカー上のタップはスワイプ判定から除外。
+      //   ここで横ドラッグ判定が走ると preventDefault でボタンの click が消え、
+      //   「絵文字が押せない・リングが囲ったまま残る」原因になる。
+      if (e.target && e.target.closest &&
+          e.target.closest('#' + POPUP_ID + ', #' + POPUP_BACK_ID + ', #_danran_emoji_picker, #' + RMENU_ID)) return;
       // 入力欄(stChatInput/stBottom)上ではスワイプ追跡しない＝テキスト選択/ペーストの長押しを邪魔しない
       if (e.target && e.target.closest &&
           e.target.closest('[data-testid="stChatInput"], [data-testid="stBottom"], textarea, input')) return;

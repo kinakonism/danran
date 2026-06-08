@@ -276,6 +276,19 @@ export default {
       return new Response(res.ok ? res.body : null, { status: res.ok ? 200 : 404, headers: h });
     }
 
+    // ── R2 メディア（画像・動画）: アップロード/配信 ─────────────────────
+    //   /media/upload  (POST)  → R2 に保存（キーはサーバ生成・上書き不可）。x-danran-auth で軽くゲート。
+    //   /media/<key>   (GET)   → R2 から配信。Range 対応で動画シーク可。長期キャッシュ。
+    //   ブラウザ↔Worker↔R2 で完結し、mini/トンネル/家の回線を一切使わない。
+    if (url.pathname === '/media/upload' &&
+        (request.method === 'POST' || request.method === 'PUT' || request.method === 'OPTIONS')) {
+      return handleMediaUpload(request, env);
+    }
+    if (url.pathname.startsWith('/media/') &&
+        (request.method === 'GET' || request.method === 'HEAD')) {
+      return handleMediaServe(request, url, env);
+    }
+
     // ── WebSocket プロキシ ───────────────────────────────────────────
     if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
       console.log('[WS] incoming websocket request:', url.pathname);
@@ -286,6 +299,78 @@ export default {
     return proxyHttp(request, url);
   },
 };
+
+// ── R2 メディア: アップロード ────────────────────────────────────────────
+//   キーはサーバ生成（上書き/列挙攻撃を防ぐ）。content-type は image/* video/* のみ。
+//   x-danran-auth に anon key（公開相当の弱ゲート＝アプリ全体と同じ脅威モデル）。
+//   サイズは Workers のリクエスト上限に合わせ 95MB まで。
+const MEDIA_MAX_BYTES = 95 * 1024 * 1024;
+async function handleMediaUpload(request, env) {
+  const cors = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST,PUT,OPTIONS',
+    'Access-Control-Allow-Headers': 'content-type,x-danran-auth',
+  };
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+  try {
+    if (!env || !env.danran_media) return new Response('R2 unbound', { status: 500, headers: cors });
+    if ((request.headers.get('x-danran-auth') || '') !== SB_ANON)
+      return new Response('forbidden', { status: 403, headers: cors });
+    const ctype = (request.headers.get('content-type') || '').split(';')[0].trim();
+    if (!/^(image|video)\//.test(ctype)) return new Response('bad type', { status: 400, headers: cors });
+    const clen = parseInt(request.headers.get('content-length') || '0', 10);
+    if (clen && clen > MEDIA_MAX_BYTES) return new Response('too large', { status: 413, headers: cors });
+    const ext = (ctype.split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'bin';
+    const key = Date.now() + '-' + crypto.randomUUID().replace(/-/g, '').slice(0, 16) + '.' + ext;
+    await env.danran_media.put(key, request.body, { httpMetadata: { contentType: ctype } });
+    return new Response(JSON.stringify({ url: '/media/' + key, key: key }), {
+      status: 200, headers: Object.assign({ 'Content-Type': 'application/json' }, cors),
+    });
+  } catch (e) {
+    return new Response('upload error: ' + (e && e.message), { status: 500, headers: cors });
+  }
+}
+
+// ── R2 メディア: 配信（Range 対応＝動画シーク可）────────────────────────
+async function handleMediaServe(request, url, env) {
+  try {
+    if (!env || !env.danran_media) return new Response('R2 unbound', { status: 500 });
+    const key = decodeURIComponent(url.pathname.slice('/media/'.length));
+    if (!key || key.indexOf('..') >= 0) return new Response('Not Found', { status: 404 });
+    const range = request.headers.get('range');
+    const opts = {};
+    if (range) {
+      const m = /bytes=(\d*)-(\d*)/.exec(range);
+      if (m) {
+        const a = m[1] ? parseInt(m[1], 10) : undefined;
+        const b = m[2] ? parseInt(m[2], 10) : undefined;
+        if (a !== undefined && b !== undefined) opts.range = { offset: a, length: b - a + 1 };
+        else if (a !== undefined) opts.range = { offset: a };
+        else if (b !== undefined) opts.range = { suffix: b };
+      }
+    }
+    const obj = await env.danran_media.get(key, opts);
+    if (!obj) return new Response('Not Found', { status: 404 });
+    const h = new Headers();
+    obj.writeHttpMetadata(h);
+    h.set('Cache-Control', 'public, max-age=31536000, immutable');
+    h.set('Accept-Ranges', 'bytes');
+    h.set('Access-Control-Allow-Origin', '*');
+    if (obj.httpEtag) h.set('ETag', obj.httpEtag);
+    if (request.method === 'HEAD') { h.set('Content-Length', String(obj.size)); return new Response(null, { status: 200, headers: h }); }
+    if (obj.range && obj.size != null) {
+      const start = obj.range.offset || 0;
+      const len = (obj.range.length != null) ? obj.range.length : (obj.size - start);
+      h.set('Content-Range', 'bytes ' + start + '-' + (start + len - 1) + '/' + obj.size);
+      h.set('Content-Length', String(len));
+      return new Response(obj.body, { status: 206, headers: h });
+    }
+    h.set('Content-Length', String(obj.size));
+    return new Response(obj.body, { status: 200, headers: h });
+  } catch (e) {
+    return new Response('serve error', { status: 500 });
+  }
+}
 
 // 1 回分の上流リクエスト（cookie 注入）
 async function fetchUpstream(request, url, cookie, bodyBuf, host) {

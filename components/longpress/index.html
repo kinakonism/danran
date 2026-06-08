@@ -2808,13 +2808,16 @@
       // 非表示 file input
       var fileInput = pDoc.createElement('input');
       fileInput.type     = 'file';
-      fileInput.accept   = 'image/*';
+      fileInput.accept   = 'image/*,video/*';   // 写真＋動画
       fileInput.multiple = true;   // ★ LINE 風: 複数選択して一気に送信
       fileInput.id       = CAM_FILE_ID;
       fileInput.style.display = 'none';
       fileInput.addEventListener('change', function () {
-        var files = fileInput.files;
-        if (files && files.length) handleImageUpload(files, room, avatar);
+        var files = Array.prototype.slice.call(fileInput.files || []);
+        var imgs = files.filter(function (f) { return /^image\//.test(f.type || ''); });
+        var vids = files.filter(function (f) { return /^video\//.test(f.type || ''); });
+        if (imgs.length) handleImageUpload(imgs, room, avatar);
+        if (vids.length) handleVideoUpload(vids, room, avatar);
         fileInput.value = '';
       });
       pDoc.body.appendChild(fileInput);
@@ -2823,7 +2826,7 @@
       var btn = pDoc.createElement('button');
       btn.id          = CAM_BTN_ID;
       btn.textContent = '📷';
-      btn.title       = '写真を送る';
+      btn.title       = '写真・動画を送る';
       btn.addEventListener('click', function () { fileInput.click(); });
       pDoc.body.appendChild(btn);
 
@@ -3751,6 +3754,64 @@
       showToast('❌ ' + failed + '枚送信失敗' + (done ? '（' + done + '枚成功）' : ''));
       if (btn) btn.textContent = '📷';
     }
+  }
+
+  // ── 動画送信（R2）──────────────────────────────────────────────────
+  //   写真は Supabase Storage のまま。動画は Worker 経由で R2 に保存（10GB無料・エッジ配信・
+  //   Range シーク可）。アップロードは /media/upload（同一オリジン=Worker）へ POST。
+  function videoDuration(file) {
+    return new Promise(function (res) {
+      try {
+        var v = document.createElement('video');
+        v.preload = 'metadata';
+        v.onloadedmetadata = function () { try { URL.revokeObjectURL(v.src); } catch (e) {} res(v.duration || 0); };
+        v.onerror = function () { res(0); };
+        v.src = URL.createObjectURL(file);
+      } catch (e) { res(0); }
+    });
+  }
+  async function uploadOneVideo(file, room, avatar) {
+    if (file.size > 90 * 1024 * 1024) throw new Error('TOO_BIG');
+    var dur = await videoDuration(file);
+    if (dur && dur > 61) throw new Error('TOO_LONG');
+    // /media/upload は Worker（=ページのオリジン）が処理。iframe からは親オリジン基準で叩く。
+    var base = '';
+    try { base = window.parent.location.origin; } catch (e) { base = ''; }
+    var resp = await fetch(base + '/media/upload', {
+      method: 'POST',
+      headers: { 'content-type': file.type || 'video/mp4', 'x-danran-auth': SB_KEY },
+      body: file,
+    });
+    if (!resp.ok) throw new Error('Upload ' + resp.status);
+    var j = await resp.json();
+    if (!j || !j.url) throw new Error('no url');
+    var insertResp = await sbPost('messages', {
+      room_name: room, user_id: ME_UID, user_name: ME, user_avatar: avatar,
+      content: '', video_url: j.url,
+    });
+    if (!insertResp.ok) throw new Error('Insert ' + insertResp.status);
+  }
+  async function handleVideoUpload(files, room, avatar) {
+    var list = Array.prototype.slice.call(files || []);
+    if (!list.length) return;
+    var btn = window.parent.document.getElementById(CAM_BTN_ID);
+    if (btn) { btn.style.pointerEvents = 'none'; btn.textContent = '⏳'; }
+    var done = 0, failed = 0, toolong = 0, toobig = 0;
+    for (var i = 0; i < list.length; i++) {
+      try { await uploadOneVideo(list[i], room, avatar); done++; }
+      catch (e) {
+        var m = String(e && e.message);
+        if (m.indexOf('TOO_LONG') >= 0) toolong++;
+        else if (m.indexOf('TOO_BIG') >= 0) toobig++;
+        else { failed++; console.error('[danran-vid] upload error:', e); }
+      }
+    }
+    if (btn) { btn.style.pointerEvents = ''; btn.textContent = '✅'; setTimeout(function () { if (btn) btn.textContent = '📷'; }, 2200); }
+    if (done) showToast(done > 1 ? ('🎥 動画' + done + '件を送信しました！') : '🎥 動画を送信しました！');
+    if (toolong) showToast('⚠️ 動画は60秒以内にしてね');
+    else if (toobig) showToast('⚠️ 動画が大きすぎます（短く撮ってね）');
+    else if (failed) showToast('❌ 動画の送信に失敗しました');
+    if (btn && !done) btn.textContent = '📷';
   }
 
   /* ════════════════════════════════════════

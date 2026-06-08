@@ -2,6 +2,12 @@ name = "danran-chat"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
+# R2: 画像・動画の保存先（10GB無料・エッジ配信・動画シークOK）。
+# Worker から env.danran_media で直接読み書き（クライアントにキー不要）。
+[[r2_buckets]]
+bucket_name = "danran-media"
+binding = "danran_media"
+
 [triggers]
 # 15分おきにウォームアップ（Streamlit をスリープさせず、起動時の詰まり/暗転を防ぐ）
 crons = ["*/15 * * * *"]

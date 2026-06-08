@@ -609,7 +609,7 @@ def fetch_messages(room: str, limit: int = 100) -> list[dict] | None:
       呼び出し元は None のとき前回表示を維持する。"""
     try:
         return supabase.table("messages")\
-            .select("id, user_id, user_name, user_avatar, content, image_url, created_at, "
+            .select("id, user_id, user_name, user_avatar, content, image_url, video_url, created_at, "
                     "reply_to_id, reply_to_name, reply_to_text, reply_to_image")\
             .eq("room_name", room).order("created_at").limit(limit).execute().data or []
     except Exception:
@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v154",   # Realtime化(即時配信): Supabase Realtimeを親window常駐WSで購読→refresh_chat即発火。pollは10s保険化
+    "danran_lp_v155",   # 動画送信(R2): 📷を画像+動画両対応に。動画はWorker経由でR2保存→Rangeでシーク再生
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1431,6 +1431,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             )
         avatar   = msg.get("user_avatar","🙂")
         img_url  = msg.get("image_url")
+        vid_url  = msg.get("video_url")
         # user_id があればIDで判定（名前変更後も正しく動く）、なければ名前フォールバック
         is_mine  = (msg_uid == my_id) if (msg_uid and my_id) else (sender == uname)
 
@@ -1493,7 +1494,14 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
 
         # ── 本文・画像 HTML ──（URL はリンク化。エスケープは linkify_body 内で実施）
         body_esc  = linkify_body(body)
-        is_img_only = bool(img_url) and not body.strip()  # 画像のみ（テキスト無し）
+        is_img_only = bool(img_url or vid_url) and not body.strip()  # 画像/動画のみ（テキスト無し）
+        # ── 動画 HTML ──（R2 配信・Range でシーク可。Realtime化で再描画は変化時のみ＝直 <video> でOK）
+        vid_piece = (
+            f'<video controls playsinline preload="metadata" '
+            f'src="{_html.escape(vid_url)}" '
+            f'style="display:block;max-width:240px;max-height:380px;border-radius:10px;'
+            f'background:#000;{"margin-bottom:6px" if body else ""}"></video>'
+        ) if vid_url else ""
         img_piece = (
             # ★ <img> を直接出さず JS 管理のスロットにする。
             #   2秒ポーリングで再描画されても、JS が「同じ画像ノードを移動させるだけ」で
@@ -1505,7 +1513,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             f'cursor:pointer;background:rgba(255,255,255,0.06);'
             f'{"margin-bottom:6px" if body else ""}"></span>'
         ) if img_url else ""
-        content = _reply_quote_html(msg) + img_piece + body_esc
+        content = _reply_quote_html(msg) + img_piece + vid_piece + body_esc
 
         # ── リンクプレビュー（本文に URL があれば先頭1件のカードを下に付ける）──
         #   ★ 一旦オフ：描画時に同期で OGP を取得（fetch_og）すると、取得の重い URL
@@ -1667,7 +1675,7 @@ def poll_messages() -> None:
     if prev >= 0 and len(_msgs) > prev:
         for m in _msgs[prev:]:
             if m["user_name"] != uname:
-                preview = m["content"][:30] if m["content"] else "📷 写真"
+                preview = m["content"][:30] if m["content"] else ("🎥 動画" if m.get("video_url") else "📷 写真")
                 st.toast(f"💬 {m['user_name']}: {preview}", icon="🔔")
     st.session_state[count_key] = len(_msgs)
 

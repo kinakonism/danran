@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v151",   # リアクション上飛び根治: 掴んだスクローラを固定ピン+全候補保険+最低高さ<style>固定
+    "danran_lp_v152",   # リアクション上飛び真因: ピンを親window常駐に（refresh_chatのiframe再生成で死んでいた）
     path=_LP_COMPONENT_DIR,
 )
 

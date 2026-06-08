@@ -651,6 +651,46 @@
       (pDoc.body || pDoc.head).appendChild(s);
     } catch (e) {}
   }
+
+  // ★ Supabase Realtime（即時配信）を「親ウィンドウ常駐」で1本だけ張る。
+  //   ブラウザ→supabase.co への直 WebSocket（Worker/トンネルを通らない）。messages/reactions の
+  //   変化を購読し、チャット表示中ならデバウンスして refresh_chat を即発火＝最大2秒待たずに反映。
+  //   送信は document._danranSend（scan が毎回ライブ iframe に登録）経由なので iframe 再生成に強い。
+  //   接続が落ちても 2秒(→10秒)保険ポーリングが取りこぼしを拾う。
+  function installRealtime(pDoc) {
+    try {
+      if (!SB_URL || !SB_KEY) return;
+      if (pDoc.getElementById('_danran_realtime')) return;
+      var wsUrl = SB_URL.replace(/^http/, 'ws') + '/realtime/v1/websocket?apikey=' + encodeURIComponent(SB_KEY) + '&vsn=1.0.0';
+      var s = pDoc.createElement('script');
+      s.id = '_danran_realtime';
+      s.textContent =
+        '(function(){if(window._danranRT)return;window._danranRT=1;' +
+        'var URL=' + JSON.stringify(wsUrl) + ';' +
+        'var ws,hb,ref=0,lastFire=0,pending=0;' +
+        'function cfg(a){var c=document.getElementById("_danran_cfg");return c?c.getAttribute(a):"";}' +
+        'function fire(){lastFire=Date.now();pending=0;' +
+        'try{if(document._danranSend)document._danranSend({action:"refresh_chat",ts:Date.now()});}catch(e){}}' +
+        'function bump(){' +
+        // チャット表示中(=チャット/ルーム選択)のみ反映。編集画面は乱さない。
+        'if(cfg("data-view")!=="chat")return;' +
+        'var now=Date.now();' +
+        'if(now-lastFire>350){fire();}' +
+        'else if(!pending){pending=1;setTimeout(function(){if(pending)fire();},400);}}' +
+        'function connect(){' +
+        'try{ws=new WebSocket(URL);}catch(e){setTimeout(connect,3000);return;}' +
+        'ws.onopen=function(){' +
+        'ws.send(JSON.stringify({topic:"realtime:danran",event:"phx_join",payload:{config:{postgres_changes:[' +
+        '{event:"INSERT",schema:"public",table:"messages"},' +
+        '{event:"*",schema:"public",table:"reactions"}]}},ref:String(++ref)}));' +
+        'hb=setInterval(function(){try{ws.send(JSON.stringify({topic:"phoenix",event:"heartbeat",payload:{},ref:String(++ref)}));}catch(e){}},25000);};' +
+        'ws.onmessage=function(ev){try{var m=JSON.parse(ev.data);if(m.event==="postgres_changes")bump();}catch(e){}};' +
+        'ws.onclose=function(){clearInterval(hb);setTimeout(connect,3000);};' +
+        'ws.onerror=function(){try{ws.close();}catch(e){}};}' +
+        'connect();})();';
+      (pDoc.body || pDoc.head).appendChild(s);
+    } catch (e) {}
+  }
   function startScrollHold(pDoc) {
     try {
       installScrollPinner(pDoc);
@@ -2104,6 +2144,8 @@
       // ナビ送信全般のライブ送信口（sendNav が使う）
       window.parent.document._danranSend = function (val) { stSetValue(val); };
     } catch (e) {}
+    // Supabase Realtime（即時配信）を親ウィンドウに1本だけ常駐させる（SB認証情報が揃ったら）
+    try { if (ME && SB_URL && SB_KEY) installRealtime(window.parent.document); } catch (e) {}
     // ログアウト済み（ME が空）なら即座にヘッダー・カメラを除去して終了
     if (!ME) {
       removeHeader();

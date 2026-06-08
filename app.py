@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v153",   # リアクション上飛び修正: min-heightはスクローラに掛けず内側のみ（合成テストで上飛びゼロ確認）
+    "danran_lp_v154",   # Realtime化(即時配信): Supabase Realtimeを親window常駐WSで購読→refresh_chat即発火。pollは10s保険化
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1639,10 +1639,12 @@ def _strip_read_receipts(html: str | None) -> str:
     これで既読だけの変化では再描画が走らず、チカチカを抑える。"""
     return _READ_RE.sub("", html or "")
 
-@st.fragment(run_every="2s")
+@st.fragment(run_every="10s")
 def poll_messages() -> None:
-    """2秒ごとに「内容が変わったか」だけを確認し、変わった時だけ st.rerun()。
-    何も描画しない（＝変化が無ければ DOM は一切いじらない→画像チカチカしない）。"""
+    """内容が変わったか確認し、変わった時だけ st.rerun()。何も描画しない。
+    ★ 2026-06-08 Realtime化: 即時反映はブラウザの Supabase Realtime(installRealtime)が
+      refresh_chat を即発火して行う。このポーラーは Realtime が落ちた時の取りこぼし保険＝
+      低頻度(10s)で十分。負荷も端末数×2s→×10s に激減。"""
     if (st.session_state.get("_show_rooms", False)
             or "current_user" not in st.session_state
             or st.session_state.get("view") != "chat"):

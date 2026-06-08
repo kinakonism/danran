@@ -993,7 +993,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v145",   # スワイプ戻りカバー固着→親window常駐の掃除役で必ず剥がす＋fireNav併送
+    "danran_lp_v146",   # 編集系遷移(👥/⚙️/アバター/通知/設定)全てに遷移カバー→スクロール跳ね解消
     path=_LP_COMPONENT_DIR,
 )
 

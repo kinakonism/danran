@@ -1300,12 +1300,14 @@
         var gear = t.closest('[data-room-gear]');
         if (gear) {
           e.preventDefault(); e.stopPropagation();
+          try { showEditCover(); } catch (e2) {}
           sendNav({ action: 'go_room_edit', room_id: gear.getAttribute('data-room-gear'), ts: Date.now() });
           return;
         }
         var create = t.closest('[data-room-create]');
         if (create) {
           e.preventDefault(); e.stopPropagation();
+          try { showEditCover(); } catch (e2) {}
           sendNav({ action: 'go_room_create', ts: Date.now() });
           return;
         }
@@ -1359,6 +1361,7 @@
           (function (el) {
             el.addEventListener('click', function (e) {
               e.stopPropagation();
+              try { showEditCover(); } catch (e2) {}
               // ts: で一意なタイムスタンプを付与し Python 側が「同じ action を二重処理しない」ようにする
               sendNav({ action: 'go_profile', ts: Date.now() });
             });
@@ -1629,6 +1632,7 @@
 
       // バナータップ → アプリ内の通知設定画面へ遷移
       banner.addEventListener('click', function () {
+        try { showEditCover(); } catch (e2) {}
         sendNav({ action: 'go_notifications', ts: Date.now() });
       });
 
@@ -1910,6 +1914,7 @@
       if (profBtn && !profBtn._danranHdrProfile) {
         profBtn._danranHdrProfile = true;
         profBtn.addEventListener('click', function () {
+          try { showEditCover(); } catch (e2) {}
           sendNav({ action: 'go_profile', ts: Date.now() });
         });
       }
@@ -1918,6 +1923,7 @@
       if (setBtn && !setBtn._danranHdrSettings) {
         setBtn._danranHdrSettings = true;
         setBtn.addEventListener('click', function () {
+          try { showEditCover(); } catch (e2) {}
           sendNav({ action: 'go_settings', ts: Date.now() });
         });
       }
@@ -1926,6 +1932,7 @@
       if (memBtn && !memBtn._danranHdrRoomEdit) {
         memBtn._danranHdrRoomEdit = true;
         memBtn.addEventListener('click', function () {
+          try { showEditCover(); } catch (e2) {}
           sendNav({ action: 'go_room_edit', room_id: memBtn.getAttribute('data-hdr-roomedit'), ts: Date.now() });
         });
       }
@@ -3336,6 +3343,26 @@
     } catch (e) {}
   }
 
+  // ★ 編集系画面（profile/room_edit/room_create/notifications/album）への遷移カバー（グローバル）。
+  //   これらの経路は「タップ→sendNav→Streamlit 2パス描画」で高さが後から伸び、scrollTopOnEditEnter の
+  //   トップ固定処理が丸見えになって「スクロールが跳ねる」。タップ即この地色カバーを出して隠し、
+  //   scrollTopOnEditEnter が高さ安定後に剥がす（data-cover-dir='edit'）。全編集遷移の直前で呼ぶこと。
+  function showEditCover() {
+    try {
+      var pDoc = window.parent.document;
+      installCoverSweeper();
+      if (pDoc.getElementById('_danran_enter_cover')) return;
+      var cover = pDoc.createElement('div');
+      cover.id = '_danran_enter_cover';
+      cover.setAttribute('data-cover-expire', String(Date.now() + 2000));
+      cover.setAttribute('data-cover-dir', 'edit');
+      cover.style.cssText =
+        'position:fixed;inset:0;z-index:2147483647;background:#1a1614;' +
+        'pointer-events:none;opacity:1;transition:opacity 0.16s ease;';
+      pDoc.body.appendChild(cover);
+    } catch (e) {}
+  }
+
   // チャットに「入った瞬間」だけ最新メッセージ（最下部）へ移動し、カバーを外す。
   // ポーリング中・履歴閲覧中はスクロールを奪わない（入室イベントのみ）。
   var _lastChatKey = '';
@@ -3396,7 +3423,7 @@
   var _lastViewForScroll = '';
   function scrollTopOnEditEnter() {
     try {
-      var editViews = { profile: 1, room_edit: 1, notifications: 1, album: 1, room_create: 1 };
+      var editViews = { profile: 1, room_edit: 1, notifications: 1, album: 1, room_create: 1, settings: 1 };
       if (!editViews[VIEW]) {
         _lastViewForScroll = VIEW;   // chat 等に戻ったらリセット（次に編集へ入ると再度トップへ）
         return;

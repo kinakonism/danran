@@ -1619,7 +1619,9 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             bubble = (
                 f'<div data-lp-msg="{msg_id}" data-lp-name="{_html.escape(sender)}" '
                 f'data-lp-body="{_body_attr(body)}" style="'
-                f'display:flex;align-items:flex-end;gap:8px;margin:4px 0 2px 0">'
+                # LINE 同様アイコンは上揃え（flex-start。flex-end だと長文でアイコンが
+                # バブルの下に張り付く）。画像グリッドバブルも flex-start で統一済み
+                f'display:flex;align-items:flex-start;gap:8px;margin:4px 0 2px 0">'
                 f'{av_html}'
                 f'<div>'
                 f'<div style="font-size:0.75rem;color:#9a9a9a;font-weight:600;'

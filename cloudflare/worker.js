@@ -288,6 +288,13 @@ export default {
         (request.method === 'GET' || request.method === 'HEAD')) {
       return handleMediaServe(request, url, env);
     }
+    //   /media-admin/*: bridge(mini) の日次 R2 孤児掃除用（list / delete）。
+    if (url.pathname === '/media-admin/list' && request.method === 'GET') {
+      return handleMediaAdmin(request, env, 'list');
+    }
+    if (url.pathname === '/media-admin/delete' && request.method === 'POST') {
+      return handleMediaAdmin(request, env, 'delete');
+    }
 
     // ── WebSocket プロキシ ───────────────────────────────────────────
     if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
@@ -369,6 +376,39 @@ async function handleMediaServe(request, url, env) {
     return new Response(obj.body, { status: 200, headers: h });
   } catch (e) {
     return new Response('serve error', { status: 500 });
+  }
+}
+
+// ── R2 メディア: 管理（bridge の日次孤児掃除用）─────────────────────────
+//   /media-admin/list   (GET)  → 全オブジェクトの {key,size,uploaded} 一覧
+//   /media-admin/delete (POST) → {keys:[...]} を一括削除（最大100件/回）
+//   ゲートはアップロードと同じ x-danran-auth（Supabase 側も anon key で storage の
+//   list/delete を許しており＝danran_orphan_*、アプリ全体と同じ脅威モデルで整合）。
+async function handleMediaAdmin(request, env, op) {
+  try {
+    if (!env || !env.danran_media) return new Response('R2 unbound', { status: 500 });
+    if ((request.headers.get('x-danran-auth') || '') !== SB_ANON)
+      return new Response('forbidden', { status: 403 });
+    if (op === 'list') {
+      const out = [];
+      let cursor;
+      do {
+        const page = await env.danran_media.list({ cursor, limit: 1000 });
+        for (const o of page.objects) out.push({ key: o.key, size: o.size, uploaded: o.uploaded });
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor);
+      return new Response(JSON.stringify(out), { headers: { 'Content-Type': 'application/json' } });
+    }
+    const body = await request.json();
+    const keys = ((body && body.keys) || [])
+      .filter((k) => typeof k === 'string' && k && k.indexOf('..') < 0)
+      .slice(0, 100);
+    if (keys.length) await env.danran_media.delete(keys);
+    return new Response(JSON.stringify({ deleted: keys.length }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (e) {
+    return new Response('admin error: ' + (e && e.message), { status: 500 });
   }
 }
 

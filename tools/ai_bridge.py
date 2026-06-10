@@ -134,6 +134,21 @@ def api(method, path, body=None, tries=3):
         raise last_err
 
 
+def api_all(path, page=1000):
+    """全行取得（offset ページング）。PostgREST は既定で最大1000行しか返さないため、
+    参照集合の構築やバックアップなど「全件が必要」な読み取りは必ずこちらを使う。
+    path には order を含めること（offset ページングの安定性のため）。"""
+    out = []
+    offset = 0
+    while True:
+        sep = "&" if "?" in path else "?"
+        rows = api("GET", f"{path}{sep}limit={page}&offset={offset}") or []
+        out.extend(rows)
+        if len(rows) < page:
+            return out
+        offset += page
+
+
 def fetch_all_recent(n=80):
     """全ルームの直近メッセージ（新しい順）。"""
     q = ("messages?select=id,room_name,user_id,user_name,content,image_url,created_at"
@@ -559,8 +574,10 @@ def orphan_sweep():
     """孤児ファイル（削除済みメッセージ/ルームの画像など）を Storage から自動掃除。日次。"""
     try:
         # chat-images: messages.image_url で参照されている name 集合
+        # ★ api_all 必須: api() は最大1000行で切れ、参照集合が欠けると「使用中の画像」を
+        #   孤児と誤判定して消してしまう。
         refs_img = set()
-        rows = api("GET", "messages?select=image_url") or []
+        rows = api_all("messages?select=image_url&order=created_at.asc")
         for m in rows:
             n = _obj_name_from_url(m.get("image_url"), "chat-images")
             if n:
@@ -571,7 +588,7 @@ def orphan_sweep():
         refs_av = set()
         for tbl, col in (("users", "avatar"), ("rooms", "icon")):
             try:
-                rr = api("GET", "%s?select=%s" % (tbl, col)) or []
+                rr = api_all("%s?select=%s&order=created_at.asc" % (tbl, col))
                 for r in rr:
                     n = _obj_name_from_url(r.get(col), "avatars")
                     if n:
@@ -589,6 +606,112 @@ def orphan_sweep():
             print("[danran-bridge] 🧹 孤児掃除: 対象なし")
     except Exception as e:
         print("[danran-bridge] orphan_sweep err:", e)
+
+# ── R2 メディア（動画）の孤児掃除 ─────────────────────────────────────
+WORKER_URL = "https://danran-chat.kinakonism.workers.dev"   # /media-admin/* の呼び先
+
+def worker_api(method, path, body=None):
+    """Cloudflare Worker の管理エンドポイント呼び出し（x-danran-auth ゲート）。"""
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(WORKER_URL + path, data=data,
+                                 headers={"x-danran-auth": KEY, "Content-Type": "application/json"},
+                                 method=method)
+    with urllib.request.urlopen(req, timeout=60) as r:
+        raw = r.read()
+        return json.loads(raw) if raw else None
+
+def r2_sweep():
+    """R2（danran-media）の孤児掃除。messages の video_url / image_url が参照しない
+    /media/<key> を、アップロード24時間猶予つきで Worker 経由で削除する。日次。
+    （メッセージ削除は R2 オブジェクトを消さないため、放置すると無料枠10GBを食う）"""
+    try:
+        refs = set()
+        rows = api_all("messages?select=image_url,video_url&order=created_at.asc")
+        for m in rows:
+            for u in (m.get("image_url"), m.get("video_url")):
+                if u and "/media/" in u:
+                    refs.add(u.split("/media/", 1)[1].split("?")[0])
+        objs = worker_api("GET", "/media-admin/list") or []
+        from datetime import timezone, timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=ORPHAN_GRACE_H)
+        orphans = []
+        for o in objs:
+            k = o.get("key", "")
+            if not k or k in refs:
+                continue
+            try:
+                dt = datetime.fromisoformat(str(o.get("uploaded", "")).replace("Z", "+00:00"))
+            except Exception:
+                dt = None
+            if dt is None or dt < cutoff:   # 日付不明も猶予超え扱い
+                orphans.append(k)
+        deleted = 0
+        for i in range(0, len(orphans), 100):
+            res = worker_api("POST", "/media-admin/delete", {"keys": orphans[i:i + 100]}) or {}
+            deleted += int(res.get("deleted", 0))
+        if deleted:
+            print(f"[danran-bridge] 🧹 R2孤児掃除: {deleted} 件削除")
+            notify_owner("danran R2掃除", f"未使用の動画/メディア {deleted} 件を削除しました。",
+                         to_support=False)
+        else:
+            print("[danran-bridge] 🧹 R2孤児掃除: 対象なし")
+    except Exception as e:
+        print("[danran-bridge] r2_sweep err:", e)
+
+# ── 日次バックアップ（Supabase → mini ローカル）──────────────────────────
+#   家族の思い出データの保全。無料枠の自動バックアップは限定的なので、全テーブルを
+#   JSON(gzip) で ~/danran_backups/ に世代保存する。sessions は揮発なので対象外。
+BACKUP_DIR  = os.path.expanduser("~/danran_backups")
+BACKUP_KEEP = 30   # 30世代（≒30日）保持
+BACKUP_TABLES = (
+    ("users",              "created_at.asc"),
+    ("rooms",              "created_at.asc"),
+    ("room_members",       "joined_at.asc"),
+    ("messages",           "created_at.asc"),
+    ("reactions",          "id.asc"),
+    ("last_read",          "user_id.asc,room_name.asc"),
+    ("push_subscriptions", "id.asc"),
+    ("ai_tasks",           "created_at.asc"),
+)
+
+def backup_daily():
+    """全テーブルをダンプして danran-YYYY-MM-DD.json.gz に保存（同日分があればスキップ）。
+    失敗時のみ まさと に Web Push。復元はこの JSON から REST upsert で戻せる。"""
+    import gzip
+    day  = datetime.now().strftime("%Y-%m-%d")
+    path = os.path.join(BACKUP_DIR, f"danran-{day}.json.gz")
+    try:
+        if os.path.exists(path):
+            return
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        dump = {"_meta": {"taken_at": datetime.now().astimezone().isoformat()}}
+        for tbl, order in BACKUP_TABLES:
+            dump[tbl] = api_all(f"{tbl}?select=*&order={order}")
+        tmp = path + ".tmp"
+        with gzip.open(tmp, "wt", encoding="utf-8") as f:
+            json.dump(dump, f, ensure_ascii=False)
+        os.replace(tmp, path)   # 書きかけファイルを正規名にしない
+        n_msg = len(dump.get("messages", []))
+        print(f"[danran-bridge] 💾 バックアップ保存: {path}（messages {n_msg} 件）")
+        # 古い世代を削除（新しい順に BACKUP_KEEP 件残す）
+        gens = sorted(glob.glob(os.path.join(BACKUP_DIR, "danran-*.json.gz")), reverse=True)
+        for old in gens[BACKUP_KEEP:]:
+            try:
+                os.remove(old)
+            except Exception:
+                pass
+    except Exception as e:
+        print("[danran-bridge] backup err:", e)
+        try:
+            notify_owner("danran バックアップ失敗", f"日次バックアップが失敗: {e}", to_support=False)
+        except Exception:
+            pass
+
+def daily_jobs():
+    """日次メンテ一式（main ループから別スレッドで起動）。"""
+    backup_daily()
+    orphan_sweep()
+    r2_sweep()
 
 def reclaim_stuck_tasks():
     """mini が実装中に落ちる等で implementing のまま固着したタスクを failed に戻す。"""
@@ -748,9 +871,9 @@ def main():
             if time.time() - _last_reclaim > 60:   # 固着タスク回収は約60秒ごと
                 reclaim_stuck_tasks()
                 _last_reclaim = time.time()
-            if time.time() - _last_sweep > 86400:  # 孤児ファイル掃除は1日ごと（別スレッド）
+            if time.time() - _last_sweep > 86400:  # 日次メンテ（バックアップ＋孤児掃除）は1日ごと（別スレッド）
                 _last_sweep = time.time()
-                threading.Thread(target=orphan_sweep, daemon=True).start()
+                threading.Thread(target=daily_jobs, daemon=True).start()
             for rn, msgs in _group_by_room(fetch_all_recent()).items():
                 if not msgs:
                     continue

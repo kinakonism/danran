@@ -2918,8 +2918,11 @@
   }
 
   function _stampTileCss() {
+    // min-width:0 必須: グリッドアイテムの暗黙 min-width:auto で 1fr が膨らみ、
+    // 右端のタイルが画面外に見切れていた
     return 'aspect-ratio:1/1;border-radius:12px;cursor:pointer;display:flex;align-items:center;' +
-           'justify-content:center;-webkit-tap-highlight-color:transparent;padding:0;';
+           'justify-content:center;-webkit-tap-highlight-color:transparent;padding:0;' +
+           'min-width:0;max-width:84px;width:100%;margin:0 auto;';
   }
 
   function sendStamp(url, room, avatar) {
@@ -2984,13 +2987,15 @@
     ov.style.cssText = 'position:fixed;inset:0;z-index:10010;background:rgba(0,0,0,0.35);';
     var sheet = pDoc.createElement('div');
     sheet.style.cssText =
-      'position:absolute;left:0;right:0;bottom:0;background:#241f1c;' +
-      'border-radius:18px 18px 0 0;padding:14px 12px calc(16px + env(safe-area-inset-bottom));' +
-      'max-height:46vh;overflow-y:auto;box-shadow:0 -6px 24px rgba(0,0,0,0.5);';
+      'position:absolute;left:0;right:0;bottom:0;background:#241f1c;box-sizing:border-box;' +
+      'border-radius:18px 18px 0 0;padding:14px 14px calc(28px + env(safe-area-inset-bottom));' +
+      'max-height:50vh;overflow-y:auto;box-shadow:0 -6px 24px rgba(0,0,0,0.5);';
     sheet.innerHTML =
       '<div style="font-size:0.8rem;font-weight:700;color:rgba(240,232,224,0.55);margin:0 4px 10px">' +
       'スタンプ <span style="font-weight:400">（＋で登録・長押しで削除）</span></div>' +
-      '<div id="_danran_stamp_grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px"></div>';
+      // auto-fill: スタンプ数・画面幅に応じて 1行あたりの個数が自動調整（タイルは64〜80px程度）
+      '<div id="_danran_stamp_grid" style="display:grid;' +
+      'grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:9px"></div>';
     ov.appendChild(sheet);
     ov.addEventListener('click', function (e) { if (e.target === ov) closeStampTray(); });
     pDoc.body.appendChild(ov);

@@ -710,11 +710,87 @@ def backup_daily():
         except Exception:
             pass
 
+# ── メディア実体バックアップ（写真・動画 → mini ローカル）──────────────────
+#   backup_daily はテキスト（DB）だけ。家族の思い出の本体（Supabase Storage の写真、
+#   R2 の動画）を mini に増分ダウンロードして初めてバックアップが完成する。
+#   リモートで削除されてもローカルは消さない（アーカイブとして残す）。
+MEDIA_BACKUP_DIR    = os.path.join(BACKUP_DIR, "media")
+STORAGE_WARN_BYTES  = 800 * 1024 * 1024   # Supabase Storage 無料枠1GBの8割で警告
+STORAGE_WARN_MARKER = os.path.expanduser("~/.danran_storage_warned")
+
+def _download_to(url: str, dst: str):
+    """url を dst へアトミックにダウンロード（.tmp → rename）。"""
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    req = urllib.request.Request(url, headers={"User-Agent": "danran-bridge/1.0",
+                                               "apikey": KEY})
+    tmp = dst + ".tmp"
+    with urllib.request.urlopen(req, timeout=300) as r, open(tmp, "wb") as f:
+        shutil.copyfileobj(r, f)
+    os.replace(tmp, dst)
+
+def media_backup():
+    """写真（Supabase Storage）と動画（R2）の実体を増分バックアップ。日次。
+    あわせて Supabase Storage 使用量を集計し、800MB 超で一度だけオーナーに警告。"""
+    new_n, sb_bytes = 0, 0
+    try:
+        # Supabase Storage（chat-images / avatars）
+        for bucket in ("chat-images", "avatars"):
+            dirp = os.path.join(MEDIA_BACKUP_DIR, bucket)
+            offset = 0
+            while True:
+                page = storage_api("POST", "object/list/" + urllib.parse.quote(bucket),
+                                   {"prefix": "", "limit": 1000, "offset": offset,
+                                    "sortBy": {"column": "name", "order": "asc"}}) or []
+                if not page:
+                    break
+                for o in page:
+                    nm = o.get("name", "")
+                    if not nm or ".." in nm:
+                        continue
+                    sb_bytes += int((o.get("metadata") or {}).get("size") or 0)
+                    dst = os.path.join(dirp, nm)
+                    if os.path.exists(dst):
+                        continue
+                    _download_to(URL + "/storage/v1/object/public/" + bucket + "/"
+                                 + urllib.parse.quote(nm), dst)
+                    new_n += 1
+                if len(page) < 1000:
+                    break
+                offset += 1000
+        # R2（動画・/media/<key>）
+        for o in (worker_api("GET", "/media-admin/list") or []):
+            k = o.get("key", "")
+            if not k or ".." in k:
+                continue
+            dst = os.path.join(MEDIA_BACKUP_DIR, "danran-media", k)
+            if os.path.exists(dst):
+                continue
+            _download_to(WORKER_URL + "/media/" + urllib.parse.quote(k), dst)
+            new_n += 1
+        if new_n:
+            print(f"[danran-bridge] 💾 メディアバックアップ: 新規 {new_n} 件")
+        # Supabase Storage 使用量の警告（閾値を跨いだら一度だけ・回復で解除）
+        if sb_bytes > STORAGE_WARN_BYTES:
+            if not os.path.exists(STORAGE_WARN_MARKER):
+                open(STORAGE_WARN_MARKER, "w").write(str(sb_bytes))
+                notify_owner("danran ストレージ残量注意",
+                             f"Supabase Storage が {sb_bytes/1048576:.0f}MB（無料枠1GB）。"
+                             "写真の R2 移行を検討する時期です。", to_support=False)
+        elif os.path.exists(STORAGE_WARN_MARKER):
+            os.remove(STORAGE_WARN_MARKER)
+    except Exception as e:
+        print("[danran-bridge] media_backup err:", e)
+        try:
+            notify_owner("danran メディアバックアップ失敗", f"{e}", to_support=False)
+        except Exception:
+            pass
+
 def daily_jobs():
     """日次メンテ一式（main ループから別スレッドで起動）。"""
     backup_daily()
     orphan_sweep()
     r2_sweep()
+    media_backup()   # 掃除の後に実行（消える予定の孤児まで保存しない）
 
 # ── 動画の自動圧縮（R2 × ffmpeg・5分ごと）────────────────────────────────
 #   家族が送った動画を 720p/H.264 に圧縮して R2 残量と再生開始を改善する。

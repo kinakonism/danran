@@ -40,7 +40,9 @@ import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+JST = timezone(timedelta(hours=9), "JST")
 
 # ── 設定 ──────────────────────────────────────────────
 ROOM       = "🤖 AIサポート"
@@ -218,16 +220,15 @@ def _vapid():
     p = _sec.get("push", {}) or {}
     return p.get("vapid_private_key", ""), p.get("vapid_subject", "")
 
-def push_to_owner(title, body):
-    """まさとの全購読に Web Push を送る（pywebpush は venv に導入済み）。"""
+def push_to_user(uid, title, body, room=ROOM):
+    """指定ユーザーの全購読に Web Push を送る（pywebpush は venv に導入済み）。"""
     try:
         from pywebpush import webpush, WebPushException
         priv, subj = _vapid()
-        uid = get_owner_uid()
         if not (priv and subj and uid):
             return
         subs = api("GET", "push_subscriptions?select=endpoint,p256dh,auth&user_id=eq." + uid) or []
-        payload = json.dumps({"title": title, "body": body[:160], "room": ROOM, "url": "/"},
+        payload = json.dumps({"title": title, "body": body[:160], "room": room, "url": "/"},
                              ensure_ascii=False)
         for s in subs:
             try:
@@ -237,7 +238,11 @@ def push_to_owner(title, body):
             except Exception:
                 pass
     except Exception as e:
-        print("[danran-bridge] push_to_owner err:", e)
+        print("[danran-bridge] push_to_user err:", e)
+
+def push_to_owner(title, body):
+    """まさとの全購読に Web Push を送る。"""
+    push_to_user(get_owner_uid(), title, body)
 
 def notify_owner(title, body, to_support=True):
     """まさとに通知: Web Push ＋（任意で）AIサポートルームに記録。"""
@@ -265,13 +270,15 @@ def looks_logged_out(text):
 
 
 def split_flags(text):
-    """claude 返信末尾の `TASK:` / `DESTRUCTIVE:` 行を取り出して本文から除去。
-    戻り: (家族に見せる本文, is_task bool, is_destructive bool)。"""
+    """claude 返信末尾の `TASK:` / `DESTRUCTIVE:` / `REMIND:` 行を取り出して本文から除去。
+    戻り: (家族に見せる本文, is_task bool, is_destructive bool, remind str)。
+    remind は ""（なし）/ "cancel"（取り消し依頼）/ "ISO日時|内容"。"""
     is_task = False
     is_destr = False
+    remind = ""
     lines = (text or "").rstrip().split("\n")
-    # 末尾から最大2行ぶんのフラグを剥がす
-    for _ in range(2):
+    # 末尾から最大3行ぶんのフラグを剥がす
+    for _ in range(3):
         while lines and not lines[-1].strip():
             lines.pop()
         if not lines:
@@ -283,8 +290,72 @@ def split_flags(text):
         m = re.match(r"\s*destructive\s*[:：]\s*(yes|no|はい|いいえ)\s*$", last, re.I)
         if m:
             is_destr = m.group(1).lower() in ("yes", "はい"); lines.pop(); continue
+        m = re.match(r"\s*remind\s*[:：]\s*(.+?)\s*$", last, re.I)
+        if m:
+            v = m.group(1).strip()
+            remind = "" if v.lower() in ("none", "no", "なし", "-") else \
+                     ("cancel" if v.lower() in ("cancel", "取り消し", "キャンセル") else v)
+            lines.pop(); continue
         break
-    return ("\n".join(lines).strip(), is_task, is_destr)
+    return ("\n".join(lines).strip(), is_task, is_destr, remind)
+
+# ── @AI リマインダー ─────────────────────────────────────────────────
+#   会話AIが REMIND フラグ（'ISO日時|内容'）を出したら ai_reminders に登録し、
+#   main ループの fire_due_reminders() が期日到来で依頼者に Web Push＋部屋に投稿する。
+def save_reminder(msg, remind):
+    """REMIND フラグを ai_reminders に登録。過去・1年超・不正な日時は無視（False）。"""
+    try:
+        when_s, _, body = remind.partition("|")
+        when = datetime.fromisoformat(when_s.strip())
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=JST)
+        now = datetime.now(JST)
+        if when <= now or when > now + timedelta(days=366):
+            print("[danran-bridge] reminder 日時が範囲外:", remind)
+            return False
+        api("POST", "ai_reminders", {
+            "user_id":   msg.get("user_id") or "",
+            "user_name": msg.get("user_name", ""),
+            "room_name": msg.get("room_name", ROOM),
+            "remind_at": when.isoformat(),
+            "body":      (body.strip() or "リマインダー")[:200],
+        })
+        print(f"[danran-bridge] ⏰ リマインダー登録: {msg.get('user_name')} → {when_s.strip()}")
+        return True
+    except Exception as e:
+        print("[danran-bridge] save_reminder err:", e)
+        return False
+
+def cancel_reminders(uid):
+    """そのユーザーの pending リマインダーをすべて取り消す。"""
+    try:
+        if uid:
+            api("PATCH", "ai_reminders?user_id=eq." + uid + "&status=eq.pending",
+                {"status": "cancelled"})
+    except Exception as e:
+        print("[danran-bridge] cancel_reminders err:", e)
+
+def fire_due_reminders():
+    """期日が来た pending リマインダーを発火（Web Push＋部屋にボット投稿）。20秒ごと。"""
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        rows = api("GET", "ai_reminders?select=id,user_id,user_name,room_name,body"
+                   "&status=eq.pending&remind_at=lte." + urllib.parse.quote(now_iso)) or []
+        for r in rows:
+            # 先に sent 化（プロセス多重起動などでの二重発火防止）
+            api("PATCH", "ai_reminders?id=eq." + r["id"] + "&status=eq.pending",
+                {"status": "sent"})
+            body = r.get("body", "")
+            push_to_user(r.get("user_id", ""), "⏰ リマインダー", body,
+                         room=r.get("room_name") or ROOM)
+            try:
+                post_reply(f"⏰ {r.get('user_name', '')}さん、リマインダーだよ: {body}",
+                           r.get("room_name") or ROOM)
+            except Exception:
+                pass
+            print(f"[danran-bridge] ⏰ リマインダー発火: {r.get('user_name')} / {body[:40]}")
+    except Exception as e:
+        print("[danran-bridge] fire_due_reminders err:", e)
 
 def is_affirmative(text):
     t = (text or "").strip().lower()
@@ -343,12 +414,20 @@ def build_prompt(msgs, ai_room=True):
         lines.append(f"{who}: {c}")
     convo = "\n".join(lines)
     # 末尾に必ず付けるフラグ（家族には非表示で除去する）
+    _now = datetime.now(JST)
+    _wd  = ["月", "火", "水", "木", "金", "土", "日"][_now.weekday()]
     flag_rule = (
         "\n\n--- 最後に必ず（家族には表示されません）---\n"
-        "返信本文の後に、次の2行をこの順で必ず付けてください:\n"
+        f"現在日時: {_now.strftime('%Y-%m-%d')}（{_wd}）{_now.strftime('%H:%M')} JST\n"
+        "返信本文の後に、次の3行をこの順で必ず付けてください:\n"
         "TASK: yes/no        ← danran のコード変更（バグ修正・UI改善・機能追加）が必要なら yes\n"
         "DESTRUCTIVE: yes/no ← 破壊的/要注意（DB削除・スキーマ変更・認証/パスワード/課金/通知鍵まわり・"
-        "ファイル削除・大規模リファクタ・依存追加 等）なら yes。単純なUI/文言/小バグ/小機能なら no"
+        "ファイル削除・大規模リファクタ・依存追加 等）なら yes。単純なUI/文言/小バグ/小機能なら no\n"
+        "REMIND: none/cancel/日時|内容 ← 『明日19時に教えて』『30分後に知らせて』のような"
+        "リマインダー依頼のときだけ、上の現在日時を基準に JST の ISO8601 日時と通知内容を"
+        "半角の縦棒 | で区切って書く（例: REMIND: 2026-06-11T19:00:00+09:00|ゴミ出しの時間だよ）。"
+        "リマインダーの取り消し依頼なら cancel。どちらでもなければ none。"
+        "リマインダーを設定するときは TASK は no にし、返信本文でも『⏰◯日◯時に知らせるね』と確認すること"
     )
     # 実装依頼への振る舞い: yes かつ非破壊なら「こう直す、進めていい？」と確認を促す。
     impl_rule = (
@@ -1028,6 +1107,7 @@ def main():
     _last_reclaim = 0.0
     _last_sweep   = 0.0   # 0 = 起動直後に1回 → 以後24時間ごと
     _last_video   = 0.0   # 動画圧縮チェックは5分ごと
+    _last_remind  = 0.0   # リマインダー発火チェックは20秒ごと
     while True:
         try:
             heartbeat()
@@ -1040,6 +1120,9 @@ def main():
             if time.time() - _last_video > 300:    # 動画圧縮チェックは5分ごと（別スレッド）
                 _last_video = time.time()
                 threading.Thread(target=video_compress_tick, daemon=True).start()
+            if time.time() - _last_remind > 20:    # リマインダー発火チェック（軽いのでインライン）
+                _last_remind = time.time()
+                fire_due_reminders()
             for rn, msgs in _group_by_room(fetch_all_recent()).items():
                 if not msgs:
                     continue
@@ -1102,8 +1185,12 @@ def main():
                     last_by_room[rn] = nts
                     continue
                 # 末尾の TASK / DESTRUCTIVE フラグを取り出し、本文からは除去して家族に見せる
-                clean, is_task, is_destr = split_flags(reply)
+                clean, is_task, is_destr, remind = split_flags(reply)
                 post_reply(clean or "⚠️ うまく応答できませんでした。もう一度試してください。", rn)
+                if remind == "cancel":
+                    cancel_reminders(newest.get("user_id", ""))
+                elif remind:
+                    save_reminder(newest, remind)
                 if is_task and IMPLEMENT_ON:
                     if is_destr:
                         enqueue_task(newest, status="needs_review", result=clean[:500])

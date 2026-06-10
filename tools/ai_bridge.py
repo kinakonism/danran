@@ -716,6 +716,89 @@ def daily_jobs():
     orphan_sweep()
     r2_sweep()
 
+# ── 動画の自動圧縮（R2 × ffmpeg・5分ごと）────────────────────────────────
+#   家族が送った動画を 720p/H.264 に圧縮して R2 残量と再生開始を改善する。
+#   iPhone の HEVC(H.265) も H.264 になるので Android/PC での再生互換も上がる。
+#   差し替え後の旧オブジェクトは参照が外れるため、日次の r2_sweep が自動回収する。
+FFMPEG          = "/opt/homebrew/bin/ffmpeg"
+VIDEO_DONE_PATH = os.path.expanduser("~/.danran_video_done.json")   # 処理済み message_id
+VIDEO_MIN_BYTES = 6 * 1024 * 1024    # これ未満は圧縮しない（既に十分小さい）
+VIDEO_SETTLE_S  = 120                # 送信直後は触らない（クライアント処理との競合回避）
+VIDEO_LOCK      = threading.Lock()   # 圧縮は同時1件（CPU・帯域の独占防止）
+
+def _video_done_load() -> dict:
+    try:
+        return json.load(open(VIDEO_DONE_PATH))
+    except Exception:
+        return {}
+
+def _video_done_save(done: dict):
+    tmp = VIDEO_DONE_PATH + ".tmp"
+    json.dump(done, open(tmp, "w"), ensure_ascii=False)
+    os.replace(tmp, VIDEO_DONE_PATH)
+
+def _compress_one(mid: str, vu: str, done: dict):
+    """1本の動画をダウンロード→ffmpeg 圧縮→再アップロード→messages.video_url を差し替え。"""
+    import tempfile
+    src = WORKER_URL + vu if vu.startswith("/") else vu
+    with tempfile.TemporaryDirectory() as td:
+        fin, fout = os.path.join(td, "in.bin"), os.path.join(td, "out.mp4")
+        req = urllib.request.Request(src, headers={"User-Agent": "danran-bridge/1.0"})
+        with urllib.request.urlopen(req, timeout=300) as r, open(fin, "wb") as f:
+            shutil.copyfileobj(r, f)
+        osize = os.path.getsize(fin)
+        if osize < VIDEO_MIN_BYTES:
+            done[mid] = {"skip": "small", "bytes": osize}; _video_done_save(done); return
+        # 720p 上限（縦横どちらでも・拡大はしない）/ H.264 + AAC / faststart=即再生
+        subprocess.run(
+            [FFMPEG, "-y", "-i", fin,
+             "-vf", "scale=if(gt(iw\\,ih)\\,min(1280\\,iw)\\,-2):if(gt(iw\\,ih)\\,-2\\,min(1280\\,ih))",
+             "-c:v", "libx264", "-crf", "27", "-preset", "veryfast",
+             "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
+             "-pix_fmt", "yuv420p", fout],
+            capture_output=True, timeout=900, check=True)
+        nsize = os.path.getsize(fout)
+        if nsize >= osize * 0.85:   # 1.5割も縮まないなら元のまま（再圧縮の劣化だけ損）
+            done[mid] = {"skip": "no-gain", "bytes": osize}; _video_done_save(done); return
+        with open(fout, "rb") as f:
+            data = f.read()
+        req = urllib.request.Request(
+            WORKER_URL + "/media/upload", data=data, method="POST",
+            headers={"x-danran-auth": KEY, "Content-Type": "video/mp4",
+                     "User-Agent": "danran-bridge/1.0"})
+        with urllib.request.urlopen(req, timeout=600) as r:
+            j = json.loads(r.read())
+        api("PATCH", "messages?id=eq." + mid, {"video_url": j["url"]})
+        done[mid] = {"bytes": osize, "to": nsize}
+        _video_done_save(done)
+        print(f"[danran-bridge] 🎬 動画圧縮: {osize/1048576:.1f}MB → {nsize/1048576:.1f}MB ({mid[:8]})")
+
+def video_compress_tick():
+    """video_url 付きメッセージを巡回し、未処理の動画を圧縮する（main ループから5分ごと）。"""
+    if not os.path.exists(FFMPEG):
+        return   # ffmpeg 未導入なら静かに何もしない
+    if not VIDEO_LOCK.acquire(blocking=False):
+        return   # 前回の圧縮がまだ走っている
+    try:
+        done = _video_done_load()
+        rows = api_all("messages?select=id,video_url,created_at&video_url=not.is.null"
+                       "&order=created_at.asc")
+        for m in rows:
+            mid, vu = m.get("id", ""), m.get("video_url") or ""
+            if not mid or not vu or mid in done:
+                continue
+            if time.time() - parse_ts(m.get("created_at")) < VIDEO_SETTLE_S:
+                continue
+            try:
+                _compress_one(mid, vu, done)
+            except Exception as e:
+                print(f"[danran-bridge] 動画圧縮 err ({mid[:8]}):", e)
+                done[mid] = {"skip": "error"}; _video_done_save(done)   # 永久リトライしない
+    except Exception as e:
+        print("[danran-bridge] video_compress_tick err:", e)
+    finally:
+        VIDEO_LOCK.release()
+
 def reclaim_stuck_tasks():
     """mini が実装中に落ちる等で implementing のまま固着したタスクを failed に戻す。"""
     try:
@@ -868,6 +951,7 @@ def main():
     print(f"[danran-bridge] 既存はスキップ。新着を待機中…（Ctrl+C で停止）")
     _last_reclaim = 0.0
     _last_sweep   = 0.0   # 0 = 起動直後に1回 → 以後24時間ごと
+    _last_video   = 0.0   # 動画圧縮チェックは5分ごと
     while True:
         try:
             heartbeat()
@@ -877,6 +961,9 @@ def main():
             if time.time() - _last_sweep > 86400:  # 日次メンテ（バックアップ＋孤児掃除）は1日ごと（別スレッド）
                 _last_sweep = time.time()
                 threading.Thread(target=daily_jobs, daemon=True).start()
+            if time.time() - _last_video > 300:    # 動画圧縮チェックは5分ごと（別スレッド）
+                _last_video = time.time()
+                threading.Thread(target=video_compress_tick, daemon=True).start()
             for rn, msgs in _group_by_room(fetch_all_recent()).items():
                 if not msgs:
                     continue

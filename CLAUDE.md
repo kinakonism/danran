@@ -466,6 +466,12 @@ UNIQUE(user_id, room_name) で upsert。
 - `backup_daily()` — 全テーブル（users/rooms/room_members/messages/reactions/last_read/push_subscriptions/ai_tasks。sessions は揮発なので対象外）を JSON(gzip) で mini の `~/danran_backups/danran-YYYY-MM-DD.json.gz` に保存・**30世代**保持。同日分はスキップ・失敗時のみまさとに Web Push。
 - `r2_sweep()` — R2（danran-media）の孤児掃除。worker の **`/media-admin/list` / `/media-admin/delete`**（POST `{keys:[…]}`・x-danran-auth ゲート＝upload と同じ）経由で、`messages.video_url/image_url` が参照しない `/media/<key>` を24h猶予つきで削除。**`worker_api()` は User-Agent 必須**（既定の Python-urllib UA は Cloudflare の Browser Integrity Check に 1010/403 で弾かれる）。
 - `video_compress_tick()` — 6MB以上の動画を ffmpeg（`/opt/homebrew/bin/ffmpeg`・brew導入済み）で長辺1280px/H.264(CRF27)+AAC/faststart に圧縮→R2 再アップロード→`messages.video_url` を PATCH で差し替え（旧オブジェクトは次の r2_sweep が回収）。処理済み/エラーは `~/.danran_video_done.json` に記録し再試行しない。送信後2分は触らない。iPhone の HEVC が H.264 になり Android/PC 互換も向上。
+- `media_backup()` — 写真（Supabase Storage: chat-images/avatars）と動画（R2）の**ファイル本体**を `~/danran_backups/media/` へ増分ダウンロード（リモート削除でもローカルは残すアーカイブ方針）。Supabase Storage 使用量 800MB（無料枠1GBの8割）超で一度だけまさとに警告（`~/.danran_storage_warned` マーカー・回復で解除）。daily_jobs の**掃除の後**に実行（孤児を保存しないため）。
+- `fire_due_reminders()` — **@AI リマインダー**（20秒ごと・インライン）。会話AIが返信末尾のフラグ `REMIND: ISO日時|内容`（取消は `cancel`・なしは `none`）を出す→ `save_reminder` が `ai_reminders` に登録→期日到来で依頼者に Web Push（`push_to_user`）＋依頼した部屋にボット投稿。`build_prompt` に現在日時(JST)を埋め込み相対日時（明日19時等）を解決。`split_flags` は TASK/DESTRUCTIVE/REMIND の3フラグ対応（後方互換）。
+
+**`ai_reminders` テーブル**: id / user_id / user_name / room_name / remind_at(timestamptz) / body / status(`pending`/`sent`/`cancelled`) / created_at。INDEX(status, remind_at)。RLS 全許可。
+
+**AI ボットのアイコンは画像**（2026-06-10〜）: 絵文字🤖はメンション補完で小さく潰れるため、`avatars/ai-bot.png`（琥珀テーマのロボット・PIL生成）に統一。`AI_BOT_AVATAR`（app.py）/ `BOT_AVATAR`（bridge）/ `rooms.icon`（AIサポート）/ 既存 `messages.user_avatar` すべて同 URL。**orphan_sweep は `ai-bot.png` を明示保護**（AIボットは users 表に居ないため参照集合に入らない）。
 - 注意: **deploy watcher は bridge を再起動しない**。`tools/ai_bridge.py` 変更時は `ssh mini 'launchctl kickstart -k gui/$(id -u)/com.danran.bridge'`（ログは `/tmp/bridge.log`）。
 
 ### pg_cron

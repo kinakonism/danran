@@ -1123,6 +1123,11 @@ def _mention_regex():
         _MENTION_RE_CACHE["key"] = toks
     return _MENTION_RE_CACHE["re"]
 
+def _is_stamp_url(url: str | None) -> bool:
+    """カスタムスタンプ（stamps バケット）の画像か。スタンプは透過PNGがあるため
+    グレーのプレースホルダー箱を敷かず、写真グリッド・アルバムにも混ぜない。"""
+    return bool(url) and "/stamps/" in url
+
 def linkify_body(body: str, mine: bool = False) -> str:
     """本文を HTML エスケープしつつ URL を <a> 化して返す（改行は <br>）。
     URL タップで target=_blank → iOS PWA では既定ブラウザ(Safari)で開く。
@@ -1326,7 +1331,9 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
 
     _IMG_GROUP_WINDOW = 600  # 秒（10分以内の連投をまとめる）
     def _is_img_only(m: dict) -> bool:
-        return bool(m.get("image_url")) and not (m.get("content") or "").strip()
+        # スタンプは写真の連投グリッドに混ぜない（cover で切り抜かれて崩れるため）
+        return (bool(m.get("image_url")) and not (m.get("content") or "").strip()
+                and not _is_stamp_url(m.get("image_url")))
     def _same_sender(a: dict, b: dict) -> bool:
         if a.get("user_id") and b.get("user_id"):
             return a["user_id"] == b["user_id"]
@@ -1522,6 +1529,9 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             f'-webkit-tap-highlight-color:transparent">⬇</button>'
             f'</span>'
         ) if vid_url else ""
+        # スタンプ（透過PNGあり）はグレーのプレースホルダー箱を敷かない
+        _slot_box = ("" if _is_stamp_url(img_url)
+                     else "min-height:80px;background:rgba(255,255,255,0.06);")
         img_piece = (
             # ★ <img> を直接出さず JS 管理のスロットにする。
             #   2秒ポーリングで再描画されても、JS が「同じ画像ノードを移動させるだけ」で
@@ -1529,8 +1539,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             #   data-lp-image: タップで全画面ビューア / 薄グレー枠 = 読込前プレースホルダー
             f'<span class="lp-imgslot" data-img="{_html.escape(img_url)}" '
             f'data-lp-image="{_html.escape(img_url)}" '
-            f'style="display:block;max-width:200px;min-height:80px;border-radius:10px;'
-            f'cursor:pointer;background:rgba(255,255,255,0.06);'
+            f'style="display:block;max-width:200px;{_slot_box}border-radius:10px;'
+            f'cursor:pointer;'
             f'{"margin-bottom:6px" if body else ""}"></span>'
         ) if img_url else ""
         content = _reply_quote_html(msg) + img_piece + vid_piece + body_esc
@@ -1695,7 +1705,9 @@ def poll_messages() -> None:
     if prev >= 0 and len(_msgs) > prev:
         for m in _msgs[prev:]:
             if m["user_name"] != uname:
-                preview = m["content"][:30] if m["content"] else ("🎥 動画" if m.get("video_url") else "📷 写真")
+                preview = m["content"][:30] if m["content"] else (
+                    "🎥 動画" if m.get("video_url")
+                    else ("😊 スタンプ" if _is_stamp_url(m.get("image_url")) else "📷 写真"))
                 st.toast(f"💬 {m['user_name']}: {preview}", icon="🔔")
     st.session_state[count_key] = len(_msgs)
 
@@ -2467,7 +2479,9 @@ def show_room_edit(room: dict) -> None:
 def show_album(room: dict) -> None:
     room_name = room.get("name", "")
     st.markdown("<br>", unsafe_allow_html=True)
-    _msgs = [m for m in (fetch_messages(room_name, limit=300) or []) if m.get("image_url")]
+    # スタンプはアルバムに混ぜない（思い出の写真だけ）
+    _msgs = [m for m in (fetch_messages(room_name, limit=300) or [])
+             if m.get("image_url") and not _is_stamp_url(m.get("image_url"))]
     if not _msgs:
         st.caption("まだ写真はありません。チャットで送った写真がここにまとまります。")
         return

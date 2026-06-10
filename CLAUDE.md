@@ -468,9 +468,13 @@ UNIQUE(user_id, room_name) で upsert。
 - `r2_sweep()` — R2（danran-media）の孤児掃除。worker の **`/media-admin/list` / `/media-admin/delete`**（POST `{keys:[…]}`・x-danran-auth ゲート＝upload と同じ）経由で、`messages.video_url/image_url` が参照しない `/media/<key>` を24h猶予つきで削除。**`worker_api()` は User-Agent 必須**（既定の Python-urllib UA は Cloudflare の Browser Integrity Check に 1010/403 で弾かれる）。
 - `video_compress_tick()` — 6MB以上の動画を ffmpeg（`/opt/homebrew/bin/ffmpeg`・brew導入済み）で長辺1280px/H.264(CRF27)+AAC/faststart に圧縮→R2 再アップロード→`messages.video_url` を PATCH で差し替え（旧オブジェクトは次の r2_sweep が回収）。処理済み/エラーは `~/.danran_video_done.json` に記録し再試行しない。送信後2分は触らない。iPhone の HEVC が H.264 になり Android/PC 互換も向上。
 - `media_backup()` — 写真（Supabase Storage: chat-images/avatars）と動画（R2）の**ファイル本体**を `~/danran_backups/media/` へ増分ダウンロード（リモート削除でもローカルは残すアーカイブ方針）。Supabase Storage 使用量 800MB（無料枠1GBの8割）超で一度だけまさとに警告（`~/.danran_storage_warned` マーカー・回復で解除）。daily_jobs の**掃除の後**に実行（孤児を保存しないため）。
-- `fire_due_reminders()` — **@AI リマインダー**（20秒ごと・インライン）。会話AIが返信末尾のフラグ `REMIND: ISO日時|内容`（取消は `cancel`・なしは `none`）を出す→ `save_reminder` が `ai_reminders` に登録→期日到来で依頼者に Web Push（`push_to_user`）＋依頼した部屋にボット投稿。`build_prompt` に現在日時(JST)を埋め込み相対日時（明日19時等）を解決。`split_flags` は TASK/DESTRUCTIVE/REMIND の3フラグ対応（後方互換）。
+- `fire_due_reminders()` — **@AI リマインダー**（20秒ごと・インライン）。会話AIが返信末尾のフラグ `REMIND: ISO日時|内容`（繰り返しは `|daily/weekly/monthly` を追加・取消は `cancel`＝全件・なしは `none`）を出す→ `save_reminder` が `ai_reminders` に登録→期日到来で依頼者に Web Push（`push_to_user`）＋依頼した部屋にボット投稿。**繰り返しは発火後 `_next_occurrence` で次回へ再スケジュール**（pending のまま・bridge 停止中の期日超過も未来までスキップ）。`build_prompt` に現在日時(JST)と**依頼者の予約中一覧**（`list_pending_reminders`）を渡すので「リマインダー何かある？」にも答えられる。`split_flags` は TASK/DESTRUCTIVE/REMIND の3フラグ対応（後方互換）。
 
-**`ai_reminders` テーブル**: id / user_id / user_name / room_name / remind_at(timestamptz) / body / status(`pending`/`sent`/`cancelled`) / created_at。INDEX(status, remind_at)。RLS 全許可。
+**`ai_reminders` テーブル**: id / user_id / user_name / room_name / remind_at(timestamptz) / body / status(`pending`/`sent`/`cancelled`) / repeat_every(`''`/`daily`/`weekly`/`monthly`) / created_at。INDEX(status, remind_at)。RLS 全許可。
+
+**掃除の安全弁（`_mass_delete_guard`・2026-06-10〜）**: orphan/r2 sweep が「10件以上かつバケットの2割以上」を一括削除しようとしたら、初回は削除せずまさとに通知のみ。翌日の実行でも同じ削除対象なら実行（正規の大量削除は1日遅れるだけ・参照漏れバグなら気づく猶予24h）。状態は `~/.danran_sweep_pending.json`。また daily_jobs は **media_backup を掃除より先に**実行する（誤削除してもローカルのアーカイブに本体が残る）。
+
+**復元**: `python3 tools/restore_backup.py`（既定 dry-run / `--apply` で実行 / `--table X` で単体）。upsert（merge-duplicates）なのでバックアップ後の新規データは消えない。メディア本体は `~/danran_backups/media/` から Storage に手で戻す。
 
 **AI ボットのアイコンは画像**（2026-06-10〜）: 絵文字🤖はメンション補完で小さく潰れるため、`avatars/ai-bot.png`（琥珀テーマのロボット・PIL生成）に統一。`AI_BOT_AVATAR`（app.py）/ `BOT_AVATAR`（bridge）/ `rooms.icon`（AIサポート）/ 既存 `messages.user_avatar` すべて同 URL。**orphan_sweep は `ai-bot.png` を明示保護**（AIボットは users 表に居ないため参照集合に入らない）。
 - 注意: **deploy watcher は bridge を再起動しない**。`tools/ai_bridge.py` 変更時は `ssh mini 'launchctl kickstart -k gui/$(id -u)/com.danran.bridge'`（ログは `/tmp/bridge.log`）。

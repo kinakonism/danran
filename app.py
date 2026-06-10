@@ -1121,21 +1121,30 @@ def _mention_regex():
         _MENTION_RE_CACHE["key"] = toks
     return _MENTION_RE_CACHE["re"]
 
-def linkify_body(body: str) -> str:
+def linkify_body(body: str, mine: bool = False) -> str:
     """本文を HTML エスケープしつつ URL を <a> 化して返す（改行は <br>）。
     URL タップで target=_blank → iOS PWA では既定ブラウザ(Safari)で開く。
-    エスケープは URL/非URL を分けて行い XSS を防ぐ。"""
+    エスケープは URL/非URL を分けて行い XSS を防ぐ。
+    mine=True（自分のテラコッタ吹き出し）はメンションを白文字＋半透明チップにして
+    暖色背景でも読めるようにする（相手の暗い吹き出しは青のまま）。"""
     def esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     _mre = _mention_regex()
+    # 吹き出しごとにメンションの見た目を出し分け（青×テラコッタの視認性問題を解消）
+    _mention_style = (
+        'color:#fff;font-weight:700;background:rgba(0,0,0,.20);'
+        'border-radius:5px;padding:0 4px'
+        if mine else
+        'color:#4ea1ff;font-weight:700'
+    )
     def esc_text(s: str) -> str:
-        # 非URLテキスト用。エスケープ後に @メンション（AI＋家族名）を青字ハイライト
+        # 非URLテキスト用。エスケープ後に @メンション（AI＋家族名）をハイライト
         # （href には適用しない＝XSS安全）。
         e = esc(s)
         if _mre is None:
             return e
         return _mre.sub(
-            lambda mm: f'<span style="color:#4ea1ff;font-weight:700">{mm.group(0)}</span>', e
+            lambda mm: f'<span style="{_mention_style}">{mm.group(0)}</span>', e
         )
     out: list[str] = []
     last = 0
@@ -1493,7 +1502,7 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         msg_reactions = all_reactions.get(msg_id, {})
 
         # ── 本文・画像 HTML ──（URL はリンク化。エスケープは linkify_body 内で実施）
-        body_esc  = linkify_body(body)
+        body_esc  = linkify_body(body, is_mine)
         is_img_only = bool(img_url or vid_url) and not body.strip()  # 画像/動画のみ（テキスト無し）
         # ── 動画 HTML ──（R2 配信・Range でシーク可。Realtime化で再描画は変化時のみ＝直 <video> でOK）
         vid_piece = (

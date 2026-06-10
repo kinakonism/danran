@@ -662,7 +662,9 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
 # ─────────────────────────────────────
 AI_BOT_UID    = "00000000-0000-0000-0000-0000000000a1"
 AI_BOT_NAME   = "🤖 アシスタント"
-AI_BOT_AVATAR = "🤖"
+# 専用アイコン画像（絵文字🤖はメンション補完等で小さく潰れて見づらいため画像化。
+# bridge の BOT_AVATAR・rooms.icon・既存 messages.user_avatar も同じ URL に統一済み）
+AI_BOT_AVATAR = "https://fyadpbzlvyzihynpcckw.supabase.co/storage/v1/object/public/avatars/ai-bot.png"
 AI_SYSTEM_PROMPT = (
     "あなたは家族専用チャットアプリ「danran」のサポート用 AI アシスタントです。"
     "ここは家族みんなが見る『🤖 AIサポート』ルームで、使い方の質問やバグ報告に日本語でやさしく簡潔に答えます。\n\n"
@@ -3167,7 +3169,7 @@ _vapid_pub = _vapid_cfg().get("vapid_public_key", "")
 # 先頭に AI アシスタント、その後に「このルームに参加している」自分以外の家族のみ。
 # tag = 実際に挿入される文字（@{tag}）。AI は bridge が「@AI/＠AI」で拾うため tag を "AI" 固定。
 # ★ そのルームに参加していない人は候補に出さない（room_members で絞る）。
-_mention_list = [{"name": "AI アシスタント", "avatar": "🤖", "tag": "AI"}]
+_mention_list = [{"name": "AI アシスタント", "avatar": AI_BOT_AVATAR, "tag": "AI"}]
 _mention_users = fetch_room_members(_active_room_id) if _active_room_id else fetch_all_users()
 for _mu in _mention_users:
     if _mu.get("id") == _cu.get("id"):

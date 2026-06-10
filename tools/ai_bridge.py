@@ -48,7 +48,7 @@ JST = timezone(timedelta(hours=9), "JST")
 ROOM       = "🤖 AIサポート"
 BOT_UID    = "00000000-0000-0000-0000-0000000000a1"
 BOT_NAME   = "🤖 アシスタント"
-BOT_AVATAR = "🤖"
+BOT_AVATAR = "https://fyadpbzlvyzihynpcckw.supabase.co/storage/v1/object/public/avatars/ai-bot.png"
 REPO_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # claude を動かす作業ディレクトリ。REPO_DIR にすると danran のコード/CLAUDE.md を読んで
 # 正確に答えられる（その分ファイルにアクセスできる）。安全重視なら中立なフォルダに変える。
@@ -664,7 +664,8 @@ def orphan_sweep():
         d1 = _sweep_bucket("chat-images", refs_img)
 
         # avatars: users.avatar / rooms.icon が指す name 集合
-        refs_av = set()
+        # ai-bot.png は users 表に居ない AI ボットの固定アイコン → 明示的に保護
+        refs_av = {"ai-bot.png"}
         for tbl, col in (("users", "avatar"), ("rooms", "icon")):
             try:
                 rr = api_all("%s?select=%s&order=created_at.asc" % (tbl, col))

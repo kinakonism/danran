@@ -1533,7 +1533,8 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         # data-lp-image も付けない（=タップで全画面ビューアを開かない。LINE のスタンプ同様）
         _stamp = _is_stamp_url(img_url)
         _slot_box = "" if _stamp else "min-height:80px;background:rgba(255,255,255,0.06);"
-        _viewer   = "" if _stamp else f'data-lp-image="{_html.escape(img_url)}" '
+        # ★ img_url が None のメッセージでも評価されるため、escape は必ず img_url ガード付きで
+        _viewer   = f'data-lp-image="{_html.escape(img_url)}" ' if (img_url and not _stamp) else ""
         img_piece = (
             # ★ <img> を直接出さず JS 管理のスロットにする。
             #   2秒ポーリングで再描画されても、JS が「同じ画像ノードを移動させるだけ」で

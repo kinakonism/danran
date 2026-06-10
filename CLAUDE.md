@@ -456,8 +456,19 @@ UNIQUE(user_id, room_name) で upsert。
 
 | バケット      | 用途                                      |
 |-------------|------------------------------------------|
-| avatars     | ユーザーアイコン写真（`{user_id}.jpg`）、ルームアイコン写真（`room_{room_id}.jpg`） |
+| avatars     | ユーザーアイコン写真（`{user_id}.jpg`）、ルームアイコン写真（`room_{room_id}.jpg`）、プロフィール背景（`cover_{user_id}.jpg`）、AIボットアイコン（`ai-bot.png`） |
 | chat-images | チャット添付画像（JS が直接アップロード）   |
+| stamps      | カスタムスタンプ（`stamp_*.png/jpg`）。**orphan_sweep の対象外**＝トレイから削除しても画像本体は残す（送信済みメッセージを壊さない設計） |
+
+### カスタムスタンプ（2026-06-10〜）
+
+Slack の絵文字登録の danran 版。入力欄左の **😊 ボタン**（📷 の右・`STAMP_BTN_ID`）→ ボトムシートのトレイ。
+- **送信** = タップ。`messages` に画像メッセージとして insert（`image_url`=スタンプURL・既存の描画/Realtime/グリッドをそのまま利用。専用レンダリングなし）
+- **登録** = ＋タイル → 画像選択 → JS が 320px に縮小（PNG は透過維持）→ `stamps` バケットへ直アップロード → `stamps` 行 insert。家族全員で共有
+- **削除** = タイル長押し（550ms）→ confirm → `stamps` 行のみ DELETE（バケットのオブジェクトは残す）
+- `stamps` テーブル: id / image_url / created_by / created_by_name / created_at。RLS 全許可
+- スワイプ戻りガード・スプラッシュ掃除リストに `STAMP_TRAY_ID` を追加済み（トレイ内タッチがドラッグに奪われない）
+- media_backup の対象バケットに stamps を含む
 
 **孤児ファイルの自動掃除**: メッセージ/ルーム削除は主に JS 経由で Storage オブジェクトは残る（孤児）。bridge（mini）が **日次で `orphan_sweep()`** を実行し、`messages.image_url`（chat-images）/ `users.avatar`・`rooms.icon`（avatars）に参照されず **24時間より古い**オブジェクトを削除する。アップロード直後（メッセージ未挿入の窓）を消さないための猶予が24h。RLS は `danran_orphan_select`/`danran_orphan_delete`（chat-images/avatars に list/delete 許可）。anon key 運用なので service_role は不要。
 参照集合の取得は **`api_all()`（offset ページング）必須**。素の `api()` は PostgREST の最大1000行で切れ、欠けた参照を孤児と誤判定して使用中ファイルを消す。

@@ -520,8 +520,12 @@ async function proxyHttp(request, url) {
             '<script>(function(){var h=0;' +
             'function rl(){var t=0;(function p(){fetch("/_stcore/health",{cache:"no-store"}).then(function(r){' +
             'if(r.ok){location.reload();}else{if(++t<20)setTimeout(p,1500);}}).catch(function(){if(++t<20)setTimeout(p,1500);});})();}' +
+            // 長時間離脱(>=20s)は復帰の瞬間に即リロード（health 待ちの間にユーザーが
+            // ルームをタップ→入室→直後にリロードで入室破棄→ルーム選択へ逆戻り、を防ぐ）。
+            // 短時間離脱は health を確認し、サーバが死んでいる時だけ復旧リロード。
             'function res(){if(document.visibilityState!=="visible")return;var a=h?(Date.now()-h):0;h=0;' +
-            'fetch("/_stcore/health",{cache:"no-store"}).then(function(r){if(!r.ok){rl();}else if(a>=20000){location.reload();}}).catch(function(){rl();});}' +
+            'if(a>=20000){location.reload();return;}' +
+            'fetch("/_stcore/health",{cache:"no-store"}).then(function(r){if(!r.ok){rl();}}).catch(function(){rl();});}' +
             'document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden"){h=Date.now();}else{res();}});' +
             'window.addEventListener("pageshow",function(e){if(e.persisted)res();});' +
             'window.addEventListener("online",res);})();</script>',

@@ -1133,7 +1133,7 @@ def linkify_body(body: str, mine: bool = False) -> str:
     # 吹き出しごとにメンションの見た目を出し分け（青×テラコッタの視認性問題を解消）。
     # 自分側は箱を使わず、テラコッタに馴染む深い暖色ブラウンの太字ですっきり見せる。
     _mention_style = (
-        'color:#5a2310;font-weight:800'
+        'color:#7e3f1e;font-weight:800'
         if mine else
         'color:#4ea1ff;font-weight:700'
     )

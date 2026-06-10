@@ -995,7 +995,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v156",   # 動画にも保存(⬇)ボタン。saveImageを動画拡張子対応に
+    "danran_lp_v157",   # カスタムスタンプ（😊トレイ・登録・長押し削除）
     path=_LP_COMPONENT_DIR,
 )
 

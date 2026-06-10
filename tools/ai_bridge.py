@@ -918,8 +918,8 @@ def media_backup():
     あわせて Supabase Storage 使用量を集計し、800MB 超で一度だけオーナーに警告。"""
     new_n, sb_bytes = 0, 0
     try:
-        # Supabase Storage（chat-images / avatars）
-        for bucket in ("chat-images", "avatars"):
+        # Supabase Storage（chat-images / avatars / stamps）
+        for bucket in ("chat-images", "avatars", "stamps"):
             dirp = os.path.join(MEDIA_BACKUP_DIR, bucket)
             offset = 0
             while True:

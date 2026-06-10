@@ -91,6 +91,9 @@
   var CAM_BTN_ID      = '_danran_cam_btn';
   var CAM_FILE_ID     = '_danran_cam_file';
   var CAM_CSS_ID      = '_danran_cam_css';
+  var STAMP_BTN_ID    = '_danran_stamp_btn';
+  var STAMP_FILE_ID   = '_danran_stamp_file';
+  var STAMP_TRAY_ID   = '_danran_stamp_tray';
   var LP_CSS_ID       = '_danran_lp_css';
   var POPUP_ID        = '_danran_lp_popup';
   var HDR_ID          = '_danran_hdr';
@@ -390,7 +393,8 @@
       //   iOS PWA を再開すると DOM が残ったまま再接続→スプラッシュが出るため、長押しポップアップ等が
       //   スプラッシュ上に見えてしまうバグの対策。スプラッシュ中は操作不要なので消して問題ない。
       [POPUP_ID, POPUP_BACK_ID, RMENU_ID, '_danran_emoji_picker', '_danran_link_menu',
-       USER_PROFILE_ID, IMG_VIEWER_ID, '_danran_search_bar', '_danran_mention_pop'].forEach(function (id) {
+       USER_PROFILE_ID, IMG_VIEWER_ID, '_danran_search_bar', '_danran_mention_pop',
+       STAMP_TRAY_ID].forEach(function (id) {
         var el = pDoc.getElementById(id); if (el) el.remove();
       });
       var now = Date.now();
@@ -2402,7 +2406,8 @@
       //   ここで横ドラッグ判定が走ると preventDefault でボタンの click が消え、
       //   「絵文字が押せない・リングが囲ったまま残る」原因になる。
       if (e.target && e.target.closest &&
-          e.target.closest('#' + POPUP_ID + ', #' + POPUP_BACK_ID + ', #_danran_emoji_picker, #' + RMENU_ID)) return;
+          e.target.closest('#' + POPUP_ID + ', #' + POPUP_BACK_ID + ', #_danran_emoji_picker, #'
+                           + RMENU_ID + ', #' + STAMP_TRAY_ID)) return;
       // 入力欄(stChatInput/stBottom)上ではスワイプ追跡しない＝テキスト選択/ペーストの長押しを邪魔しない
       if (e.target && e.target.closest &&
           e.target.closest('[data-testid="stChatInput"], [data-testid="stBottom"], textarea, input')) return;
@@ -2784,7 +2789,8 @@
   function removeCameraUI() {
     try {
       var pDoc = window.parent.document;
-      [CAM_BTN_ID, CAM_FILE_ID, CAM_CSS_ID].forEach(function (id) {
+      [CAM_BTN_ID, CAM_FILE_ID, CAM_CSS_ID,
+       STAMP_BTN_ID, STAMP_FILE_ID, STAMP_TRAY_ID].forEach(function (id) {
         var el = pDoc.getElementById(id); if (el) el.remove();
       });
     } catch (e) {}
@@ -2801,9 +2807,9 @@
       var css = pDoc.createElement('style');
       css.id  = CAM_CSS_ID;
       css.textContent =
-        '[data-testid="stChatInput"]{padding-left:52px!important;}' +
-        '#' + CAM_BTN_ID + '{' +
-        'position:fixed;bottom:14px;left:8px;' +   // 初期値 14px: alignCamBtn() が上書き
+        '[data-testid="stChatInput"]{padding-left:96px!important;}' +   // 📷＋😊 の2ボタン分
+        '#' + CAM_BTN_ID + ',#' + STAMP_BTN_ID + '{' +
+        'position:fixed;bottom:14px;' +   // 初期値 14px: alignCamBtn() が上書き
         'width:40px;height:40px;' +
         'background:rgba(44,44,46,0.92);' +
         'border:1px solid rgba(255,255,255,0.18);' +
@@ -2812,7 +2818,9 @@
         'display:flex;align-items:center;justify-content:center;' +
         '-webkit-tap-highlight-color:transparent;' +
         'box-shadow:0 2px 10px rgba(0,0,0,0.45);transition:transform 0.1s;}' +
-        '#' + CAM_BTN_ID + ':active{transform:scale(0.92);}';
+        '#' + CAM_BTN_ID + '{left:8px;}' +
+        '#' + STAMP_BTN_ID + '{left:52px;}' +
+        '#' + CAM_BTN_ID + ':active,#' + STAMP_BTN_ID + ':active{transform:scale(0.92);}';
       (pDoc.head || pDoc.body).appendChild(css);
 
       // 非表示 file input
@@ -2840,9 +2848,171 @@
       btn.addEventListener('click', function () { fileInput.click(); });
       pDoc.body.appendChild(btn);
 
+      // 😊 スタンプボタン＋登録用の非表示 file input
+      var stampInput = pDoc.createElement('input');
+      stampInput.type   = 'file';
+      stampInput.accept = 'image/*';
+      stampInput.id     = STAMP_FILE_ID;
+      stampInput.style.display = 'none';
+      stampInput.addEventListener('change', function () {
+        var f = (stampInput.files || [])[0];
+        if (f) uploadStamp(f, room, avatar);
+        stampInput.value = '';
+      });
+      pDoc.body.appendChild(stampInput);
+      var sbtn = pDoc.createElement('button');
+      sbtn.id          = STAMP_BTN_ID;
+      sbtn.textContent = '😊';
+      sbtn.title       = 'スタンプを送る';
+      sbtn.addEventListener('click', function () { openStampTray(room, avatar); });
+      pDoc.body.appendChild(sbtn);
+
       // 注入直後に垂直位置を補正（DOM が先に描画されている場合）
       setTimeout(alignCamBtn, 120);
     } catch (err) { console.error('[danran-cam] injectCameraUI:', err); }
+  }
+
+  /* ════════════════════════════════════════
+   *  😊 カスタムスタンプ（Slack の絵文字登録の danran 版・家族で共有）
+   *  - トレイ: 親ドキュメントに fixed のボトムシート。タップで即送信。
+   *  - 送信: 画像メッセージとして insert（既存の描画・Realtime がそのまま使える）。
+   *  - 登録: ＋タイル → 画像選択 → 320px に縮小 → stamps バケットへ → stamps 行 insert。
+   *  - 削除: タイル長押し → stamps 行のみ削除（画像本体は残す＝送信済みを壊さない）。
+   * ════════════════════════════════════════ */
+  function closeStampTray() {
+    try {
+      var t = window.parent.document.getElementById(STAMP_TRAY_ID);
+      if (t) t.remove();
+    } catch (e) {}
+  }
+
+  function _stampTileCss() {
+    return 'aspect-ratio:1/1;border-radius:12px;cursor:pointer;display:flex;align-items:center;' +
+           'justify-content:center;-webkit-tap-highlight-color:transparent;padding:0;';
+  }
+
+  function sendStamp(url, room, avatar) {
+    closeStampTray();
+    sbPost('messages', {
+      room_name: room, user_id: ME_UID, user_name: ME, user_avatar: avatar,
+      content: '', image_url: url,
+    }).then(function (r) {
+      if (!r.ok) showToast('⚠️ スタンプを送れませんでした');
+    }).catch(function () { showToast('⚠️ スタンプを送れませんでした'); });
+  }
+
+  async function uploadStamp(file, room, avatar) {
+    try {
+      showToast('スタンプを登録中…');
+      // 320px に縮小（PNG は透過を残す）。EXIF 回転補正つき。
+      var bmp;
+      try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+      catch (e) { bmp = await createImageBitmap(file); }
+      var MAX = 320;
+      var scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+      var nw = Math.max(1, Math.round(bmp.width * scale)),
+          nh = Math.max(1, Math.round(bmp.height * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = nw; canvas.height = nh;
+      canvas.getContext('2d').drawImage(bmp, 0, 0, nw, nh);
+      try { bmp.close(); } catch (e) {}
+      var isPng = (file.type === 'image/png');
+      var blob = await new Promise(function (res) {
+        canvas.toBlob(function (b) { res(b); }, isPng ? 'image/png' : 'image/jpeg', 0.88);
+      });
+      if (!blob) throw new Error('encode failed');
+      var ext = isPng ? 'png' : 'jpg';
+      var objName = 'stamp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+      var up = await fetch(SB_URL + '/storage/v1/object/stamps/' + objName, {
+        method: 'POST',
+        headers: { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY,
+                   'Content-Type': blob.type, 'cache-control': 'max-age=31536000' },
+        body: blob,
+      });
+      if (!up.ok) throw new Error('upload ' + up.status);
+      var imageUrl = SB_URL + '/storage/v1/object/public/stamps/' + objName;
+      var ins = await sbPost('stamps', {
+        image_url: imageUrl, created_by: ME_UID, created_by_name: ME,
+      });
+      if (!ins.ok) throw new Error('insert ' + ins.status);
+      showToast('✅ スタンプを追加したよ');
+      // トレイが開いていれば作り直して即反映
+      if (window.parent.document.getElementById(STAMP_TRAY_ID)) {
+        closeStampTray(); openStampTray(room, avatar);
+      }
+    } catch (e) {
+      showToast('⚠️ スタンプを登録できませんでした');
+    }
+  }
+
+  function openStampTray(room, avatar) {
+    var pDoc = window.parent.document;
+    if (pDoc.getElementById(STAMP_TRAY_ID)) { closeStampTray(); return; }   // トグル
+    var ov = pDoc.createElement('div');
+    ov.id = STAMP_TRAY_ID;
+    ov.style.cssText = 'position:fixed;inset:0;z-index:10010;background:rgba(0,0,0,0.35);';
+    var sheet = pDoc.createElement('div');
+    sheet.style.cssText =
+      'position:absolute;left:0;right:0;bottom:0;background:#241f1c;' +
+      'border-radius:18px 18px 0 0;padding:14px 12px calc(16px + env(safe-area-inset-bottom));' +
+      'max-height:46vh;overflow-y:auto;box-shadow:0 -6px 24px rgba(0,0,0,0.5);';
+    sheet.innerHTML =
+      '<div style="font-size:0.8rem;font-weight:700;color:rgba(240,232,224,0.55);margin:0 4px 10px">' +
+      'スタンプ <span style="font-weight:400">（＋で登録・長押しで削除）</span></div>' +
+      '<div id="_danran_stamp_grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px"></div>';
+    ov.appendChild(sheet);
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeStampTray(); });
+    pDoc.body.appendChild(ov);
+    var grid = sheet.querySelector('#_danran_stamp_grid');
+
+    // ＋登録タイル
+    var add = pDoc.createElement('button');
+    add.style.cssText = _stampTileCss() +
+      'border:2px dashed rgba(240,168,104,0.5);background:transparent;color:#f0a868;font-size:1.7rem;';
+    add.textContent = '＋';
+    add.addEventListener('click', function () {
+      var fi = pDoc.getElementById(STAMP_FILE_ID);
+      if (fi) fi.click();
+    });
+    grid.appendChild(add);
+
+    sbGet('stamps?select=id,image_url&order=created_at.desc').then(function (rows) {
+      (rows || []).forEach(function (s) {
+        var b = pDoc.createElement('button');
+        b.style.cssText = _stampTileCss() + 'border:none;background:rgba(255,255,255,0.05);padding:5px;';
+        var im = pDoc.createElement('img');
+        im.src = s.image_url;
+        im.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;pointer-events:none;';
+        b.appendChild(im);
+        // タップ＝送信 / 長押し＝トレイから削除
+        var lpTimer = null, moved = false, consumed = false;
+        b.addEventListener('touchstart', function () {
+          moved = false; consumed = false;
+          lpTimer = setTimeout(function () {
+            lpTimer = null;
+            consumed = true;   // 長押し成立 → 後続の click で誤送信しない
+            if (window.parent.confirm('このスタンプをトレイから削除する？\n（送信済みのメッセージはそのまま残るよ）')) {
+              sbDelete('stamps?id=eq.' + s.id).then(function () { b.remove(); });
+            }
+          }, 550);
+        }, { passive: true });
+        b.addEventListener('touchmove', function () {
+          moved = true;
+          if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+        }, { passive: true });
+        b.addEventListener('touchend', function (e) {
+          if (lpTimer) {
+            clearTimeout(lpTimer); lpTimer = null;
+            if (!moved) { e.preventDefault(); consumed = true; sendStamp(s.image_url, room, avatar); }
+          }
+        });
+        b.addEventListener('click', function () {   // PC 用（touch 処理済みならスキップ）
+          if (consumed) { consumed = false; return; }
+          sendStamp(s.image_url, room, avatar);
+        });
+        grid.appendChild(b);
+      });
+    }).catch(function () {});
   }
 
   /* ════════════════════════════════════════
@@ -2873,6 +3043,8 @@
 
       // 最低 6px（画面端から落ちないように）
       btn.style.bottom = Math.max(bottomPx, 6) + 'px';
+      var sb = pDoc.getElementById(STAMP_BTN_ID);
+      if (sb) sb.style.bottom = btn.style.bottom;   // 😊 も同じ高さに追従
     } catch (e) {}
     alignReplyBar();   // 引用バーも入力欄に追従
   }

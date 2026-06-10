@@ -461,6 +461,7 @@ UNIQUE(user_id, room_name) で upsert。
 
 **孤児ファイルの自動掃除**: メッセージ/ルーム削除は主に JS 経由で Storage オブジェクトは残る（孤児）。bridge（mini）が **日次で `orphan_sweep()`** を実行し、`messages.image_url`（chat-images）/ `users.avatar`・`rooms.icon`（avatars）に参照されず **24時間より古い**オブジェクトを削除する。アップロード直後（メッセージ未挿入の窓）を消さないための猶予が24h。RLS は `danran_orphan_select`/`danran_orphan_delete`（chat-images/avatars に list/delete 許可）。anon key 運用なので service_role は不要。
 参照集合の取得は **`api_all()`（offset ページング）必須**。素の `api()` は PostgREST の最大1000行で切れ、欠けた参照を孤児と誤判定して使用中ファイルを消す。
+**★ 参照カラムの漏れに注意（実害事故あり）**: avatars の参照は `users.avatar`・`rooms.icon`・**`users.cover_url`**（プロフィール背景）＋固定保護 `ai-bot.png`、chat-images は `messages.image_url`・**`messages.reply_to_image`**（引用サムネ）。cover_url が漏れていて、まさとの背景画像を日次掃除が誤削除した（2026-06-10 発覚・復元不能）。**Storage を参照するカラムを増やしたら必ず orphan_sweep の refs に足すこと。**
 
 **bridge の日次/定期メンテ（2026-06-10〜）**: main ループから `daily_jobs()`（24hごと・起動直後にも1回）と `video_compress_tick()`（5分ごと）を別スレッドで起動。
 - `backup_daily()` — 全テーブル（users/rooms/room_members/messages/reactions/last_read/push_subscriptions/ai_tasks。sessions は揮発なので対象外）を JSON(gzip) で mini の `~/danran_backups/danran-YYYY-MM-DD.json.gz` に保存・**30世代**保持。同日分はスキップ・失敗時のみまさとに Web Push。

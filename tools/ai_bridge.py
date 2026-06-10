@@ -656,17 +656,22 @@ def orphan_sweep():
         # ★ api_all 必須: api() は最大1000行で切れ、参照集合が欠けると「使用中の画像」を
         #   孤児と誤判定して消してしまう。
         refs_img = set()
-        rows = api_all("messages?select=image_url&order=created_at.asc")
+        # reply_to_image（引用サムネのスナップショット）も参照: 元メッセージ削除後も
+        # 引用ブロックがその URL を表示し続けるため、消すとサムネが壊れる。
+        rows = api_all("messages?select=image_url,reply_to_image&order=created_at.asc")
         for m in rows:
-            n = _obj_name_from_url(m.get("image_url"), "chat-images")
-            if n:
-                refs_img.add(n)
+            for u in (m.get("image_url"), m.get("reply_to_image")):
+                n = _obj_name_from_url(u, "chat-images")
+                if n:
+                    refs_img.add(n)
         d1 = _sweep_bucket("chat-images", refs_img)
 
-        # avatars: users.avatar / rooms.icon が指す name 集合
+        # avatars: users.avatar / rooms.icon / users.cover_url が指す name 集合
+        # ★ cover_url（プロフィール背景）の漏れで、まさとの背景画像を誤削除した事故あり
+        #   （2026-06-10 発覚）。avatars バケットを参照するカラムを増やしたら必ずここに足す。
         # ai-bot.png は users 表に居ない AI ボットの固定アイコン → 明示的に保護
         refs_av = {"ai-bot.png"}
-        for tbl, col in (("users", "avatar"), ("rooms", "icon")):
+        for tbl, col in (("users", "avatar"), ("rooms", "icon"), ("users", "cover_url")):
             try:
                 rr = api_all("%s?select=%s&order=created_at.asc" % (tbl, col))
                 for r in rr:

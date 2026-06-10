@@ -303,10 +303,16 @@ def split_flags(text):
 #   会話AIが REMIND フラグ（'ISO日時|内容'）を出したら ai_reminders に登録し、
 #   main ループの fire_due_reminders() が期日到来で依頼者に Web Push＋部屋に投稿する。
 def save_reminder(msg, remind):
-    """REMIND フラグを ai_reminders に登録。過去・1年超・不正な日時は無視（False）。"""
+    """REMIND フラグ（'日時|内容' または '日時|内容|daily/weekly/monthly'）を登録。
+    過去・1年超・不正な日時は無視（False）。"""
     try:
-        when_s, _, body = remind.partition("|")
-        when = datetime.fromisoformat(when_s.strip())
+        parts = remind.split("|")
+        when_s = parts[0].strip()
+        body   = (parts[1].strip() if len(parts) > 1 else "") or "リマインダー"
+        repeat = (parts[2].strip().lower() if len(parts) > 2 else "")
+        if repeat not in ("", "daily", "weekly", "monthly"):
+            repeat = ""
+        when = datetime.fromisoformat(when_s)
         if when.tzinfo is None:
             when = when.replace(tzinfo=JST)
         now = datetime.now(JST)
@@ -318,13 +324,51 @@ def save_reminder(msg, remind):
             "user_name": msg.get("user_name", ""),
             "room_name": msg.get("room_name", ROOM),
             "remind_at": when.isoformat(),
-            "body":      (body.strip() or "リマインダー")[:200],
+            "body":      body[:200],
+            "repeat_every": repeat,
         })
-        print(f"[danran-bridge] ⏰ リマインダー登録: {msg.get('user_name')} → {when_s.strip()}")
+        print(f"[danran-bridge] ⏰ リマインダー登録: {msg.get('user_name')} → {when_s}"
+              + (f"（{repeat}）" if repeat else ""))
         return True
     except Exception as e:
         print("[danran-bridge] save_reminder err:", e)
         return False
+
+def _next_occurrence(when, repeat):
+    """繰り返しリマインダーの次回日時。bridge 停止中に期日を過ぎていても必ず未来を返す。"""
+    now = datetime.now(JST)
+    while when <= now:
+        if repeat == "daily":
+            when = when + timedelta(days=1)
+        elif repeat == "weekly":
+            when = when + timedelta(days=7)
+        else:   # monthly: 月を+1（月末は丸める。例: 1/31 → 2/28）
+            y, m = when.year + (when.month // 12), when.month % 12 + 1
+            import calendar
+            d = min(when.day, calendar.monthrange(y, m)[1])
+            when = when.replace(year=y, month=m, day=d)
+    return when
+
+def list_pending_reminders(uid):
+    """そのユーザーの予約中リマインダー（プロンプト用テキスト）。なければ空文字。"""
+    try:
+        if not uid:
+            return ""
+        rows = api("GET", "ai_reminders?select=remind_at,body,repeat_every"
+                   "&status=eq.pending&user_id=eq." + uid
+                   + "&order=remind_at.asc&limit=10") or []
+        out = []
+        for r in rows:
+            try:
+                w = datetime.fromisoformat(r["remind_at"].replace("Z", "+00:00")).astimezone(JST)
+                ws = w.strftime("%-m月%-d日 %H:%M")
+            except Exception:
+                ws = r.get("remind_at", "")
+            rep = {"daily": "毎日", "weekly": "毎週", "monthly": "毎月"}.get(r.get("repeat_every", ""), "")
+            out.append(f"・{ws}{('（' + rep + '）') if rep else ''} {r.get('body', '')}")
+        return "\n".join(out)
+    except Exception:
+        return ""
 
 def cancel_reminders(uid):
     """そのユーザーの pending リマインダーをすべて取り消す。"""
@@ -336,15 +380,27 @@ def cancel_reminders(uid):
         print("[danran-bridge] cancel_reminders err:", e)
 
 def fire_due_reminders():
-    """期日が来た pending リマインダーを発火（Web Push＋部屋にボット投稿）。20秒ごと。"""
+    """期日が来た pending リマインダーを発火（Web Push＋部屋にボット投稿）。20秒ごと。
+    繰り返し（repeat_every）は発火後に次回日時へ再スケジュールして pending のまま残す。"""
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
-        rows = api("GET", "ai_reminders?select=id,user_id,user_name,room_name,body"
+        rows = api("GET", "ai_reminders?select=id,user_id,user_name,room_name,body,repeat_every,remind_at"
                    "&status=eq.pending&remind_at=lte." + urllib.parse.quote(now_iso)) or []
         for r in rows:
-            # 先に sent 化（プロセス多重起動などでの二重発火防止）
-            api("PATCH", "ai_reminders?id=eq." + r["id"] + "&status=eq.pending",
-                {"status": "sent"})
+            # 先に sent 化 or 次回へ更新（プロセス多重起動などでの二重発火防止）
+            rep = r.get("repeat_every", "")
+            if rep:
+                try:
+                    cur = datetime.fromisoformat(r["remind_at"].replace("Z", "+00:00")).astimezone(JST)
+                    nxt = _next_occurrence(cur, rep)
+                    api("PATCH", "ai_reminders?id=eq." + r["id"] + "&remind_at=eq."
+                        + urllib.parse.quote(r["remind_at"]),
+                        {"remind_at": nxt.isoformat()})
+                except Exception:
+                    api("PATCH", "ai_reminders?id=eq." + r["id"], {"status": "sent"})
+            else:
+                api("PATCH", "ai_reminders?id=eq." + r["id"] + "&status=eq.pending",
+                    {"status": "sent"})
             body = r.get("body", "")
             push_to_user(r.get("user_id", ""), "⏰ リマインダー", body,
                          room=r.get("room_name") or ROOM)
@@ -404,7 +460,7 @@ def heartbeat():
         pass
 
 
-def build_prompt(msgs, ai_room=True):
+def build_prompt(msgs, ai_room=True, reminders=""):
     lines = []
     for m in msgs[-MAX_HIST:]:
         c = (m.get("content") or "").strip() or ("（画像を送信）" if m.get("image_url") else "")
@@ -426,8 +482,16 @@ def build_prompt(msgs, ai_room=True):
         "REMIND: none/cancel/日時|内容 ← 『明日19時に教えて』『30分後に知らせて』のような"
         "リマインダー依頼のときだけ、上の現在日時を基準に JST の ISO8601 日時と通知内容を"
         "半角の縦棒 | で区切って書く（例: REMIND: 2026-06-11T19:00:00+09:00|ゴミ出しの時間だよ）。"
-        "リマインダーの取り消し依頼なら cancel。どちらでもなければ none。"
+        "『毎日/毎週◯曜/毎月◯日』のような繰り返し依頼は、初回日時に加え末尾に |daily / |weekly / |monthly を"
+        "付ける（例: REMIND: 2026-06-15T09:00:00+09:00|燃えるゴミの日|weekly）。"
+        "リマインダーの取り消し依頼なら cancel（その人の予約は全部消える。本文でもそう伝える）。"
+        "どちらでもなければ none。"
         "リマインダーを設定するときは TASK は no にし、返信本文でも『⏰◯日◯時に知らせるね』と確認すること"
+    )
+    # 予約中リマインダー（「一覧見せて」「何かあったっけ」に答えるためのコンテキスト）
+    remind_ctx = (
+        "\n\n--- この発言者の予約中リマインダー（参考。聞かれたら教えてあげて）---\n" + reminders
+        if reminders else ""
     )
     # 実装依頼への振る舞い: yes かつ非破壊なら「こう直す、進めていい？」と確認を促す。
     impl_rule = (
@@ -437,7 +501,7 @@ def build_prompt(msgs, ai_room=True):
         "OKをもらってから自動で実装されます）。破壊的/要注意な依頼は『これは念のためまさとに確認するね』と伝えてください。"
     )
     if ai_room:
-        return (SYS + impl_rule + "\n\n--- これまでの会話 ---\n" + convo +
+        return (SYS + impl_rule + "\n\n--- これまでの会話 ---\n" + convo + remind_ctx +
                 "\n\n--- 指示 ---\n上の最後の発言への、サポートAIとしての返信だけを出力してください。" +
                 flag_rule)
     # 通常ルームで @AI 呼びかけに答える場合
@@ -446,7 +510,7 @@ def build_prompt(msgs, ai_room=True):
         "「@AI」と呼びかけました。直近の会話の流れを踏まえて、日本語で簡潔・親しみやすく答えてください。"
         "アプリ名は半角『danran』。マークダウン記法は使わない。返信テキストだけを出力してください。"
     )
-    return (guest + impl_rule + "\n\n--- 会話 ---\n" + convo +
+    return (guest + impl_rule + "\n\n--- 会話 ---\n" + convo + remind_ctx +
             "\n\n--- 指示 ---\n@AI への呼びかけに答えてください。" + flag_rule)
 
 
@@ -609,6 +673,35 @@ def _obj_name_from_url(url, bucket):
 
 ORPHAN_GRACE_H = 24   # アップロード直後（メッセージ未挿入の窓）を消さない猶予
 
+# ── 大量削除ガード（掃除の安全弁）─────────────────────────────────────
+#   参照リスト漏れのバグ（cover_url 事故 2026-06-10）で「使用中ファイルの一括誤削除」が
+#   起き得るため、一度に多く消そうとした時は初回は削除せず通知のみ。翌日の実行でも
+#   同じ削除対象なら（=本当に孤児が安定している）実行する。正規の大量削除（ルーム削除等）は
+#   1日遅れるだけ。少数の削除（<10件）は通常どおり即実行。
+_SWEEP_PENDING_PATH = os.path.expanduser("~/.danran_sweep_pending.json")
+
+def _mass_delete_guard(bucket, orphans, total):
+    """True = 削除してよい / False = 今回は見送り（通知済み）。"""
+    if len(orphans) < 10 or len(orphans) < total * 0.2:
+        return True
+    sig = "%s:%d:%s" % (bucket, len(orphans), ",".join(sorted(orphans)[:20]))
+    try:
+        pend = json.load(open(_SWEEP_PENDING_PATH))
+    except Exception:
+        pend = {}
+    if pend.get(bucket) == sig:
+        pend.pop(bucket, None)
+        json.dump(pend, open(_SWEEP_PENDING_PATH, "w"))
+        return True   # 昨日と同じ対象 → 実行
+    pend[bucket] = sig
+    json.dump(pend, open(_SWEEP_PENDING_PATH, "w"))
+    notify_owner("danran 掃除の安全弁",
+                 f"{bucket} で {len(orphans)}件（全体の{len(orphans)*100//max(total,1)}%）の"
+                 "一括削除を検出。今回は削除せず、明日も同じなら実行します。"
+                 "心当たりがなければバグの可能性（参照リスト漏れ）。", to_support=False)
+    print(f"[danran-bridge] 🛑 大量削除を保留: {bucket} {len(orphans)}/{total} 件")
+    return False
+
 def _sweep_bucket(bucket, referenced):
     """bucket の孤児（referenced に無く ORPHAN_GRACE_H 時間より古い）を削除。削除数を返す。"""
     deleted = 0
@@ -617,12 +710,14 @@ def _sweep_bucket(bucket, referenced):
         cutoff = datetime.now(timezone.utc) - timedelta(hours=ORPHAN_GRACE_H)
         offset = 0
         orphans = []
+        total = 0
         while True:
             page = storage_api("POST", "object/list/" + urllib.parse.quote(bucket),
                                {"prefix": "", "limit": 1000, "offset": offset,
                                 "sortBy": {"column": "name", "order": "asc"}}) or []
             if not page:
                 break
+            total += len(page)
             for o in page:
                 nm = o.get("name", "")
                 if not nm or nm in referenced:
@@ -637,6 +732,8 @@ def _sweep_bucket(bucket, referenced):
             if len(page) < 1000:
                 break
             offset += 1000
+        if orphans and not _mass_delete_guard(bucket, orphans, total):
+            return 0
         # まとめて削除（prefixes 指定）。50件ずつ。
         for i in range(0, len(orphans), 50):
             chunk = orphans[i:i + 50]
@@ -733,6 +830,8 @@ def r2_sweep():
                 dt = None
             if dt is None or dt < cutoff:   # 日付不明も猶予超え扱い
                 orphans.append(k)
+        if orphans and not _mass_delete_guard("danran-media", orphans, len(objs)):
+            return
         deleted = 0
         for i in range(0, len(orphans), 100):
             res = worker_api("POST", "/media-admin/delete", {"keys": orphans[i:i + 100]}) or {}
@@ -760,6 +859,7 @@ BACKUP_TABLES = (
     ("last_read",          "user_id.asc,room_name.asc"),
     ("push_subscriptions", "id.asc"),
     ("ai_tasks",           "created_at.asc"),
+    ("ai_reminders",       "created_at.asc"),
 )
 
 def backup_daily():
@@ -871,11 +971,14 @@ def media_backup():
             pass
 
 def daily_jobs():
-    """日次メンテ一式（main ループから別スレッドで起動）。"""
+    """日次メンテ一式（main ループから別スレッドで起動）。
+    ★ media_backup を掃除より先に実行する: 掃除が（バグで）使用中ファイルを
+    誤削除しても、ローカルのアーカイブに本体が残り復元できる（cover_url 事故の教訓）。
+    孤児も一旦アーカイブに入るが、mini のディスク（1TB空き）には誤差。"""
     backup_daily()
+    media_backup()
     orphan_sweep()
     r2_sweep()
-    media_backup()   # 掃除の後に実行（消える予定の孤児まで保存しない）
 
 # ── 動画の自動圧縮（R2 × ffmpeg・5分ごと）────────────────────────────────
 #   家族が送った動画を 720p/H.264 に圧縮して R2 残量と再生開始を改善する。
@@ -1172,7 +1275,8 @@ def main():
                     last_by_room[rn] = nts
                     continue
                 print(f"[danran-bridge] 新着 ← [{rn}] {sender}: {(content or '(画像)')[:50]}")
-                prompt = build_prompt(msgs, is_ai_room)
+                prompt = build_prompt(msgs, is_ai_room,
+                                      reminders=list_pending_reminders(newest.get("user_id", "")))
                 # ★ 写真は「今回送られた最新メッセージの画像」だけ Vision で見せる。
                 #   以前は直近3枚を毎回見せていたため、AI が同じ写真に毎回反応して鬱陶しかった。
                 #   トリガーが画像メッセージのときだけ1回反応する（テキスト送信では過去写真を蒸し返さない）。

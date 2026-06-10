@@ -2551,6 +2551,10 @@
     function atBottomNow() {
       try {
         var sc = getScroller();
+        // ★ そもそもスクロールできない画面（メッセージが少ない部屋・キーボードで高さが
+        //   変わった直後等）では常に「下端」と誤判定され、どこで上スワイプしても 🔁 が
+        //   誤発火していた。十分な overflow がある時だけジェスチャーを有効にする。
+        if (sc.scrollHeight < sc.clientHeight + 60) return false;
         return (sc.scrollHeight - (sc.scrollTop + sc.clientHeight)) < 14;
       } catch (e) { return false; }
     }
@@ -2593,7 +2597,8 @@
       }
     };
     var onTe = function () {
-      if (pulling && dist > 50) {
+      // 離した瞬間にも下端を再確認（ドラッグ中に状況が変わった誤発火を防ぐ）
+      if (pulling && dist > 50 && atBottomNow()) {
         var el = ind();
         el.style.opacity = '1';
         el.style.transform = 'translateX(-50%)';

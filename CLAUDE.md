@@ -460,6 +460,13 @@ UNIQUE(user_id, room_name) で upsert。
 | chat-images | チャット添付画像（JS が直接アップロード）   |
 
 **孤児ファイルの自動掃除**: メッセージ/ルーム削除は主に JS 経由で Storage オブジェクトは残る（孤児）。bridge（mini）が **日次で `orphan_sweep()`** を実行し、`messages.image_url`（chat-images）/ `users.avatar`・`rooms.icon`（avatars）に参照されず **24時間より古い**オブジェクトを削除する。アップロード直後（メッセージ未挿入の窓）を消さないための猶予が24h。RLS は `danran_orphan_select`/`danran_orphan_delete`（chat-images/avatars に list/delete 許可）。anon key 運用なので service_role は不要。
+参照集合の取得は **`api_all()`（offset ページング）必須**。素の `api()` は PostgREST の最大1000行で切れ、欠けた参照を孤児と誤判定して使用中ファイルを消す。
+
+**bridge の日次/定期メンテ（2026-06-10〜）**: main ループから `daily_jobs()`（24hごと・起動直後にも1回）と `video_compress_tick()`（5分ごと）を別スレッドで起動。
+- `backup_daily()` — 全テーブル（users/rooms/room_members/messages/reactions/last_read/push_subscriptions/ai_tasks。sessions は揮発なので対象外）を JSON(gzip) で mini の `~/danran_backups/danran-YYYY-MM-DD.json.gz` に保存・**30世代**保持。同日分はスキップ・失敗時のみまさとに Web Push。
+- `r2_sweep()` — R2（danran-media）の孤児掃除。worker の **`/media-admin/list` / `/media-admin/delete`**（POST `{keys:[…]}`・x-danran-auth ゲート＝upload と同じ）経由で、`messages.video_url/image_url` が参照しない `/media/<key>` を24h猶予つきで削除。**`worker_api()` は User-Agent 必須**（既定の Python-urllib UA は Cloudflare の Browser Integrity Check に 1010/403 で弾かれる）。
+- `video_compress_tick()` — 6MB以上の動画を ffmpeg（`/opt/homebrew/bin/ffmpeg`・brew導入済み）で長辺1280px/H.264(CRF27)+AAC/faststart に圧縮→R2 再アップロード→`messages.video_url` を PATCH で差し替え（旧オブジェクトは次の r2_sweep が回収）。処理済み/エラーは `~/.danran_video_done.json` に記録し再試行しない。送信後2分は触らない。iPhone の HEVC が H.264 になり Android/PC 互換も向上。
+- 注意: **deploy watcher は bridge を再起動しない**。`tools/ai_bridge.py` 変更時は `ssh mini 'launchctl kickstart -k gui/$(id -u)/com.danran.bridge'`（ログは `/tmp/bridge.log`）。
 
 ### pg_cron
 

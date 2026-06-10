@@ -995,7 +995,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v158",   # プル更新🔁の誤発火修正（スクロール不能画面では無効化）
+    "danran_lp_v159",   # 本物スクローラー捕捉（🔁復活＋誤発火なし）/ボタン追従/スタンプ高さ予約
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1532,7 +1532,10 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         # スタンプ（透過PNGあり）はグレーのプレースホルダー箱を敷かず、
         # data-lp-image も付けない（=タップで全画面ビューアを開かない。LINE のスタンプ同様）
         _stamp = _is_stamp_url(img_url)
-        _slot_box = "" if _stamp else "min-height:80px;background:rgba(255,255,255,0.06);"
+        # ★ スタンプも min-height（透明）は必須: 高さ予約が無いと再描画のたびに
+        #   「高さ0→画像ロードで膨張」が起き、スクロール位置が跳ねる（画面ずれの原因になった）
+        _slot_box = ("min-height:80px;" if _stamp
+                     else "min-height:80px;background:rgba(255,255,255,0.06);")
         # ★ img_url が None のメッセージでも評価されるため、escape は必ず img_url ガード付きで
         _viewer   = f'data-lp-image="{_html.escape(img_url)}" ' if (img_url and not _stamp) else ""
         img_piece = (

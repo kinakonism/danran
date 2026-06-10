@@ -2521,7 +2521,30 @@
       pDoc.removeEventListener('touchstart', prev.ts, true);
       pDoc.removeEventListener('touchmove',  prev.tm, true);
       pDoc.removeEventListener('touchend',   prev.te, true);
+      if (prev.sc) pDoc.removeEventListener('scroll', prev.sc, true);
     }
+    // ★ 実際にスクロールした要素を捕まえてキャッシュする（capture で全 scroll を拾う）。
+    //   候補リストの静的探索は実機 iOS で本物のスクローラーを外すことがあり、
+    //   「常に下端」誤判定（どこでも🔁）や「下端でも発火しない」の原因だった。
+    var _alignPend = false;
+    var onSc = function (e) {
+      try {
+        var t = e.target;
+        if (t && t.nodeType === 1 && t.scrollHeight > t.clientHeight + 60) {
+          pDoc._danranScrollEl = t;
+        }
+        // スクロール中も 📷/😊 ボタンを入力欄に追従させる（rAF で間引き）。
+        // scan 任せだと iOS のバウンス中などにボタンだけ浮いて見える。
+        if (!_alignPend) {
+          _alignPend = true;
+          (pWin.requestAnimationFrame || setTimeout)(function () {
+            _alignPend = false;
+            try { alignCamBtn(); } catch (x) {}
+          });
+        }
+      } catch (x) {}
+    };
+    pDoc.addEventListener('scroll', onSc, { capture: true, passive: true });
     if (!pDoc.getElementById('_danran_spin_css')) {
       var s = pDoc.createElement('style');
       s.id = '_danran_spin_css';
@@ -2536,6 +2559,9 @@
     }
     // 実際にスクロールしている要素を特定（window でなくインナーコンテナのことがある）
     function getScroller() {
+      // 最優先: scroll イベントで実際に捕まえた本物のスクローラー
+      var c = pDoc._danranScrollEl;
+      if (c && c.isConnected && c.scrollHeight > c.clientHeight + 4) return c;
       var cands = [
         pDoc.querySelector('section.main'),
         pDoc.querySelector('[data-testid="stMain"]'),
@@ -2614,7 +2640,7 @@
     pDoc.addEventListener('touchstart', onTs, { capture: true, passive: true });
     pDoc.addEventListener('touchmove',  onTm, { capture: true, passive: true });   // passive＝スクロール非ブロック
     pDoc.addEventListener('touchend',   onTe, { capture: true, passive: true });
-    pDoc._danranPullReg = { ts: onTs, tm: onTm, te: onTe };
+    pDoc._danranPullReg = { ts: onTs, tm: onTm, te: onTe, sc: onSc };
   }
 
   function setupObs() {

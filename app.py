@@ -2281,6 +2281,9 @@ def show_room_edit(room: dict) -> None:
                 except Exception:
                     st.image(icon_photo, width=80)
                 st.caption("この写真に変更します")
+            elif room_icon.startswith("http"):
+                st.image(room_icon, width=80)
+                st.caption("今の写真のまま使います（変えたい時だけ選んでね）")
 
         st.divider()
         c1, c2 = st.columns(2)
@@ -2292,10 +2295,16 @@ def show_room_edit(room: dict) -> None:
                     if atype == "絵文字":
                         final_icon = new_icon or room_icon
                     else:
-                        if not icon_photo:
+                        # 写真: 新しく選んだ時だけアップロード。未選択なら今の写真を維持
+                        #（ルーム名だけ変えたい時に「写真を選択してください」で詰まないように。
+                        #  プロフィール編集と同じパターン）。
+                        if icon_photo:
+                            with st.spinner("アップロード中…"):
+                                final_icon = upload_photo(AVATAR_BUCKET, f"room_{room_id}", icon_photo)
+                        elif room_icon.startswith("http"):
+                            final_icon = room_icon   # 既存の写真アイコンをそのまま維持
+                        else:
                             st.error("写真を選択してください"); return
-                        with st.spinner("アップロード中…"):
-                            final_icon = upload_photo(AVATAR_BUCKET, f"room_{room_id}", icon_photo)
 
                     with st.spinner("保存中…"):
                         update_room(room_id, room_name, new_name, final_icon)

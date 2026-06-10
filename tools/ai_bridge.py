@@ -611,10 +611,13 @@ def orphan_sweep():
 WORKER_URL = "https://danran-chat.kinakonism.workers.dev"   # /media-admin/* の呼び先
 
 def worker_api(method, path, body=None):
-    """Cloudflare Worker の管理エンドポイント呼び出し（x-danran-auth ゲート）。"""
+    """Cloudflare Worker の管理エンドポイント呼び出し（x-danran-auth ゲート）。
+    ★ User-Agent 必須: 既定の Python-urllib UA は Cloudflare の Browser Integrity
+    Check に弾かれる（error 1010 → 403）。"""
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(WORKER_URL + path, data=data,
-                                 headers={"x-danran-auth": KEY, "Content-Type": "application/json"},
+                                 headers={"x-danran-auth": KEY, "Content-Type": "application/json",
+                                          "User-Agent": "danran-bridge/1.0"},
                                  method=method)
     with urllib.request.urlopen(req, timeout=60) as r:
         raw = r.read()

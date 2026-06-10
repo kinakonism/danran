@@ -995,7 +995,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v160",   # スタンプトレイ調整（タイル小型化・右端見切れ修正・下余白）
+    "danran_lp_v161",   # トレイが rerun のたびに勝手に閉じる問題を修正（keepTray）
     path=_LP_COMPONENT_DIR,
 )
 

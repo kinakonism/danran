@@ -2817,18 +2817,23 @@
    *  fixed 配置の 📷 ボタンを左端に置く。
    *  Supabase Storage に直接アップロード → REST でメッセージ挿入。
    * ════════════════════════════════════════ */
-  function removeCameraUI() {
+  function removeCameraUI(keepTray) {
     try {
       var pDoc = window.parent.document;
       [CAM_BTN_ID, CAM_FILE_ID, CAM_CSS_ID,
-       STAMP_BTN_ID, STAMP_FILE_ID, STAMP_TRAY_ID].forEach(function (id) {
+       STAMP_BTN_ID, STAMP_FILE_ID].forEach(function (id) {
         var el = pDoc.getElementById(id); if (el) el.remove();
       });
+      // ★ トレイは再注入(injectCameraUI 冒頭の reset)では消さない。rerun のたびに
+      //   「開いて少し経つと勝手に閉じる」原因だった。画面遷移・ログアウト時のみ閉じる。
+      if (!keepTray) {
+        var t = pDoc.getElementById(STAMP_TRAY_ID); if (t) t.remove();
+      }
     } catch (e) {}
   }
 
   function injectCameraUI(room, avatar) {
-    removeCameraUI();
+    removeCameraUI(true);   // keepTray: 再注入で開いているトレイを閉じない
     if (!room || !ME || !SB_KEY) return;
     try {
       var pDoc = window.parent.document;

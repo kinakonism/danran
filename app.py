@@ -2462,11 +2462,12 @@ def show_album(room: dict) -> None:
         return
 
     _imgs = list(reversed(_msgs))[:300]   # 新しい順
-    # 日付ごとにグループ化（dict の挿入順＝新しい日付が上）
-    _groups: dict[str, list[dict]] = {}
+    # 月 → 日 の二段グループ化（dict の挿入順＝新しいものが上）。
+    # 月見出しがあると古い写真も「いつの月か」が一目で分かる（日ラベルは年を含まないため）。
+    _months: dict[str, dict[str, list[dict]]] = {}
     for _m in _imgs:
         _k = _date_key(_m.get("created_at", "")) or "?"
-        _groups.setdefault(_k, []).append(_m)
+        _months.setdefault(_k[:7], {}).setdefault(_k, []).append(_m)
 
     # チャットと同じ JS スロット方式（lp-imgslot）。タップで全画面ビューア（DL・スワイプ付き）。
     def _slot(u: str, name: str) -> str:
@@ -2483,25 +2484,43 @@ def show_album(room: dict) -> None:
         f'<div style="color:rgba(240,232,224,0.5);font-size:0.8rem;margin:0 2px 4px">'
         f'📷 合計 {len(_imgs)} 枚</div>'
     ]
-    for _items in _groups.values():
-        _label = _date_label(_items[0].get("created_at", "")) or ""
+    for _mk, _days in _months.items():
+        # ── 月見出し（2026年6月・枚数・下線）──
+        try:
+            _y, _mo = _mk.split("-")
+            _mlabel = f"{int(_y)}年{int(_mo)}月"
+        except Exception:
+            _mlabel = "その他"
+        _mcount = sum(len(v) for v in _days.values())
         _parts.append(
-            f'<div style="font-size:0.92rem;font-weight:700;color:#f0a868;'
-            f'margin:16px 2px 9px;display:flex;align-items:baseline;gap:8px">'
-            f'{_html.escape(_label)}'
+            f'<div style="font-size:1.05rem;font-weight:800;color:#f0a868;'
+            f'margin:22px 2px 4px;padding-bottom:6px;'
+            f'border-bottom:1px solid rgba(240,168,104,0.25);'
+            f'display:flex;align-items:baseline;gap:8px">'
+            f'{_html.escape(_mlabel)}'
             f'<span style="font-weight:400;color:rgba(240,232,224,0.4);font-size:0.78rem">'
-            f'{len(_items)}枚</span></div>'
+            f'{_mcount}枚</span></div>'
         )
-        _cells = "".join(_slot(m.get("image_url") or "", m.get("user_name", "")) for m in _items)
-        if len(_items) == 1:
-            # 1枚だけの日はグリッドセルと同じ大きさで左寄せ（半分幅）
-            _parts.append(f'<div style="max-width:48%">{_cells}</div>')
-        else:
-            # 2枚以上は2列グリッド（下に行が増える）
+        # ── 日見出し＋グリッド（従来どおり・月見出しより控えめに）──
+        for _items in _days.values():
+            _label = _date_label(_items[0].get("created_at", "")) or ""
             _parts.append(
-                f'<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:5px">'
-                f'{_cells}</div>'
+                f'<div style="font-size:0.82rem;font-weight:600;color:rgba(240,232,224,0.6);'
+                f'margin:12px 2px 7px;display:flex;align-items:baseline;gap:8px">'
+                f'{_html.escape(_label)}'
+                f'<span style="font-weight:400;color:rgba(240,232,224,0.35);font-size:0.74rem">'
+                f'{len(_items)}枚</span></div>'
             )
+            _cells = "".join(_slot(m.get("image_url") or "", m.get("user_name", "")) for m in _items)
+            if len(_items) == 1:
+                # 1枚だけの日はグリッドセルと同じ大きさで左寄せ（半分幅）
+                _parts.append(f'<div style="max-width:48%">{_cells}</div>')
+            else:
+                # 2枚以上は2列グリッド（下に行が増える）
+                _parts.append(
+                    f'<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:5px">'
+                    f'{_cells}</div>'
+                )
     st.markdown("".join(_parts), unsafe_allow_html=True)
 
 # ─────────────────────────────────────

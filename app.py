@@ -1529,18 +1529,20 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             f'-webkit-tap-highlight-color:transparent">⬇</button>'
             f'</span>'
         ) if vid_url else ""
-        # スタンプ（透過PNGあり）はグレーのプレースホルダー箱を敷かない
-        _slot_box = ("" if _is_stamp_url(img_url)
-                     else "min-height:80px;background:rgba(255,255,255,0.06);")
+        # スタンプ（透過PNGあり）はグレーのプレースホルダー箱を敷かず、
+        # data-lp-image も付けない（=タップで全画面ビューアを開かない。LINE のスタンプ同様）
+        _stamp = _is_stamp_url(img_url)
+        _slot_box = "" if _stamp else "min-height:80px;background:rgba(255,255,255,0.06);"
+        _viewer   = "" if _stamp else f'data-lp-image="{_html.escape(img_url)}" '
         img_piece = (
             # ★ <img> を直接出さず JS 管理のスロットにする。
             #   2秒ポーリングで再描画されても、JS が「同じ画像ノードを移動させるだけ」で
             #   再ロードしないためチカチカしない（fillImageSlots）。
             #   data-lp-image: タップで全画面ビューア / 薄グレー枠 = 読込前プレースホルダー
             f'<span class="lp-imgslot" data-img="{_html.escape(img_url)}" '
-            f'data-lp-image="{_html.escape(img_url)}" '
+            f'{_viewer}'
             f'style="display:block;max-width:200px;{_slot_box}border-radius:10px;'
-            f'cursor:pointer;'
+            f'{"" if _stamp else "cursor:pointer;"}'
             f'{"margin-bottom:6px" if body else ""}"></span>'
         ) if img_url else ""
         content = _reply_quote_html(msg) + img_piece + vid_piece + body_esc

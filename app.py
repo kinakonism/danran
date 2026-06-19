@@ -2885,15 +2885,20 @@ def show_event_new(current_user: dict) -> None:
             st.session_state["ev_time_end"] = _parse_t(ev.get("event_end_time", ""))
             st.session_state["ev_note"]     = ev.get("note", "")
         else:
+            from datetime import time as _t
             try:
                 st.session_state["ev_date"] = _date.fromisoformat(
                     st.session_state.get("cal_selected", today.isoformat()))
             except Exception:
                 st.session_state["ev_date"] = today
+            # 時刻の初期値は「現在時刻（5分丸め）」と「その1時間後」。
+            # 終日を外したときにドロップダウンが今の時間あたりから開く。
+            _now = datetime.now(JST)
+            _mn  = (_now.minute // 15) * 15   # 既定ステップ(15分)に合わせて候補と一致させる
             st.session_state["ev_title"] = ""
             st.session_state["ev_allday"] = True
-            st.session_state["ev_time"] = None
-            st.session_state["ev_time_end"] = None
+            st.session_state["ev_time"] = _t(_now.hour, _mn)
+            st.session_state["ev_time_end"] = _t((_now.hour + 1) % 24, _mn)
             st.session_state["ev_note"] = ""
 
     st.markdown("<br>", unsafe_allow_html=True)

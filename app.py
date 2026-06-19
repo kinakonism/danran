@@ -2871,8 +2871,10 @@ def show_calendar(current_user: dict) -> None:
         'width:24px;font-weight:800;margin:0 auto 2px}'
         '.dr-cal-num.hol{color:#e0654f}'        # 祝日・日曜は赤
         '.dr-cal-num.sat{color:#6a9bd0}'        # 土曜は青
-        '.dr-cal-hol{font-size:0.58rem;color:#e0654f;line-height:1.25;text-align:center;'
-        'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:1px}'
+        # 祝日名は水色の背景チップで見やすく（Google 風）
+        '.dr-cal-hol{font-size:0.62rem;line-height:1.35;border-radius:3px;padding:1px 4px;'
+        'margin-top:1px;background:#7fb0e0;color:#10243a;font-weight:700;'
+        'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
         '.dr-cal-ev{font-size:0.68rem;line-height:1.4;border-radius:3px;padding:1px 4px;'
         'margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a1614;'
         'font-weight:600}'

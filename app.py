@@ -1031,7 +1031,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v162",   # カレンダー画面の📅ヘッダーボタン（go_calendar）
+    "danran_lp_v163",   # カレンダーGoogle風グリッド（月タブ/日タップ/＋FAB）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2632,34 +2632,21 @@ def _push_event_added(creator_uid: str, creator_name: str, day_iso: str,
     except Exception:
         pass
 
+# 予定チップの色（作成者ごとに固定。ダーク地で映える暖色寄りパレット）
+_EVENT_COLORS = ["#5bbf8a", "#e8915b", "#6a9bd0", "#b07cc6",
+                 "#d4a24c", "#e0654f", "#4fb0a8", "#c98fb0"]
+
+def _event_color(uid: str) -> str:
+    if not uid:
+        return "#8a8a8a"
+    return _EVENT_COLORS[sum(ord(c) for c in uid) % len(_EVENT_COLORS)]
+
 def show_calendar(current_user: dict) -> None:
     import calendar as _cal
-    import time as _time
     today = datetime.now(JST).date()
     y = st.session_state.get("cal_year", today.year)
     m = st.session_state.get("cal_month", today.month)
     sel = st.session_state.get("cal_selected", today.isoformat())
-
-    # ── 月ナビ（◀ 2026年6月 ▶）──
-    c_prev, c_title, c_next = st.columns([1, 3, 1])
-    with c_prev:
-        if st.button("◀", key="cal_prev", use_container_width=True):
-            m -= 1
-            if m < 1:
-                m = 12; y -= 1
-            st.session_state["cal_year"] = y; st.session_state["cal_month"] = m
-            st.rerun()
-    with c_title:
-        st.markdown(f"<div style='text-align:center;font-size:1.15rem;font-weight:800;"
-                    f"color:#f0a868;line-height:2.2'>{y}年{m}月</div>",
-                    unsafe_allow_html=True)
-    with c_next:
-        if st.button("▶", key="cal_next", use_container_width=True):
-            m += 1
-            if m > 12:
-                m = 1; y += 1
-            st.session_state["cal_year"] = y; st.session_state["cal_month"] = m
-            st.rerun()
 
     # ── この月の予定を日付ごとに集計 ──
     ev_month = fetch_events_month(y, m)
@@ -2667,43 +2654,93 @@ def show_calendar(current_user: dict) -> None:
     for e in ev_month:
         by_day.setdefault(e["event_date"], []).append(e)
 
+    # ── 月切り替えタブ（Google 風・横スクロール。今月の1つ前〜13ヶ月先）──
+    _tabs = []
+    for off in range(-1, 14):
+        ty = today.year + (today.month - 1 + off) // 12
+        tm = (today.month - 1 + off) % 12 + 1
+        on = (ty == y and tm == m)
+        _tabs.append(
+            f'<button class="dr-mtab{" on" if on else ""}" data-cal-month="{ty:04d}-{tm:02d}">'
+            f'{tm}月{("&#x2009;" + str(ty)[2:] + "年") if tm == 1 else ""}</button>'
+        )
+    tabs_html = '<div class="dr-mtabs">' + "".join(_tabs) + '</div>'
+
     # ── 曜日見出し ──
-    _wk = "".join(
-        f'<div style="text-align:center;font-size:0.72rem;font-weight:700;padding:2px 0;'
-        f'color:{"#e0654f" if i == 0 else "#6a9bd0" if i == 6 else "rgba(240,232,224,0.5)"}">'
-        f'{w}</div>' for i, w in enumerate(_WEEK_JP)
+    wd_html = '<div class="dr-cal-hdr">' + "".join(
+        f'<div class="dr-cal-wd" style="color:'
+        f'{"#e0654f" if i == 0 else "#6a9bd0" if i == 6 else "rgba(240,232,224,0.5)"}">{w}</div>'
+        for i, w in enumerate(_WEEK_JP)
+    ) + '</div>'
+
+    # ── 月グリッド（前後の月の日も含む Google 風 6 週）──
+    cells = []
+    for week in _cal.Calendar(firstweekday=6).monthdatescalendar(y, m):
+        for d in week:
+            iso = d.isoformat()
+            inm = (d.month == m)
+            is_today = (d == today)
+            is_sel   = (iso == sel)
+            _cls = "dr-cal-cell" + ("" if inm else " other") + (" sel" if is_sel else "")
+            _numcls = "dr-cal-num" + (" today" if is_today else "")
+            _evs = by_day.get(iso, [])
+            _chips = "".join(
+                f'<div class="dr-cal-ev" style="background:{_event_color(e.get("created_by",""))}">'
+                f'{(_html.escape(e.get("event_time") + " ") if e.get("event_time") else "")}'
+                f'{_html.escape(e["title"])}</div>'
+                for e in _evs[:3]
+            )
+            if len(_evs) > 3:
+                _chips += f'<div class="dr-cal-more">+{len(_evs) - 3}</div>'
+            cells.append(
+                f'<div class="{_cls}" data-cal-day="{iso}">'
+                f'<div class="{_numcls}">{d.day}</div>{_chips}</div>'
+            )
+    grid_html = '<div class="dr-cal">' + "".join(cells) + '</div>'
+
+    _cal_css = (
+        '<style>'
+        '.dr-mtabs{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 10px;'
+        '-webkit-overflow-scrolling:touch;scrollbar-width:none}'
+        '.dr-mtabs::-webkit-scrollbar{display:none}'
+        '.dr-mtab{flex:0 0 auto;padding:6px 15px;border-radius:16px;cursor:pointer;'
+        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;'
+        'font-size:0.85rem;white-space:nowrap;-webkit-tap-highlight-color:transparent}'
+        '.dr-mtab.on{background:#f0a868;color:#1a1614;border-color:#f0a868;font-weight:700}'
+        '.dr-cal-hdr,.dr-cal{display:grid;grid-template-columns:repeat(7,1fr)}'
+        '.dr-cal-hdr{margin-bottom:2px}'
+        '.dr-cal-wd{text-align:center;font-size:0.72rem;font-weight:700;padding:2px 0}'
+        '.dr-cal{gap:1px;background:rgba(255,255,255,0.07);'
+        'border:1px solid rgba(255,255,255,0.07);border-radius:8px;overflow:hidden}'
+        '.dr-cal-cell{background:#1a1614;min-height:62px;padding:3px 2px 4px;cursor:pointer;'
+        'overflow:hidden;-webkit-tap-highlight-color:transparent}'
+        '.dr-cal-cell.other{opacity:0.38}'
+        '.dr-cal-cell.sel{background:#2c241d;box-shadow:inset 0 0 0 2px #f0a868}'
+        '.dr-cal-num{font-size:0.74rem;text-align:center;color:#f0e8e0;line-height:18px;'
+        'height:18px;margin-bottom:1px}'
+        '.dr-cal-num.today{background:#f0a868;color:#1a1614;border-radius:50%;'
+        'width:18px;font-weight:700;margin:0 auto 1px}'
+        '.dr-cal-ev{font-size:0.6rem;line-height:1.35;border-radius:3px;padding:0 3px;'
+        'margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a1614;'
+        'font-weight:600}'
+        '.dr-cal-more{font-size:0.58rem;color:rgba(240,232,224,0.5);padding:0 3px;margin-top:1px}'
+        '#dr-cal-fab{position:fixed;right:18px;bottom:calc(22px + env(safe-area-inset-bottom));'
+        'width:56px;height:56px;border-radius:50%;background:#f0a868;color:#1a1614;'
+        'font-size:2rem;line-height:1;border:none;box-shadow:0 4px 16px rgba(0,0,0,0.55);'
+        'z-index:9995;display:flex;align-items:center;justify-content:center;cursor:pointer;'
+        '-webkit-tap-highlight-color:transparent}'
+        '</style>'
     )
-    st.markdown(f'<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;'
-                f'margin:2px 0 4px">{_wk}</div>', unsafe_allow_html=True)
+    st.html(_cal_css + tabs_html + wd_html + grid_html
+            + '<button id="dr-cal-fab" data-cal-add="1">＋</button>')
 
-    # ── 日グリッド（週ごとに st.columns(7) のボタン）──
-    for week in _cal.Calendar(firstweekday=6).monthdayscalendar(y, m):  # 日曜始まり
-        cols = st.columns(7, gap="small")
-        for i, d in enumerate(week):
-            with cols[i]:
-                if d == 0:
-                    st.markdown("&nbsp;", unsafe_allow_html=True)   # 月外の空セル
-                    continue
-                iso = f"{y:04d}-{m:02d}-{d:02d}"
-                has = iso in by_day
-                is_today = (iso == today.isoformat())
-                is_sel   = (iso == sel)
-                label = f"{d}・" if has else str(d)        # ・= 予定あり
-                if is_today:
-                    label = f"[{d}]" + ("・" if has else "")  # 今日は [ ] で囲む
-                st.button(label, key=f"cal_d_{iso}", use_container_width=True,
-                          type=("primary" if is_sel else "secondary"),
-                          on_click=lambda i=iso: st.session_state.update(cal_selected=i))
-
-    st.divider()
-
-    # ── 選択日の予定一覧＋追加 ──
+    # ── 選択日の予定一覧（タップした日／既定は今日）──
     try:
         sd = datetime.fromisoformat(sel).date()
         sd_label = f"{sd.month}月{sd.day}日（{_WEEK_JP[(sd.weekday() + 1) % 7]}）"
     except Exception:
-        sd = today; sd_label = sel
-    st.markdown(f"### 📅 {sd_label}"
+        sd_label = sel
+    st.markdown(f"#### 📅 {sd_label}"
                 + ("　<span style='font-size:0.7rem;color:#f0a868'>今日</span>"
                    if sel == today.isoformat() else ""),
                 unsafe_allow_html=True)
@@ -2713,47 +2750,66 @@ def show_calendar(current_user: dict) -> None:
         for e in day_events:
             ec1, ec2 = st.columns([5, 1])
             with ec1:
-                _t = f"<b>{_html.escape(e.get('event_time') or '終日')}</b>　{_html.escape(e['title'])}"
-                _n = (f"<div style='font-size:0.78rem;color:rgba(240,232,224,0.55);margin-top:1px'>"
-                      f"{_html.escape(e['note'])}</div>" if e.get("note") else "")
-                _by = (f"<div style='font-size:0.68rem;color:rgba(240,232,224,0.4);margin-top:2px'>"
-                       f"by {_html.escape(e.get('created_by_name', ''))}</div>")
-                st.markdown(f"<div style='padding:6px 2px;border-bottom:1px solid "
+                _dot = (f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;'
+                        f'background:{_event_color(e.get("created_by",""))};margin-right:6px"></span>')
+                _t = (f"{_dot}<b>{_html.escape(e.get('event_time') or '終日')}</b>　"
+                      f"{_html.escape(e['title'])}")
+                _n = (f"<div style='font-size:0.78rem;color:rgba(240,232,224,0.55);"
+                      f"margin:1px 0 0 15px'>{_html.escape(e['note'])}</div>" if e.get("note") else "")
+                _by = (f"<div style='font-size:0.68rem;color:rgba(240,232,224,0.4);"
+                       f"margin:2px 0 0 15px'>by {_html.escape(e.get('created_by_name', ''))}</div>")
+                st.markdown(f"<div style='padding:7px 2px;border-bottom:1px solid "
                             f"rgba(255,255,255,0.07)'>{_t}{_n}{_by}</div>", unsafe_allow_html=True)
             with ec2:
                 if st.button("🗑", key=f"cal_del_{e['id']}", use_container_width=True):
                     delete_event(e["id"]); st.rerun()
     else:
-        st.caption("この日の予定はまだありません。")
+        st.caption("この日の予定はまだありません。右下の＋から追加できます。")
 
-    # ── 予定を追加 ──
-    with st.expander("➕ 予定を追加", expanded=not day_events):
-        title = st.text_input("予定", placeholder="例：パパ通院 / 〇〇の誕生日",
-                              key="cal_new_title")
-        a1, a2 = st.columns(2)
-        with a1:
-            allday = st.checkbox("終日", value=True, key="cal_new_allday")
-        with a2:
-            tval = st.time_input("時刻", value=None, key="cal_new_time",
-                                 label_visibility="collapsed", disabled=allday)
-        note = st.text_input("メモ（任意）", key="cal_new_note")
-        if st.button("この日に追加", type="primary", use_container_width=True, key="cal_add"):
-            if not (title or "").strip():
-                st.error("予定の内容を入力してください")
-            else:
-                tstr = "" if allday or tval is None else tval.strftime("%H:%M")
-                try:
-                    create_event(sel, tstr, title.strip(), (note or "").strip(),
-                                 current_user.get("id", ""), current_user.get("name", ""))
-                    _push_event_added(current_user.get("id", ""),
-                                      current_user.get("name", ""), sel, tstr, title.strip())
-                    for k in ("cal_new_title", "cal_new_note", "cal_new_time", "cal_new_allday"):
-                        st.session_state.pop(k, None)
-                    st.success("✅ 予定を追加しました")
-                    _time.sleep(0.3)
-                    st.rerun()
-                except Exception as ex:
-                    st.error(f"❌ 追加に失敗しました: {ex}")
+def show_event_new(current_user: dict) -> None:
+    """予定登録画面（カレンダーの＋FABから）。"""
+    import time as _time
+    from datetime import date as _date
+    today = datetime.now(JST).date()
+    sel = st.session_state.get("cal_selected", today.isoformat())
+    try:
+        default_d = _date.fromisoformat(sel)
+    except Exception:
+        default_d = today
+    st.markdown("<br>", unsafe_allow_html=True)
+    d = st.date_input("日付", value=default_d, key="ev_date", format="YYYY/MM/DD")
+    title = st.text_input("予定", placeholder="例：パパ通院 / 〇〇の誕生日", key="ev_title")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        allday = st.checkbox("終日", value=True, key="ev_allday")
+    with c2:
+        tval = st.time_input("時刻", value=None, key="ev_time",
+                             label_visibility="collapsed", disabled=allday)
+    note = st.text_input("メモ（任意）", key="ev_note")
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("✅ この予定を登録", type="primary", use_container_width=True, key="ev_save"):
+        if not (title or "").strip():
+            st.error("予定の内容を入力してください")
+        else:
+            iso  = d.isoformat()
+            tstr = "" if allday or tval is None else tval.strftime("%H:%M")
+            try:
+                create_event(iso, tstr, title.strip(), (note or "").strip(),
+                             current_user.get("id", ""), current_user.get("name", ""))
+                _push_event_added(current_user.get("id", ""),
+                                  current_user.get("name", ""), iso, tstr, title.strip())
+                for k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_note"):
+                    st.session_state.pop(k, None)
+                # 登録した日へ移動してカレンダーに戻る
+                st.session_state["cal_selected"] = iso
+                st.session_state["cal_year"]  = d.year
+                st.session_state["cal_month"] = d.month
+                st.session_state["view"] = "calendar"
+                st.success("✅ 予定を登録しました")
+                _time.sleep(0.3)
+                st.rerun()
+            except Exception as ex:
+                st.error(f"❌ 登録に失敗しました: {ex}")
 
 # ─────────────────────────────────────
 # 画面⑤-d メッセージ検索（チャット☰メニューから）
@@ -3377,7 +3433,7 @@ _clear_flag  = st.session_state.pop("_clear_session", False)
 # JS に「ブラウザ側も unsubscribe して再登録せよ」を伝えるフラグ（1回のみ）
 _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
-_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album", "search", "settings", "calendar")
+_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album", "search", "settings", "calendar", "event_new")
 _active_room_id = ""
 if "current_user" in st.session_state and not _is_profile:
     # active_room が未セット（セッション復元直後）のときは参加ルームの先頭をフォールバック
@@ -3444,6 +3500,7 @@ if "current_user" in st.session_state:
             "search":        "🔍 メッセージ検索",
             "settings":      "⚙️ 設定",
             "calendar":      "📅 カレンダー",
+            "event_new":     "➕ 予定を登録",
         }
         _hdr_title_text = _title_map.get(_cur_view, "設定")
         _hdr_html = (
@@ -3647,6 +3704,10 @@ if isinstance(_lp_result, dict):
                 st.session_state["view"] = "chat"
                 st.session_state.pop("_show_rooms", None)
                 st.rerun()
+            if cur == "event_new":
+                # 予定登録 → カレンダーに戻る
+                st.session_state["view"] = "calendar"
+                st.rerun()
             if cur == "profile":
                 _reset_profile_widgets()
             elif cur == "room_edit":
@@ -3700,6 +3761,26 @@ if isinstance(_lp_result, dict):
             # ルーム選択ヘッダー左の 📅 → 家族共有カレンダー
             st.session_state["view"] = "calendar"
             st.session_state.pop("_show_rooms", None)
+            st.rerun()
+        elif _nav == "cal_select":
+            # カレンダーの日タップ → その日を選択（一覧を下に表示）
+            _d = _lp_result.get("date", "")
+            if _d:
+                st.session_state["cal_selected"] = _d
+                st.rerun()
+        elif _nav == "cal_month":
+            # 月タブ → 表示月を切り替え（YYYY-MM）
+            _ym = _lp_result.get("ym", "")
+            try:
+                _yy, _mm = _ym.split("-")
+                st.session_state["cal_year"]  = int(_yy)
+                st.session_state["cal_month"] = int(_mm)
+                st.rerun()
+            except Exception:
+                pass
+        elif _nav == "go_event_new":
+            # カレンダー右下の＋FAB → 予定登録画面
+            st.session_state["view"] = "event_new"
             st.rerun()
         elif _nav == "go_search":
             # チャットヘッダー ☰ メニュー → メッセージ検索画面
@@ -3849,6 +3930,8 @@ else:
             show_search(st.session_state.get("search_room", {}))
         case "calendar" if "current_user" in st.session_state:
             show_calendar(st.session_state["current_user"])
+        case "event_new" if "current_user" in st.session_state:
+            show_event_new(st.session_state["current_user"])
         case "room_create" if "current_user" in st.session_state:
             show_room_create()
         case "notifications" if "current_user" in st.session_state:

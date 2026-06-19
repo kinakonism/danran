@@ -1507,6 +1507,26 @@
           sendNav({ action: 'go_room_create', ts: Date.now() });
           return;
         }
+        // ── カレンダー ──
+        var calAdd = t.closest('[data-cal-add]');
+        if (calAdd) {
+          e.preventDefault(); e.stopPropagation();
+          try { showEditCover(); } catch (e2) {}
+          sendNav({ action: 'go_event_new', ts: Date.now() });
+          return;
+        }
+        var calMon = t.closest('[data-cal-month]');
+        if (calMon) {
+          e.preventDefault(); e.stopPropagation();
+          sendNav({ action: 'cal_month', ym: calMon.getAttribute('data-cal-month'), ts: Date.now() });
+          return;
+        }
+        var calDay = t.closest('[data-cal-day]');
+        if (calDay) {
+          e.preventDefault(); e.stopPropagation();
+          sendNav({ action: 'cal_select', date: calDay.getAttribute('data-cal-day'), ts: Date.now() });
+          return;
+        }
         var nav = t.closest('[data-room-nav]');
         if (nav) {
           e.preventDefault(); e.stopPropagation();
@@ -3854,7 +3874,7 @@
   var _lastViewForScroll = '';
   function scrollTopOnEditEnter() {
     try {
-      var editViews = { profile: 1, room_edit: 1, notifications: 1, album: 1, room_create: 1, settings: 1, calendar: 1 };
+      var editViews = { profile: 1, room_edit: 1, notifications: 1, album: 1, room_create: 1, settings: 1, calendar: 1, event_new: 1 };
       if (!editViews[VIEW]) {
         _lastViewForScroll = VIEW;   // chat 等に戻ったらリセット（次に編集へ入ると再度トップへ）
         return;

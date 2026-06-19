@@ -550,16 +550,17 @@ def fetch_events_day(day_iso: str) -> list[dict]:
         return []
 
 def create_event(day_iso: str, time_str: str, title: str, note: str,
-                 uid: str, name: str, end_str: str = "") -> dict:
+                 uid: str, name: str, end_str: str = "", place: str = "") -> dict:
     row = {"event_date": day_iso, "event_time": time_str or "", "event_end_time": end_str or "",
-           "title": title, "note": note or "", "created_by": uid, "created_by_name": name}
+           "title": title, "note": note or "", "place": place or "",
+           "created_by": uid, "created_by_name": name}
     return supabase.table("events").insert(row).execute().data[0]
 
 def update_event(event_id: str, day_iso: str, time_str: str, title: str,
-                 note: str, end_str: str = "") -> None:
+                 note: str, end_str: str = "", place: str = "") -> None:
     supabase.table("events").update({
         "event_date": day_iso, "event_time": time_str or "", "event_end_time": end_str or "",
-        "title": title, "note": note or "",
+        "title": title, "note": note or "", "place": place or "",
     }).eq("id", event_id).execute()
 
 def fetch_event(event_id: str) -> dict | None:
@@ -2675,6 +2676,11 @@ def _event_time_label(e: dict) -> str:
         return ""
     return f"{s}〜{en}" if en else s
 
+def _maps_url(place: str) -> str:
+    """住所/場所名 → Google マップ検索 URL（タップで地図アプリ/ブラウザが開く）。"""
+    import urllib.parse as _up
+    return "https://www.google.com/maps/search/?api=1&query=" + _up.quote(place)
+
 def _avatar_html(av: str, size: int = 22) -> str:
     """アバター（絵文字 or 写真URL）を小さく描く。"""
     av = av or "🙂"
@@ -2888,6 +2894,15 @@ def show_event_detail(current_user: dict) -> None:
         f'<div style="font-size:0.95rem;color:rgba(240,232,224,0.8);margin-top:6px">'
         f'{_html.escape(_dlabel)}{("　" + _html.escape(_tl)) if _tl else "　終日"}</div>'
         f'</div></div>'
+        # 場所（住所）: タップで Google マップが開く
+        + (f'<a href="{_html.escape(_maps_url(e["place"]))}" target="_blank" rel="noopener" '
+           f'style="display:flex;align-items:center;gap:10px;margin:16px 2px 0;padding:11px 14px;'
+           f'background:#241f1c;border-radius:12px;text-decoration:none;color:#f0a868;'
+           f'font-size:0.92rem;word-break:break-word">'
+           f'<span style="flex:0 0 auto;font-size:1.1rem">📍</span>'
+           f'<span style="flex:1;min-width:0">{_html.escape(e["place"])}</span>'
+           f'<span style="flex:0 0 auto;color:rgba(240,232,224,0.4)">地図 ›</span></a>'
+           if e.get("place") else "")
         + (f'<div style="margin:18px 2px 0;padding:12px 14px;background:#241f1c;border-radius:12px;'
            f'color:#f0e8e0;font-size:0.92rem;line-height:1.6;white-space:pre-wrap;word-break:break-word">'
            f'{_html.escape(e["note"])}</div>' if e.get("note") else "")
@@ -2912,6 +2927,8 @@ def show_event_detail(current_user: dict) -> None:
         if st.button("📨 main ルームに共有", use_container_width=True, key="evd_share"):
             _share_when = _dlabel + (("　" + _tl) if _tl else "　終日")
             _share_text = f"📅 予定を共有します\n{_share_when}\n{e['title']}"
+            if e.get("place"):
+                _share_text += f"\n📍{e['place']}"
             if e.get("note"):
                 _share_text += f"\n{e['note']}"
             try:
@@ -2977,6 +2994,7 @@ def show_event_new(current_user: dict) -> None:
             st.session_state["ev_time"]     = _parse_t(ev.get("event_time", ""))
             st.session_state["ev_time_end"] = _parse_t(ev.get("event_end_time", ""))
             st.session_state["ev_note"]     = ev.get("note", "")
+            st.session_state["ev_place"]    = ev.get("place", "")
         else:
             from datetime import time as _t
             try:
@@ -2993,6 +3011,7 @@ def show_event_new(current_user: dict) -> None:
             st.session_state["ev_time"] = _t(_now.hour, _mn)
             st.session_state["ev_time_end"] = _t((_now.hour + 1) % 24, _mn)
             st.session_state["ev_note"] = ""
+            st.session_state["ev_place"] = ""
 
     st.markdown("<br>", unsafe_allow_html=True)
     # 種まき済みなので value= は渡さず key のみ（Streamlit 推奨パターン）
@@ -3007,6 +3026,8 @@ def show_event_new(current_user: dict) -> None:
             tend = st.time_input("終了（任意）", key="ev_time_end")
     else:
         tval = tend = None
+    place = st.text_input("場所（任意）", placeholder="住所や場所名（タップで地図が開きます）",
+                          key="ev_place")
     note = st.text_input("メモ（任意）", key="ev_note")
     st.markdown("<br>", unsafe_allow_html=True)
     _btn = "✅ 変更を保存" if ev else "✅ この予定を登録"
@@ -3022,18 +3043,20 @@ def show_event_new(current_user: dict) -> None:
                 return
             try:
                 if ev:
-                    update_event(edit_id, iso, tstr, title.strip(), (note or "").strip(), end_str=estr)
+                    update_event(edit_id, iso, tstr, title.strip(), (note or "").strip(),
+                                 end_str=estr, place=(place or "").strip())
                     _msg = "✅ 予定を更新しました"
                     _next = "event_detail"   # 編集 → 更新後の詳細へ
                 else:
                     create_event(iso, tstr, title.strip(), (note or "").strip(),
-                                 current_user.get("id", ""), current_user.get("name", ""), end_str=estr)
+                                 current_user.get("id", ""), current_user.get("name", ""),
+                                 end_str=estr, place=(place or "").strip())
                     _push_event_added(current_user.get("id", ""),
                                       current_user.get("name", ""), iso, tstr, title.strip())
                     _msg = "✅ 予定を登録しました"
                     _next = "event_day"      # 新規 → 登録した日の予定リストへ
                 for k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_time_end", "ev_note",
-                          "_ev_seed", "event_edit_id", "_ev_new_origin"):
+                          "ev_place", "_ev_seed", "event_edit_id", "_ev_new_origin"):
                     st.session_state.pop(k, None)
                 st.session_state["cal_selected"] = iso
                 st.session_state["cal_year"]  = d.year
@@ -3958,7 +3981,7 @@ if isinstance(_lp_result, dict):
                 _was_edit = st.session_state.pop("event_edit_id", None)
                 _origin   = st.session_state.pop("_ev_new_origin", "calendar")
                 for _k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_time_end",
-                           "ev_note", "_ev_seed"):
+                           "ev_note", "ev_place", "_ev_seed"):
                     st.session_state.pop(_k, None)
                 st.session_state["view"] = "event_detail" if _was_edit else _origin
                 st.rerun()

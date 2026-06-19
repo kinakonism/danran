@@ -470,6 +470,16 @@ Slack の絵文字登録の danran 版。入力欄左の **😊 ボタン**（�
 - スワイプ戻りガード・スプラッシュ掃除リストに `STAMP_TRAY_ID` を追加済み（トレイ内タッチがドラッグに奪われない）
 - media_backup の対象バケットに stamps を含む
 
+### 家族カレンダー（2026-06-19〜）
+
+ルーム選択画面ヘッダー**左の 📅**（`data-hdr-calendar`→`go_calendar`）から開く家族共有カレンダー（全員が同じ予定表を見る・誰でも追加）。`view=='calendar'`・`_is_profile` 扱い（編集系フルビュー・＜で go_back→ルーム選択）。
+- `show_calendar()`: 月ナビ（◀ ◯年◯月 ▶）／曜日見出し／日グリッド（`calendar.Calendar(firstweekday=6)`＝日曜始まり・`st.columns(7)`のボタン。予定あり=末尾「・」／今日=`[15]`／選択日=primary琥珀）／選択日の予定一覧（時刻・メモ・作成者・🗑削除）／追加フォーム（終日チェック or 時刻・タイトル・メモ）。
+- `events` テーブル: id / event_date(date) / event_time(text `'HH:MM'`/`''`=終日) / title / note / created_by / created_by_name / created_at。INDEX(event_date)。RLS 全許可。
+- DB 関数: `fetch_events_month(y,m)` / `fetch_events_day(iso)` / `create_event(...)` / `delete_event(id)`（キャッシュなし）。
+- **通知**: 追加時に家族全員（追加者以外）へ Web Push（`_push_event_added`・メインスレッド）。
+- **朝リマインド**: bridge の `fire_event_reminders()` が毎日 8:00 JST 以降に1回、今日＋明日の予定を家族全員へ Push（`~/.danran_event_remind_sent` マーカーで1日1回・予定ゼロでもマーカーは記録して無駄打ち防止）。「明日◯◯」が前日通知・「今日◯◯」が当日通知を兼ねる。main ループで5分ごと判定。
+- events はバックアップ/リストア対象（bridge `BACKUP_TABLES` / `restore_backup.py`）。
+
 **孤児ファイルの自動掃除**: メッセージ/ルーム削除は主に JS 経由で Storage オブジェクトは残る（孤児）。bridge（mini）が **日次で `orphan_sweep()`** を実行し、`messages.image_url`（chat-images）/ `users.avatar`・`rooms.icon`（avatars）に参照されず **24時間より古い**オブジェクトを削除する。アップロード直後（メッセージ未挿入の窓）を消さないための猶予が24h。RLS は `danran_orphan_select`/`danran_orphan_delete`（chat-images/avatars に list/delete 許可）。anon key 運用なので service_role は不要。
 参照集合の取得は **`api_all()`（offset ページング）必須**。素の `api()` は PostgREST の最大1000行で切れ、欠けた参照を孤児と誤判定して使用中ファイルを消す。
 **★ 参照カラムの漏れに注意（実害事故あり）**: avatars の参照は `users.avatar`・`rooms.icon`・**`users.cover_url`**（プロフィール背景）＋固定保護 `ai-bot.png`、chat-images は `messages.image_url`・**`messages.reply_to_image`**（引用サムネ）。cover_url が漏れていて、まさとの背景画像を日次掃除が誤削除した（2026-06-10 発覚・復元不能）。**Storage を参照するカラムを増やしたら必ず orphan_sweep の refs に足すこと。**

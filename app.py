@@ -1045,7 +1045,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v167",   # カレンダー全画面化＋日付タップで別画面(その日の予定)へ分離
+    "danran_lp_v168",   # カレンダー余白詰め＋📅ボタンを委譲ハンドラ化(取りこぼし対策)
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2756,7 +2756,7 @@ def show_calendar(current_user: dict) -> None:
         # ★ グリッドを画面の高さいっぱいに（6 行を均等に伸ばす）。高齢の家族にも見やすく。
         '.dr-cal{gap:1px;background:rgba(255,255,255,0.07);'
         'border:1px solid rgba(255,255,255,0.07);border-radius:8px;overflow:hidden;'
-        'height:calc(100dvh - 196px);grid-auto-rows:1fr}'
+        'height:calc(100dvh - 158px);grid-auto-rows:1fr}'
         '.dr-cal-cell{background:#1a1614;min-height:0;padding:4px 3px;cursor:pointer;'
         'overflow:hidden;-webkit-tap-highlight-color:transparent}'
         '.dr-cal-cell.other{opacity:0.38}'
@@ -2777,7 +2777,9 @@ def show_calendar(current_user: dict) -> None:
         '</style>'
     )
     # カレンダー月表示はグリッドのみ（その日の予定は日付タップで別画面へ）。＋FAB は新規登録。
-    st.html(_cal_css + head_html + tabs_html + grid_html
+    # ★ Streamlit の要素間スペースで上に空きができるため、ラッパーを負マージンで引き上げる。
+    st.html(_cal_css
+            + '<div style="margin-top:-42px">' + head_html + tabs_html + grid_html + '</div>'
             + '<button id="dr-cal-fab" data-cal-add="1">＋</button>')
 
 def show_event_day(current_user: dict) -> None:

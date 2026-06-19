@@ -1576,6 +1576,13 @@
           return;
         }
         // ── カレンダー ──
+        var calNav = t.closest('[data-hdr-calendar]');
+        if (calNav) {
+          e.preventDefault(); e.stopPropagation();
+          try { showEditCover(); } catch (e2) {}
+          sendNav({ action: 'go_calendar', ts: Date.now() });
+          return;
+        }
         var calAdd = t.closest('[data-cal-add]');
         if (calAdd) {
           e.preventDefault(); e.stopPropagation();
@@ -2219,15 +2226,8 @@
           sendNav({ action: 'go_event_edit', ts: Date.now() });
         });
       }
-      // ルーム選択ヘッダー左の 📅 → カレンダー画面
-      var calBtn = pDoc.querySelector('[data-hdr-calendar]');
-      if (calBtn && !calBtn._danranHdrCalendar) {
-        calBtn._danranHdrCalendar = true;
-        calBtn.addEventListener('click', function () {
-          try { showEditCover(); } catch (e2) {}
-          sendNav({ action: 'go_calendar', ts: Date.now() });
-        });
-      }
+      // ※ 📅 カレンダー(data-hdr-calendar)は委譲ハンドラ attachRoomHandlers 側で処理する
+      //   （per-element 付与だと再描画タイミングでタップを取りこぼすことがあったため）。
       // ルーム選択ヘッダーの ⚙️ → 設定画面
       var setBtn = pDoc.querySelector('[data-hdr-settings]');
       if (setBtn && !setBtn._danranHdrSettings) {

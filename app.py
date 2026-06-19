@@ -2881,13 +2881,27 @@ def show_event_detail(current_user: dict) -> None:
           f'<span style="color:rgba(240,232,224,0.75);font-size:0.9rem">'
           f'{_html.escape(_name)} が登録</span></div>'
     )
-    # 作成者のみ削除（編集はヘッダー右上の✏️）
+    # 作成者のみ削除（編集はヘッダー右上の✏️）。削除は2段階確認。
     if _uid and _uid == current_user.get("id", ""):
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🗑 この予定を削除", use_container_width=True, key="evd_del"):
-            delete_event(eid)
-            st.session_state["view"] = "event_day"   # 削除後はその日のリストへ
-            st.rerun()
+        _ck = f"evd_confirm_{eid}"
+        if st.session_state.get(_ck):
+            st.warning("この予定を削除しますか？元に戻せません。")
+            _c1, _c2 = st.columns(2)
+            with _c1:
+                if st.button("いいえ", use_container_width=True, key="evd_del_no"):
+                    st.session_state.pop(_ck, None)
+                    st.rerun()
+            with _c2:
+                if st.button("はい、削除", type="primary", use_container_width=True, key="evd_del_yes"):
+                    delete_event(eid)
+                    st.session_state.pop(_ck, None)
+                    st.session_state["view"] = "event_day"   # 削除後はその日のリストへ
+                    st.rerun()
+        else:
+            if st.button("🗑 この予定を削除", use_container_width=True, key="evd_del"):
+                st.session_state[_ck] = True
+                st.rerun()
 
 def show_event_new(current_user: dict) -> None:
     """予定の登録／編集画面（＋FAB＝新規／詳細の✏️＝編集）。"""

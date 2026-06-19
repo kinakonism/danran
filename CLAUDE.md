@@ -473,7 +473,10 @@ Slack の絵文字登録の danran 版。入力欄左の **😊 ボタン**（�
 ### 家族カレンダー（2026-06-19〜）
 
 ルーム選択画面ヘッダー**左の 📅**（`data-hdr-calendar`→`go_calendar`）から開く家族共有カレンダー（全員が同じ予定表を見る・誰でも追加）。`view=='calendar'`・`_is_profile` 扱い（編集系フルビュー・＜で go_back→ルーム選択）。
-- `show_calendar()`: 月ナビ（◀ ◯年◯月 ▶）／曜日見出し／日グリッド（`calendar.Calendar(firstweekday=6)`＝日曜始まり・`st.columns(7)`のボタン。予定あり=末尾「・」／今日=`[15]`／選択日=primary琥珀）／選択日の予定一覧（時刻・メモ・作成者・🗑削除）／追加フォーム（終日チェック or 時刻・タイトル・メモ）。
+- `show_calendar()`: **Google 風 HTML グリッド**（`st.html` で CSS グリッド描画）。月切り替えタブ（横スクロール・今月-1〜+13ヶ月）／曜日見出し／6週グリッド（`monthdatescalendar`＝前後月含む・今日は琥珀丸・選択日は枠・予定は**作成者ごとの色チップ**最大3件＋「+N」）／選択日の予定一覧（色ドット・時刻・メモ・作成者・🗑削除）。右下に**＋FAB**（`#dr-cal-fab`）。
+  - **★ `st.columns(7)` でグリッドを組むのは不可**（スマホの細い幅で縦積みに崩れる）。必ず `st.html` の CSS グリッドで描く。タップは Python 描画要素なので JS の委譲ハンドラ（`attachRoomHandlers` 内）で拾う: `data-cal-day`→`cal_select` / `data-cal-month`→`cal_month` / `data-cal-add`→`go_event_new`。
+  - 予定の色は作成者 uid のハッシュで固定（`_event_color`・`_EVENT_COLORS` パレット）。
+- `show_event_new()`: ＋FAB から開く予定登録画面（`view=='event_new'`）。日付（`st.date_input` 既定=選択日）・終日/時刻・タイトル・メモ→登録でその日へ移動しカレンダーへ戻る。＜（go_back）は calendar に戻す。
 - `events` テーブル: id / event_date(date) / event_time(text `'HH:MM'`/`''`=終日) / title / note / created_by / created_by_name / created_at。INDEX(event_date)。RLS 全許可。
 - DB 関数: `fetch_events_month(y,m)` / `fetch_events_day(iso)` / `create_event(...)` / `delete_event(id)`（キャッシュなし）。
 - **通知**: 追加時に家族全員（追加者以外）へ Web Push（`_push_event_added`・メインスレッド）。

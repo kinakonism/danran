@@ -2699,15 +2699,15 @@ def show_calendar(current_user: dict) -> None:
     for e in ev_month:
         by_day.setdefault(e["event_date"], []).append(e)
 
-    # ── 月切り替えタブ（Google 風・横スクロール。今年1月〜13ヶ月先＝過去の予定も見られる）──
+    # ── 月切り替えタブ（Google 風・6ヶ月分を画面幅いっぱいに均等配置＝スクロールなしで端が切れない）──
+    #   表示中の月を中心に 前2〜先3ヶ月。さらに過去/未来はグリッドの左右スワイプで遡れる。
     _tabs = []
-    for off in range(-(today.month - 1), 14):   # 今年1月 〜 今月+13
-        ty = today.year + (today.month - 1 + off) // 12
-        tm = (today.month - 1 + off) % 12 + 1
-        on = (ty == y and tm == m)
+    for off in range(-2, 4):   # 表示月の -2 〜 +3（計6タブ）
+        _idx = y * 12 + (m - 1) + off
+        ty, tm = _idx // 12, _idx % 12 + 1
         _tabs.append(
-            f'<button class="dr-mtab{" on" if on else ""}" data-cal-month="{ty:04d}-{tm:02d}">'
-            f'{tm}月{("&#x2009;" + str(ty)[2:] + "年") if tm == 1 else ""}</button>'
+            f'<button class="dr-mtab{" on" if off == 0 else ""}" data-cal-month="{ty:04d}-{tm:02d}">'
+            f'{tm}月</button>'
         )
     tabs_html = '<div class="dr-mtabs">' + "".join(_tabs) + '</div>'
 
@@ -2755,11 +2755,9 @@ def show_calendar(current_user: dict) -> None:
 
     _cal_css = (
         '<style>'
-        '.dr-mtabs{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 10px;'
-        '-webkit-overflow-scrolling:touch;scrollbar-width:none}'
-        '.dr-mtabs::-webkit-scrollbar{display:none}'
-        '.dr-mtab{flex:0 0 auto;padding:6px 15px;border-radius:16px;cursor:pointer;'
-        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;'
+        '.dr-mtabs{display:flex;gap:6px;padding:2px 0 10px}'
+        '.dr-mtab{flex:1 1 0;min-width:0;padding:7px 0;border-radius:16px;cursor:pointer;'
+        'text-align:center;border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;'
         'font-size:0.85rem;white-space:nowrap;-webkit-tap-highlight-color:transparent}'
         '.dr-mtab.on{background:#f0a868;color:#1a1614;border-color:#f0a868;font-weight:700}'
         # ★ ヘッダー直下〜画面下端に固定配置。スクロール無しで月全体がピタッと収まる。

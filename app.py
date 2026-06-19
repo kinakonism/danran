@@ -2895,8 +2895,14 @@ def show_event_detail(current_user: dict) -> None:
     )
     # mainルームに共有（誰でも可）。予定メッセージを投稿し、タップで詳細へ戻れる
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.session_state.pop(f"evd_shared_{eid}", False):
+    if st.session_state.get(f"evd_shared_{eid}"):
         st.success("✅ main ルームに共有しました")
+        if st.button("📨 main を開く", type="primary", use_container_width=True, key="evd_open_main"):
+            st.session_state.pop(f"evd_shared_{eid}", None)
+            st.session_state["active_room"] = "main"
+            st.session_state["view"] = "chat"
+            st.session_state.pop("_show_rooms", None)
+            st.rerun()
     if st.button("📨 main ルームに共有", use_container_width=True, key="evd_share"):
         _share_when = _dlabel + (("　" + _tl) if _tl else "　終日")
         _share_text = f"📅 予定を共有します\n{_share_when}\n{e['title']}"
@@ -2925,7 +2931,13 @@ def show_event_detail(current_user: dict) -> None:
                 if st.button("はい、削除", type="primary", use_container_width=True, key="evd_del_yes"):
                     delete_event(eid)
                     st.session_state.pop(_ck, None)
-                    st.session_state["view"] = "event_day"   # 削除後はその日のリストへ
+                    # 削除後は来た元へ（チャット共有から来たらチャットへ）
+                    _from = st.session_state.pop("_ev_detail_from", "event_day")
+                    if _from == "chat":
+                        st.session_state["view"] = "chat"
+                        st.session_state.pop("_show_rooms", None)
+                    else:
+                        st.session_state["view"] = "event_day"
                     st.rerun()
         else:
             if st.button("🗑 この予定を削除", use_container_width=True, key="evd_del"):
@@ -3946,8 +3958,14 @@ if isinstance(_lp_result, dict):
                 st.session_state["view"] = "event_detail" if _was_edit else _origin
                 st.rerun()
             if cur == "event_detail":
-                # 詳細はその日の予定リストから来る → 戻りはその日
-                st.session_state["view"] = "event_day"
+                # 来た元へ直帰（チャットの共有チップから来たらそのチャットへ）
+                st.session_state.pop(f"evd_shared_{st.session_state.get('event_view_id','')}", None)
+                _from = st.session_state.pop("_ev_detail_from", "event_day")
+                if _from == "chat":
+                    st.session_state["view"] = "chat"
+                    st.session_state.pop("_show_rooms", None)
+                else:
+                    st.session_state["view"] = "event_day"
                 st.rerun()
             if cur == "event_day":
                 st.session_state["view"] = "calendar"
@@ -4041,6 +4059,8 @@ if isinstance(_lp_result, dict):
             _eid = _lp_result.get("event_id", "")
             if _eid:
                 st.session_state["event_view_id"] = _eid
+                # 詳細に来た元の場所を記録（戻るで直帰する）。chat 共有チップ or その日のリスト
+                st.session_state["_ev_detail_from"] = st.session_state.get("view", "")
                 _ev_o = fetch_event(_eid)
                 if _ev_o and _ev_o.get("event_date"):
                     st.session_state["cal_selected"] = _ev_o["event_date"]

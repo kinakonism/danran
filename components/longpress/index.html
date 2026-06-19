@@ -1528,6 +1528,21 @@
     el.addEventListener('touchcancel', endFn, { passive: true });
   }
 
+  // カレンダー: 日付を選び直したら、その日の予定リストへ自動スクロール（Google 風）。
+  //   選択値(data-sel)の変化を親ドキュメントに記録して判定（rerun で iframe が変わっても保持）。
+  function scrollCalAgenda(pDoc) {
+    if (pDoc._danranView !== 'calendar') return;
+    var a = pDoc.getElementById('dr-ev-anchor');
+    if (!a) return;
+    var sel = a.getAttribute('data-sel') || '';
+    if (pDoc._danranCalLastSel === undefined) { pDoc._danranCalLastSel = sel; return; }  // 初回は記録のみ
+    if (sel !== pDoc._danranCalLastSel) {
+      pDoc._danranCalLastSel = sel;
+      try { a.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      catch (e) { try { a.scrollIntoView(); } catch (e2) {} }
+    }
+  }
+
   // カレンダーの月タブ: 選択中(.on)タブを横スクロールで中央に寄せる（描画ごとに1回）。
   function centerCalTab() {
     var pDoc = window.parent.document;
@@ -2266,6 +2281,7 @@
     attachRoomHandlers();   // ルームリストのカスタムHTMLボタンにイベントを付与
     try { centerCalTab(); } catch (e) {}   // カレンダー: 選択中の月タブを中央に寄せる
     try { setupCalSwipe(window.parent.document); } catch (e) {}   // カレンダー: 左右スワイプで月送り
+    try { scrollCalAgenda(window.parent.document); } catch (e) {} // カレンダー: 日選択で予定リストへスクロール
     injectSwSetup();        // Service Worker 登録（1回のみ）
     injectPushPrompt();     // 通知許可バナー（ルーム一覧・未許可時のみ・JSフォールバック）
     injectNotifSettings();  // 通知設定画面の UI（VIEW=notifications のときのみ）

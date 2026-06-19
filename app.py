@@ -1045,7 +1045,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v165",   # カレンダー: スワイプ堅牢化・予定の全画面詳細＋編集（✏️）
+    "danran_lp_v166",   # カレンダー: 日選択で予定リストへ自動スクロール
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2780,6 +2780,8 @@ def show_calendar(current_user: dict) -> None:
             + '<button id="dr-cal-fab" data-cal-add="1">＋</button>')
 
     # ── 選択日の予定一覧（タップした日／既定は今日）──
+    # アンカー: 日付タップで JS がこの位置へ自動スクロール（Google 風）
+    st.html(f'<div id="dr-ev-anchor" data-sel="{sel}" style="scroll-margin-top:62px"></div>')
     try:
         sd = datetime.fromisoformat(sel).date()
         sd_label = f"{sd.month}月{sd.day}日（{_WEEK_JP[(sd.weekday() + 1) % 7]}）"

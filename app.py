@@ -529,37 +529,41 @@ def get_user_with_hash(user_id: str) -> dict | None:
 # カレンダー（家族共有の予定表）
 # ─────────────────────────────────────
 def fetch_events_month(year: int, month: int) -> list[dict]:
-    """指定月の予定を日付・時刻順で返す。"""
+    """指定月に「かかっている」予定を返す（日をまたぐ予定も含む＝期間が月と重なるもの）。"""
     from calendar import monthrange
     start = f"{year:04d}-{month:02d}-01"
     end   = f"{year:04d}-{month:02d}-{monthrange(year, month)[1]:02d}"
     try:
+        # 期間 [event_date, end_date] が月 [start, end] と重なる: event_date<=end AND end_date>=start
         return supabase.table("events").select("*")\
-            .gte("event_date", start).lte("event_date", end)\
+            .lte("event_date", end).gte("end_date", start)\
             .order("event_date").order("event_time").execute().data or []
     except Exception:
         return []
 
 def fetch_events_day(day_iso: str) -> list[dict]:
-    """指定日（YYYY-MM-DD）の予定を時刻順で返す。"""
+    """指定日にかかっている予定を時刻順で返す（日をまたぐ予定も中日に表示）。"""
     try:
         return supabase.table("events").select("*")\
-            .eq("event_date", day_iso)\
+            .lte("event_date", day_iso).gte("end_date", day_iso)\
             .order("event_time").execute().data or []
     except Exception:
         return []
 
 def create_event(day_iso: str, time_str: str, title: str, note: str,
-                 uid: str, name: str, end_str: str = "", place: str = "") -> dict:
-    row = {"event_date": day_iso, "event_time": time_str or "", "event_end_time": end_str or "",
+                 uid: str, name: str, end_str: str = "", place: str = "",
+                 end_date: str = "") -> dict:
+    row = {"event_date": day_iso, "end_date": end_date or day_iso,
+           "event_time": time_str or "", "event_end_time": end_str or "",
            "title": title, "note": note or "", "place": place or "",
            "created_by": uid, "created_by_name": name}
     return supabase.table("events").insert(row).execute().data[0]
 
 def update_event(event_id: str, day_iso: str, time_str: str, title: str,
-                 note: str, end_str: str = "", place: str = "") -> None:
+                 note: str, end_str: str = "", place: str = "", end_date: str = "") -> None:
     supabase.table("events").update({
-        "event_date": day_iso, "event_time": time_str or "", "event_end_time": end_str or "",
+        "event_date": day_iso, "end_date": end_date or day_iso,
+        "event_time": time_str or "", "event_end_time": end_str or "",
         "title": title, "note": note or "", "place": place or "",
     }).eq("id", event_id).execute()
 
@@ -2676,6 +2680,55 @@ def _event_time_label(e: dict) -> str:
         return ""
     return f"{s}〜{en}" if en else s
 
+@st.cache_data(ttl=86400)
+def _jp_holidays(year: int) -> dict:
+    """日本の祝日 {YYYY-MM-DD: 名称}。依存なしで計算（ハッピーマンデー・春分/秋分・
+    振替休日・国民の休日に対応。1980〜2099 で有効）。"""
+    import datetime as _dt
+    h: dict = {}
+    def add(m, d, name): h[_dt.date(year, m, d)] = name
+    def nth_mon(m, n):
+        d = _dt.date(year, m, 1); off = (0 - d.weekday()) % 7
+        return d + _dt.timedelta(days=off + 7 * (n - 1))
+    add(1, 1, "元日"); h[nth_mon(1, 2)] = "成人の日"
+    add(2, 11, "建国記念の日"); add(2, 23, "天皇誕生日")
+    _v = int(20.8431 + 0.242194 * (year - 1980) - (year - 1980) // 4)
+    h[_dt.date(year, 3, _v)] = "春分の日"
+    add(4, 29, "昭和の日"); add(5, 3, "憲法記念日"); add(5, 4, "みどりの日"); add(5, 5, "こどもの日")
+    h[nth_mon(7, 3)] = "海の日"; add(8, 11, "山の日"); h[nth_mon(9, 3)] = "敬老の日"
+    _a = int(23.2488 + 0.242194 * (year - 1980) - (year - 1980) // 4)
+    h[_dt.date(year, 9, _a)] = "秋分の日"
+    h[nth_mon(10, 2)] = "スポーツの日"; add(11, 3, "文化の日"); add(11, 23, "勤労感謝の日")
+    _keiro, _shubun = nth_mon(9, 3), _dt.date(year, 9, _a)
+    if (_shubun - _keiro).days == 2:
+        h[_keiro + _dt.timedelta(days=1)] = "国民の休日"
+    _subs = {}
+    for d in sorted(h):
+        if d.weekday() == 6:   # 日曜と重なる祝日 → 翌日以降の最初の非祝日が振替休日
+            nd = d + _dt.timedelta(days=1)
+            while nd in h or nd in _subs:
+                nd += _dt.timedelta(days=1)
+            _subs[nd] = "振替休日"
+    h.update(_subs)
+    return {d.isoformat(): n for d, n in h.items()}
+
+def _date_range_label(e: dict) -> str:
+    """予定の日付ラベル。単日は『2026年6月19日（金）』、複数日は『… 〜 6月21日（日）』。"""
+    s  = e.get("event_date", "")
+    en = e.get("end_date", "") or s
+    try:
+        ds = datetime.fromisoformat(s).date()
+        de = datetime.fromisoformat(en).date()
+    except Exception:
+        return s
+    def _full(d):
+        return f"{d.year}年{d.month}月{d.day}日（{_WEEK_JP[(d.weekday()+1)%7]}）"
+    if ds == de:
+        return _full(ds)
+    _end = (_full(de) if de.year != ds.year
+            else f"{de.month}月{de.day}日（{_WEEK_JP[(de.weekday()+1)%7]}）")
+    return f"{_full(ds)} 〜 {_end}"
+
 def _maps_url(place: str) -> str:
     """住所/場所名 → Google マップ検索 URL（タップで地図アプリ/ブラウザが開く）。"""
     import urllib.parse as _up
@@ -2699,11 +2752,21 @@ def show_calendar(current_user: dict) -> None:
     m = st.session_state.get("cal_month", today.month)
     sel = st.session_state.get("cal_selected", today.isoformat())
 
-    # ── この月の予定を日付ごとに集計 ──
+    # ── この月の予定を日付ごとに集計（日をまたぐ予定は各日に入れる）──
+    from datetime import date as _date2, timedelta as _td2
     ev_month = fetch_events_month(y, m)
     by_day: dict[str, list[dict]] = {}
     for e in ev_month:
-        by_day.setdefault(e["event_date"], []).append(e)
+        try:
+            _s  = _date2.fromisoformat(e["event_date"])
+            _en = _date2.fromisoformat(e.get("end_date") or e["event_date"])
+        except Exception:
+            by_day.setdefault(e["event_date"], []).append(e); continue
+        _dd = _s
+        _guard = 0
+        while _dd <= _en and _guard < 400:
+            by_day.setdefault(_dd.isoformat(), []).append(e)
+            _dd += _td2(days=1); _guard += 1
 
     # ── 月切り替えタブ（左端‹=前月 / 右端›=次月 / 中央に月タブ4つ。画面幅いっぱい・スクロールなし）──
     #   矢印やタブ・スワイプで表示月が変わると、タブ全体が1つずつスライドして動く。
@@ -2735,16 +2798,29 @@ def show_calendar(current_user: dict) -> None:
         for i, w in enumerate(_WEEK_JP)
     ) + '</div>'
 
-    # ── 月グリッド（前後の月の日も含む Google 風 6 週）──
+    # ── 月グリッド（前後の月の日も含む Google 風 6 週・祝日表示つき）──
+    _weeks = _cal.Calendar(firstweekday=6).monthdatescalendar(y, m)
+    _hol = {}
+    for _yy in {_weeks[0][0].year, y, _weeks[-1][-1].year}:   # グリッドにかかる年すべて
+        _hol.update(_jp_holidays(_yy))
     cells = []
-    for week in _cal.Calendar(firstweekday=6).monthdatescalendar(y, m):
+    for week in _weeks:
         for d in week:
             iso = d.isoformat()
             inm = (d.month == m)
             is_today = (d == today)
             is_sel   = (iso == sel)
+            holname  = _hol.get(iso)
             _cls = "dr-cal-cell" + ("" if inm else " other") + (" sel" if is_sel else "")
-            _numcls = "dr-cal-num" + (" today" if is_today else "")
+            # 数字の色: 今日=丸 / 祝日・日曜=赤 / 土曜=青 / 平日=既定
+            _numcls = "dr-cal-num"
+            if is_today:
+                _numcls += " today"
+            elif holname or d.weekday() == 6:   # 6=日曜
+                _numcls += " hol"
+            elif d.weekday() == 5:              # 5=土曜
+                _numcls += " sat"
+            _hol_html = (f'<div class="dr-cal-hol">{_html.escape(holname)}</div>' if holname else "")
             _evs = by_day.get(iso, [])
             _chips = "".join(
                 f'<div class="dr-cal-ev" style="background:{_event_color(e.get("created_by",""))}">'
@@ -2756,7 +2832,7 @@ def show_calendar(current_user: dict) -> None:
                 _chips += f'<div class="dr-cal-more">+{len(_evs) - 4}</div>'
             cells.append(
                 f'<div class="{_cls}" data-cal-day="{iso}">'
-                f'<div class="{_numcls}">{d.day}</div>{_chips}</div>'
+                f'<div class="{_numcls}">{d.day}</div>{_hol_html}{_chips}</div>'
             )
     # data-cal-cur: JS のスワイプ月送りが現在表示月を読む
     grid_html = (f'<div id="dr-cal-swipe" data-cal-cur="{y:04d}-{m:02d}">'
@@ -2793,6 +2869,10 @@ def show_calendar(current_user: dict) -> None:
         'height:24px;margin-bottom:2px}'
         '.dr-cal-num.today{background:#f0a868;color:#1a1614;border-radius:50%;'
         'width:24px;font-weight:800;margin:0 auto 2px}'
+        '.dr-cal-num.hol{color:#e0654f}'        # 祝日・日曜は赤
+        '.dr-cal-num.sat{color:#6a9bd0}'        # 土曜は青
+        '.dr-cal-hol{font-size:0.58rem;color:#e0654f;line-height:1.25;text-align:center;'
+        'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:1px}'
         '.dr-cal-ev{font-size:0.68rem;line-height:1.4;border-radius:3px;padding:1px 4px;'
         'margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a1614;'
         'font-weight:600}'
@@ -2817,12 +2897,15 @@ def show_event_day(current_user: dict) -> None:
     try:
         sd = datetime.fromisoformat(sel).date()
         sd_label = f"{sd.year}年{sd.month}月{sd.day}日（{_WEEK_JP[(sd.weekday() + 1) % 7]}）"
+        _holname = _jp_holidays(sd.year).get(sel)
     except Exception:
-        sd_label = sel
+        sd_label = sel; _holname = None
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown(f"### 📅 {sd_label}"
                 + ("　<span style='font-size:0.78rem;color:#f0a868'>今日</span>"
-                   if sel == today.isoformat() else ""),
+                   if sel == today.isoformat() else "")
+                + (f"　<span style='font-size:0.8rem;color:#e0654f'>{_html.escape(_holname)}</span>"
+                   if _holname else ""),
                 unsafe_allow_html=True)
 
     _umap = {u["id"]: u for u in fetch_all_users()}
@@ -2877,11 +2960,7 @@ def show_event_detail(current_user: dict) -> None:
     _u    = next((u for u in fetch_all_users() if u["id"] == _uid), {})
     _name = _u.get("name") or e.get("created_by_name", "")
     _col  = _event_color(_uid)
-    try:
-        _d = datetime.fromisoformat(e["event_date"]).date()
-        _dlabel = f"{_d.year}年{_d.month}月{_d.day}日（{_WEEK_JP[(_d.weekday()+1)%7]}）"
-    except Exception:
-        _dlabel = e.get("event_date", "")
+    _dlabel = _date_range_label(e)
     _tl = _event_time_label(e)
     st.markdown("<br>", unsafe_allow_html=True)
     st.html(
@@ -2989,6 +3068,12 @@ def show_event_new(current_user: dict) -> None:
                 st.session_state["ev_date"] = _date.fromisoformat(ev["event_date"])
             except Exception:
                 st.session_state["ev_date"] = today
+            try:
+                _ed = _date.fromisoformat(ev.get("end_date") or ev["event_date"])
+            except Exception:
+                _ed = st.session_state["ev_date"]
+            st.session_state["ev_end_date"] = _ed
+            st.session_state["ev_multi"]    = (_ed != st.session_state["ev_date"])
             st.session_state["ev_title"]    = ev.get("title", "")
             st.session_state["ev_allday"]   = not (ev.get("event_time") or "")
             st.session_state["ev_time"]     = _parse_t(ev.get("event_time", ""))
@@ -3002,6 +3087,8 @@ def show_event_new(current_user: dict) -> None:
                     st.session_state.get("cal_selected", today.isoformat()))
             except Exception:
                 st.session_state["ev_date"] = today
+            st.session_state["ev_end_date"] = st.session_state["ev_date"]
+            st.session_state["ev_multi"] = False
             # 時刻の初期値は「現在時刻（5分丸め）」と「その1時間後」。
             # 終日を外したときにドロップダウンが今の時間あたりから開く。
             _now = datetime.now(JST)
@@ -3015,7 +3102,16 @@ def show_event_new(current_user: dict) -> None:
 
     st.markdown("<br>", unsafe_allow_html=True)
     # 種まき済みなので value= は渡さず key のみ（Streamlit 推奨パターン）
-    d = st.date_input("日付", key="ev_date", format="YYYY/MM/DD")
+    multi = st.checkbox("数日にまたがる予定", key="ev_multi")
+    if multi:
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            d = st.date_input("開始日", key="ev_date", format="YYYY/MM/DD")
+        with dc2:
+            dend = st.date_input("終了日", key="ev_end_date", format="YYYY/MM/DD")
+    else:
+        d = st.date_input("日付", key="ev_date", format="YYYY/MM/DD")
+        dend = d
     title = st.text_input("予定", placeholder="例：パパ通院 / 〇〇の誕生日", key="ev_title")
     allday = st.checkbox("終日", key="ev_allday")
     if not allday:
@@ -3036,27 +3132,32 @@ def show_event_new(current_user: dict) -> None:
             st.error("予定の内容を入力してください")
         else:
             iso  = d.isoformat()
+            iso_end = dend.isoformat() if multi else iso
+            if iso_end < iso:
+                st.error("終了日は開始日より後にしてください")
+                return
             tstr = "" if allday or tval is None else tval.strftime("%H:%M")
             estr = "" if allday or tend is None else tend.strftime("%H:%M")
-            if tstr and estr and estr < tstr:
+            if not multi and tstr and estr and estr < tstr:
                 st.error("終了時刻は開始時刻より後にしてください")
                 return
             try:
                 if ev:
                     update_event(edit_id, iso, tstr, title.strip(), (note or "").strip(),
-                                 end_str=estr, place=(place or "").strip())
+                                 end_str=estr, place=(place or "").strip(), end_date=iso_end)
                     _msg = "✅ 予定を更新しました"
                     _next = "event_detail"   # 編集 → 更新後の詳細へ
                 else:
                     create_event(iso, tstr, title.strip(), (note or "").strip(),
                                  current_user.get("id", ""), current_user.get("name", ""),
-                                 end_str=estr, place=(place or "").strip())
+                                 end_str=estr, place=(place or "").strip(), end_date=iso_end)
                     _push_event_added(current_user.get("id", ""),
                                       current_user.get("name", ""), iso, tstr, title.strip())
                     _msg = "✅ 予定を登録しました"
                     _next = "event_day"      # 新規 → 登録した日の予定リストへ
-                for k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_time_end", "ev_note",
-                          "ev_place", "_ev_seed", "event_edit_id", "_ev_new_origin"):
+                for k in ("ev_date", "ev_end_date", "ev_multi", "ev_title", "ev_allday",
+                          "ev_time", "ev_time_end", "ev_note", "ev_place",
+                          "_ev_seed", "event_edit_id", "_ev_new_origin"):
                     st.session_state.pop(k, None)
                 st.session_state["cal_selected"] = iso
                 st.session_state["cal_year"]  = d.year
@@ -3980,8 +4081,8 @@ if isinstance(_lp_result, dict):
                 # 予定登録/編集 → 編集中なら詳細へ、新規なら呼び出し元（カレンダー/その日）へ
                 _was_edit = st.session_state.pop("event_edit_id", None)
                 _origin   = st.session_state.pop("_ev_new_origin", "calendar")
-                for _k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_time_end",
-                           "ev_note", "ev_place", "_ev_seed"):
+                for _k in ("ev_date", "ev_end_date", "ev_multi", "ev_title", "ev_allday",
+                           "ev_time", "ev_time_end", "ev_note", "ev_place", "_ev_seed"):
                     st.session_state.pop(_k, None)
                 st.session_state["view"] = "event_detail" if _was_edit else _origin
                 st.rerun()

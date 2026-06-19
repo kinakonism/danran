@@ -442,10 +442,12 @@ def fire_event_reminders():
         except Exception:
             pass
         tomorrow = (now.date() + timedelta(days=1)).isoformat()
-        ev_today = api("GET", "events?select=event_time,event_end_time,title&event_date=eq." + today
-                       + "&order=event_time.asc") or []
-        ev_tom   = api("GET", "events?select=event_time,event_end_time,title&event_date=eq." + tomorrow
-                       + "&order=event_time.asc") or []
+        # 日をまたぐ予定も拾う: event_date<=その日 AND end_date>=その日
+        _sel = "event_time,event_end_time,title"
+        ev_today = api("GET", f"events?select={_sel}&event_date=lte.{today}&end_date=gte.{today}"
+                       "&order=event_time.asc") or []
+        ev_tom   = api("GET", f"events?select={_sel}&event_date=lte.{tomorrow}&end_date=gte.{tomorrow}"
+                       "&order=event_time.asc") or []
         # マーカーは「予定の有無に関わらず」今日分として記録（毎ループ走査を防ぐ）
         open(EVENT_REMIND_MARKER, "w").write(today)
         if not ev_today and not ev_tom:

@@ -43,6 +43,7 @@ TABLES = (
     ("push_subscriptions", "id"),
     ("ai_tasks",           "id"),
     ("ai_reminders",       "id"),
+    ("events",             "id"),
 )
 BATCH = 500
 

@@ -413,6 +413,54 @@ def fire_due_reminders():
     except Exception as e:
         print("[danran-bridge] fire_due_reminders err:", e)
 
+# ── 家族カレンダー: 毎朝のイベントリマインド ────────────────────────────
+#   毎日 8:00 JST 以降に1回、今日・明日の予定を家族全員へ Web Push。
+#   「明日◯◯」で前日通知・「今日◯◯」で当日通知を1通のダイジェストで兼ねる。
+EVENT_REMIND_HOUR   = 8   # この時刻(JST)以降にその日の分を送る
+EVENT_REMIND_MARKER = os.path.expanduser("~/.danran_event_remind_sent")  # 最終送信日(YYYY-MM-DD)
+AI_ROOM_FOR_EVENTS  = ROOM   # 一覧投稿はしない（Push のみ）。将来 main 等に出すならここ
+
+def _fmt_events(rows):
+    out = []
+    for e in rows:
+        t = (e.get("event_time") or "").strip()
+        out.append((f"{t} " if t else "") + (e.get("title") or ""))
+    return "・".join(out)
+
+def fire_event_reminders():
+    """毎朝、今日と明日の予定を家族全員に Push（1日1回・マーカーで重複防止）。"""
+    try:
+        now = datetime.now(JST)
+        if now.hour < EVENT_REMIND_HOUR:
+            return
+        today = now.date().isoformat()
+        try:
+            if open(EVENT_REMIND_MARKER).read().strip() == today:
+                return   # 今日はもう送った
+        except Exception:
+            pass
+        tomorrow = (now.date() + timedelta(days=1)).isoformat()
+        ev_today = api("GET", "events?select=event_time,title&event_date=eq." + today
+                       + "&order=event_time.asc") or []
+        ev_tom   = api("GET", "events?select=event_time,title&event_date=eq." + tomorrow
+                       + "&order=event_time.asc") or []
+        # マーカーは「予定の有無に関わらず」今日分として記録（毎ループ走査を防ぐ）
+        open(EVENT_REMIND_MARKER, "w").write(today)
+        if not ev_today and not ev_tom:
+            return
+        parts = []
+        if ev_today:
+            parts.append("今日: " + _fmt_events(ev_today))
+        if ev_tom:
+            parts.append("明日: " + _fmt_events(ev_tom))
+        body = "　/　".join(parts)
+        users = api("GET", "users?select=id") or []
+        for u in users:
+            push_to_user(u.get("id", ""), "📅 今日の予定", body, room=AI_ROOM_FOR_EVENTS)
+        print(f"[danran-bridge] 📅 イベントリマインド送信: {body[:60]}")
+    except Exception as e:
+        print("[danran-bridge] fire_event_reminders err:", e)
+
 def is_affirmative(text):
     t = (text or "").strip().lower()
     if not t:
@@ -862,6 +910,7 @@ BACKUP_TABLES = (
     ("push_subscriptions", "id.asc"),
     ("ai_tasks",           "created_at.asc"),
     ("ai_reminders",       "created_at.asc"),
+    ("events",             "event_date.asc"),
 )
 
 def backup_daily():
@@ -1219,6 +1268,7 @@ def main():
     _last_sweep   = 0.0   # 0 = 起動直後に1回 → 以後24時間ごと
     _last_video   = 0.0   # 動画圧縮チェックは5分ごと
     _last_remind  = 0.0   # リマインダー発火チェックは20秒ごと
+    _last_event_remind = 0.0   # カレンダー朝リマインドは5分ごと
     while True:
         try:
             heartbeat()
@@ -1234,6 +1284,9 @@ def main():
             if time.time() - _last_remind > 20:    # リマインダー発火チェック（軽いのでインライン）
                 _last_remind = time.time()
                 fire_due_reminders()
+            if time.time() - _last_event_remind > 300:  # カレンダー朝リマインドは5分ごとに判定
+                _last_event_remind = time.time()
+                fire_event_reminders()
             for rn, msgs in _group_by_room(fetch_all_recent()).items():
                 if not msgs:
                     continue

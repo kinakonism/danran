@@ -2750,13 +2750,19 @@ def show_calendar(current_user: dict) -> None:
         'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;'
         'font-size:0.85rem;white-space:nowrap;-webkit-tap-highlight-color:transparent}'
         '.dr-mtab.on{background:#f0a868;color:#1a1614;border-color:#f0a868;font-weight:700}'
+        # ★ ヘッダー直下〜画面下端に固定配置。スクロール無しで月全体がピタッと収まる。
+        '#dr-cal-fixed{position:fixed;top:52px;left:0;right:0;bottom:0;z-index:10;'
+        'display:flex;flex-direction:column;'
+        'padding:8px 10px calc(8px + env(safe-area-inset-bottom));box-sizing:border-box;'
+        'background:#1a1614}'
+        '#dr-cal-swipe{flex:1;display:flex;flex-direction:column;min-height:0}'
         '.dr-cal-hdr,.dr-cal{display:grid;grid-template-columns:repeat(7,1fr)}'
         '.dr-cal-hdr{margin-bottom:3px}'
         '.dr-cal-wd{text-align:center;font-size:0.8rem;font-weight:700;padding:3px 0}'
-        # ★ グリッドを画面の高さいっぱいに（6 行を均等に伸ばす）。高齢の家族にも見やすく。
-        '.dr-cal{gap:1px;background:rgba(255,255,255,0.07);'
+        # ★ グリッドは残り高さいっぱい（行を均等に伸ばす）。高齢の家族にも見やすく。
+        '.dr-cal{flex:1;min-height:0;gap:1px;background:rgba(255,255,255,0.07);'
         'border:1px solid rgba(255,255,255,0.07);border-radius:8px;overflow:hidden;'
-        'height:calc(100dvh - 158px);grid-auto-rows:1fr}'
+        'grid-auto-rows:1fr}'
         '.dr-cal-cell{background:#1a1614;min-height:0;padding:4px 3px;cursor:pointer;'
         'overflow:hidden;-webkit-tap-highlight-color:transparent}'
         '.dr-cal-cell.other{opacity:0.38}'
@@ -2777,9 +2783,9 @@ def show_calendar(current_user: dict) -> None:
         '</style>'
     )
     # カレンダー月表示はグリッドのみ（その日の予定は日付タップで別画面へ）。＋FAB は新規登録。
-    # ★ Streamlit の要素間スペースで上に空きができるため、ラッパーを負マージンで引き上げる。
+    # #dr-cal-fixed でヘッダー直下〜画面下端に固定し、グリッドを残り高さいっぱいに敷く。
     st.html(_cal_css
-            + '<div style="margin-top:-42px">' + head_html + tabs_html + grid_html + '</div>'
+            + '<div id="dr-cal-fixed">' + head_html + tabs_html + grid_html + '</div>'
             + '<button id="dr-cal-fab" data-cal-add="1">＋</button>')
 
 def show_event_day(current_user: dict) -> None:

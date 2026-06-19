@@ -2663,14 +2663,22 @@ def _push_event_added(creator_uid: str, creator_name: str, day_iso: str,
     except Exception:
         pass
 
-# 予定チップの色（作成者ごとに固定。ダーク地で映える暖色寄りパレット）
-_EVENT_COLORS = ["#5bbf8a", "#e8915b", "#6a9bd0", "#b07cc6",
-                 "#d4a24c", "#e0654f", "#4fb0a8", "#c98fb0"]
+# 予定チップの色（作成者ごとに固定）。最初の数人が最大限はっきり違う色になる並び。
+_EVENT_COLORS = ["#5bbf8a", "#6a9bd0", "#c98fb0", "#d4a24c",
+                 "#b07cc6", "#e0654f", "#4fb0a8", "#e8915b"]
+
+@st.cache_data(ttl=300)
+def _user_color_map() -> dict:
+    """ユーザーごとに固定の別色を割り当てる（並び順ベース＝家族同士で色がかぶりにくい）。
+    ハッシュ方式だと人数が少ないと近い色/衝突が起きるため、登録順で順番に配る。"""
+    return {u["id"]: _EVENT_COLORS[i % len(_EVENT_COLORS)]
+            for i, u in enumerate(fetch_all_users())}
 
 def _event_color(uid: str) -> str:
     if not uid:
         return "#8a8a8a"
-    return _EVENT_COLORS[sum(ord(c) for c in uid) % len(_EVENT_COLORS)]
+    return (_user_color_map().get(uid)
+            or _EVENT_COLORS[sum(ord(c) for c in uid) % len(_EVENT_COLORS)])
 
 def _event_time_label(e: dict) -> str:
     """予定の時刻表示: '' / 'HH:MM' / 'HH:MM〜HH:MM'。"""

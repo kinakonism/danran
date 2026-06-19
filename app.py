@@ -2699,16 +2699,19 @@ def show_calendar(current_user: dict) -> None:
     for e in ev_month:
         by_day.setdefault(e["event_date"], []).append(e)
 
-    # ── 月切り替えタブ（Google 風・6ヶ月分を画面幅いっぱいに均等配置＝スクロールなしで端が切れない）──
-    #   表示中の月を中心に 前2〜先3ヶ月。さらに過去/未来はグリッドの左右スワイプで遡れる。
-    _tabs = []
-    for off in range(-2, 4):   # 表示月の -2 〜 +3（計6タブ）
-        _idx = y * 12 + (m - 1) + off
-        ty, tm = _idx // 12, _idx % 12 + 1
+    # ── 月切り替えタブ（左端‹=前月 / 右端›=次月 / 中央に月タブ4つ。画面幅いっぱい・スクロールなし）──
+    #   矢印やタブ・スワイプで表示月が変わると、タブ全体が1つずつスライドして動く。
+    def _ym(idx):
+        return f"{idx // 12:04d}-{idx % 12 + 1:02d}"
+    _base = y * 12 + (m - 1)
+    _tabs = [f'<button class="dr-mnav" data-cal-month="{_ym(_base - 1)}">‹</button>']
+    for off in range(-1, 3):   # 表示月の -1 〜 +2（計4タブ・表示月をハイライト）
+        _idx = _base + off
         _tabs.append(
-            f'<button class="dr-mtab{" on" if off == 0 else ""}" data-cal-month="{ty:04d}-{tm:02d}">'
-            f'{tm}月</button>'
+            f'<button class="dr-mtab{" on" if off == 0 else ""}" data-cal-month="{_ym(_idx)}">'
+            f'{_idx % 12 + 1}月</button>'
         )
+    _tabs.append(f'<button class="dr-mnav" data-cal-month="{_ym(_base + 1)}">›</button>')
     tabs_html = '<div class="dr-mtabs">' + "".join(_tabs) + '</div>'
 
     # ── 表示中の年月を左上に大きく見出し表示 ──
@@ -2755,11 +2758,14 @@ def show_calendar(current_user: dict) -> None:
 
     _cal_css = (
         '<style>'
-        '.dr-mtabs{display:flex;gap:6px;padding:2px 0 10px}'
+        '.dr-mtabs{display:flex;gap:6px;padding:2px 0 10px;align-items:center}'
         '.dr-mtab{flex:1 1 0;min-width:0;padding:7px 0;border-radius:16px;cursor:pointer;'
         'text-align:center;border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0e8e0;'
         'font-size:0.85rem;white-space:nowrap;-webkit-tap-highlight-color:transparent}'
         '.dr-mtab.on{background:#f0a868;color:#1a1614;border-color:#f0a868;font-weight:700}'
+        '.dr-mnav{flex:0 0 34px;padding:7px 0;border-radius:50%;cursor:pointer;text-align:center;'
+        'border:1px solid rgba(255,255,255,0.18);background:#241f1c;color:#f0a868;font-size:1rem;'
+        'font-weight:800;line-height:1;-webkit-tap-highlight-color:transparent}'
         # ★ ヘッダー直下〜画面下端に固定配置。スクロール無しで月全体がピタッと収まる。
         '#dr-cal-fixed{position:fixed;top:52px;left:0;right:0;bottom:0;z-index:10;'
         'display:flex;flex-direction:column;'

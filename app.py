@@ -2893,31 +2893,32 @@ def show_event_detail(current_user: dict) -> None:
           f'<span style="color:rgba(240,232,224,0.75);font-size:0.9rem">'
           f'{_html.escape(_name)} が登録</span></div>'
     )
-    # mainルームに共有（誰でも可）。予定メッセージを投稿し、タップで詳細へ戻れる
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.session_state.get(f"evd_shared_{eid}"):
-        st.success("✅ main ルームに共有しました")
-        if st.button("📨 main を開く", type="primary", use_container_width=True, key="evd_open_main"):
-            st.session_state.pop(f"evd_shared_{eid}", None)
-            st.session_state["active_room"] = "main"
-            st.session_state["view"] = "chat"
-            st.session_state.pop("_show_rooms", None)
-            st.rerun()
-    if st.button("📨 main ルームに共有", use_container_width=True, key="evd_share"):
-        _share_when = _dlabel + (("　" + _tl) if _tl else "　終日")
-        _share_text = f"📅 予定を共有します\n{_share_when}\n{e['title']}"
-        if e.get("note"):
-            _share_text += f"\n{e['note']}"
-        try:
-            send_message("main", current_user.get("id", ""), current_user.get("name", ""),
-                         current_user.get("avatar", "🙂"), _share_text, event_ref=eid)
-            st.session_state[f"evd_shared_{eid}"] = True
-        except Exception:
-            pass
-        st.rerun()
-
-    # 作成者のみ削除（編集はヘッダー右上の✏️）。削除は2段階確認。
+    # ── 共有・削除は作成者本人だけに表示（他の人が見ても出さない）──
     if _uid and _uid == current_user.get("id", ""):
+        # main ルームに共有（予定メッセージを投稿し、チップタップで詳細へ戻れる）
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.session_state.get(f"evd_shared_{eid}"):
+            st.success("✅ main ルームに共有しました")
+            if st.button("📨 main を開く", type="primary", use_container_width=True, key="evd_open_main"):
+                st.session_state.pop(f"evd_shared_{eid}", None)
+                st.session_state["active_room"] = "main"
+                st.session_state["view"] = "chat"
+                st.session_state.pop("_show_rooms", None)
+                st.rerun()
+        if st.button("📨 main ルームに共有", use_container_width=True, key="evd_share"):
+            _share_when = _dlabel + (("　" + _tl) if _tl else "　終日")
+            _share_text = f"📅 予定を共有します\n{_share_when}\n{e['title']}"
+            if e.get("note"):
+                _share_text += f"\n{e['note']}"
+            try:
+                send_message("main", current_user.get("id", ""), current_user.get("name", ""),
+                             current_user.get("avatar", "🙂"), _share_text, event_ref=eid)
+                st.session_state[f"evd_shared_{eid}"] = True
+            except Exception:
+                pass
+            st.rerun()
+
+        # 削除（編集はヘッダー右上の✏️）。削除は2段階確認。
         st.markdown("<br>", unsafe_allow_html=True)
         _ck = f"evd_confirm_{eid}"
         if st.session_state.get(_ck):

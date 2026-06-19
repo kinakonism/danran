@@ -1607,10 +1607,10 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         if _evref:
             content += (
                 f'<div data-event-share="{_html.escape(str(_evref))}" '
-                f'style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;'
-                f'background:rgba(240,168,104,0.18);border:1px solid rgba(240,168,104,0.5);'
-                f'color:#f0a868;font-weight:700;font-size:0.82rem;border-radius:10px;'
-                f'padding:7px 12px;cursor:pointer">📅 カレンダーで見る ›</div>'
+                f'style="margin-top:8px;display:flex;align-items:center;justify-content:center;gap:6px;'
+                f'background:#fff;color:#1a1614;font-weight:800;font-size:0.84rem;border-radius:10px;'
+                f'padding:9px 12px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.25);'
+                f'-webkit-text-fill-color:#1a1614">📅 カレンダーで見る ›</div>'
             )
 
         # ── リンクプレビュー（本文に URL があれば先頭1件のカードを下に付ける）──

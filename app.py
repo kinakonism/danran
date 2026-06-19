@@ -2701,6 +2701,14 @@ def show_calendar(current_user: dict) -> None:
         )
     tabs_html = '<div class="dr-mtabs">' + "".join(_tabs) + '</div>'
 
+    # ── 表示中の年月を左上に大きく見出し表示 ──
+    head_html = (
+        f'<div style="display:flex;align-items:baseline;gap:8px;padding:2px 2px 8px">'
+        f'<span style="font-size:1.5rem;font-weight:800;color:#f0e8e0;line-height:1.1">{m}月</span>'
+        f'<span style="font-size:0.95rem;font-weight:600;color:rgba(240,232,224,0.55)">{y}年</span>'
+        f'</div>'
+    )
+
     # ── 曜日見出し ──
     wd_html = '<div class="dr-cal-hdr">' + "".join(
         f'<div class="dr-cal-wd" style="color:'
@@ -2768,7 +2776,7 @@ def show_calendar(current_user: dict) -> None:
         '-webkit-tap-highlight-color:transparent}'
         '</style>'
     )
-    st.html(_cal_css + tabs_html + grid_html
+    st.html(_cal_css + head_html + tabs_html + grid_html
             + '<button id="dr-cal-fab" data-cal-add="1">＋</button>')
 
     # ── 選択日の予定一覧（タップした日／既定は今日）──

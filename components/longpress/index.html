@@ -1610,6 +1610,13 @@
           sendNav({ action: 'go_event_detail', event_id: evRow.getAttribute('data-event-id'), ts: Date.now() });
           return;
         }
+        var evShare = t.closest('[data-event-share]');
+        if (evShare) {
+          e.preventDefault(); e.stopPropagation();
+          try { showEditCover(); } catch (e2) {}
+          sendNav({ action: 'go_event_detail', event_id: evShare.getAttribute('data-event-share'), ts: Date.now() });
+          return;
+        }
         var nav = t.closest('[data-room-nav]');
         if (nav) {
           e.preventDefault(); e.stopPropagation();

@@ -660,18 +660,20 @@ def fetch_messages(room: str, limit: int = 100) -> list[dict] | None:
     try:
         return supabase.table("messages")\
             .select("id, user_id, user_name, user_avatar, content, image_url, video_url, created_at, "
-                    "reply_to_id, reply_to_name, reply_to_text, reply_to_image")\
+                    "reply_to_id, reply_to_name, reply_to_text, reply_to_image, event_ref")\
             .eq("room_name", room).order("created_at").limit(limit).execute().data or []
     except Exception:
         return None
 
 def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, image_url: str | None = None,
-                 reply_to: dict | None = None) -> bool:
+                 reply_to: dict | None = None, event_ref: str | None = None) -> bool:
     try:
         _row = {
             "room_name": room, "user_id": uid, "user_name": uname,
             "user_avatar": uavatar, "content": content, "image_url": image_url,
         }
+        if event_ref:
+            _row["event_ref"] = event_ref
         if reply_to and reply_to.get("id"):
             _row["reply_to_id"]    = reply_to.get("id")
             _row["reply_to_name"]  = reply_to.get("name", "")
@@ -1045,7 +1047,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v168",   # カレンダー余白詰め＋📅ボタンを委譲ハンドラ化(取りこぼし対策)
+    "danran_lp_v169",   # 予定をmainに共有→チップタップで予定詳細へ
     path=_LP_COMPONENT_DIR,
 )
 
@@ -1600,6 +1602,16 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
             f'{"margin-bottom:6px" if body else ""}"></span>'
         ) if img_url else ""
         content = _reply_quote_html(msg) + img_piece + vid_piece + body_esc
+        # 予定共有メッセージ: タップでその予定の詳細（カレンダー）へ飛ぶチップ
+        _evref = msg.get("event_ref")
+        if _evref:
+            content += (
+                f'<div data-event-share="{_html.escape(str(_evref))}" '
+                f'style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;'
+                f'background:rgba(240,168,104,0.18);border:1px solid rgba(240,168,104,0.5);'
+                f'color:#f0a868;font-weight:700;font-size:0.82rem;border-radius:10px;'
+                f'padding:7px 12px;cursor:pointer">📅 カレンダーで見る ›</div>'
+            )
 
         # ── リンクプレビュー（本文に URL があれば先頭1件のカードを下に付ける）──
         #   ★ 一旦オフ：描画時に同期で OGP を取得（fetch_og）すると、取得の重い URL
@@ -2881,6 +2893,23 @@ def show_event_detail(current_user: dict) -> None:
           f'<span style="color:rgba(240,232,224,0.75);font-size:0.9rem">'
           f'{_html.escape(_name)} が登録</span></div>'
     )
+    # mainルームに共有（誰でも可）。予定メッセージを投稿し、タップで詳細へ戻れる
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.session_state.pop(f"evd_shared_{eid}", False):
+        st.success("✅ main ルームに共有しました")
+    if st.button("📨 main ルームに共有", use_container_width=True, key="evd_share"):
+        _share_when = _dlabel + (("　" + _tl) if _tl else "　終日")
+        _share_text = f"📅 予定を共有します\n{_share_when}\n{e['title']}"
+        if e.get("note"):
+            _share_text += f"\n{e['note']}"
+        try:
+            send_message("main", current_user.get("id", ""), current_user.get("name", ""),
+                         current_user.get("avatar", "🙂"), _share_text, event_ref=eid)
+            st.session_state[f"evd_shared_{eid}"] = True
+        except Exception:
+            pass
+        st.rerun()
+
     # 作成者のみ削除（編集はヘッダー右上の✏️）。削除は2段階確認。
     if _uid and _uid == current_user.get("id", ""):
         st.markdown("<br>", unsafe_allow_html=True)
@@ -4008,10 +4037,19 @@ if isinstance(_lp_result, dict):
             st.session_state["view"] = "event_new"
             st.rerun()
         elif _nav == "go_event_detail":
-            # 予定リストのタップ → 全画面詳細
+            # 予定リスト/共有チップのタップ → 全画面詳細。戻り先(その日)も揃える
             _eid = _lp_result.get("event_id", "")
             if _eid:
                 st.session_state["event_view_id"] = _eid
+                _ev_o = fetch_event(_eid)
+                if _ev_o and _ev_o.get("event_date"):
+                    st.session_state["cal_selected"] = _ev_o["event_date"]
+                    try:
+                        _ed = datetime.fromisoformat(_ev_o["event_date"]).date()
+                        st.session_state["cal_year"]  = _ed.year
+                        st.session_state["cal_month"] = _ed.month
+                    except Exception:
+                        pass
                 st.session_state["view"] = "event_detail"
                 st.rerun()
         elif _nav == "go_event_edit":

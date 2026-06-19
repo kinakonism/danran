@@ -1052,7 +1052,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v169",   # 予定をmainに共有→チップタップで予定詳細へ
+    "danran_lp_v170",   # 入力欄の改行を自前挿入（空改行が消しにくいバグ対策）
     path=_LP_COMPONENT_DIR,
 )
 

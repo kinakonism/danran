@@ -4932,8 +4932,13 @@
         if (sb) sb.click();
         return;
       }
-      // 素の Enter / Shift+Enter → 改行（Streamlit の送信を止め、既定の改行に任せる）
+      // 素の Enter / Shift+Enter → 改行。
+      //   既定の改行任せだと Streamlit の再描画(10秒ポーリング等)で React 内部値と
+      //   ズレ、空改行が消しにくくなることがある。自前で \n を挿入し input を発火して
+      //   React 側に確実に反映させる（カーソル位置も維持＝Backspace で普通に消せる）。
       e.stopImmediatePropagation();
+      e.preventDefault();
+      _insertIntoTa(ta, '\n');
     }, true);
     // 送信ボタン
     pDoc.addEventListener('click', function (e) {

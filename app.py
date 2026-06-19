@@ -555,6 +555,20 @@ def create_event(day_iso: str, time_str: str, title: str, note: str,
            "title": title, "note": note or "", "created_by": uid, "created_by_name": name}
     return supabase.table("events").insert(row).execute().data[0]
 
+def update_event(event_id: str, day_iso: str, time_str: str, title: str,
+                 note: str, end_str: str = "") -> None:
+    supabase.table("events").update({
+        "event_date": day_iso, "event_time": time_str or "", "event_end_time": end_str or "",
+        "title": title, "note": note or "",
+    }).eq("id", event_id).execute()
+
+def fetch_event(event_id: str) -> dict | None:
+    try:
+        rows = supabase.table("events").select("*").eq("id", event_id).limit(1).execute().data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
 def delete_event(event_id: str) -> None:
     try:
         supabase.table("events").delete().eq("id", event_id).execute()
@@ -1031,7 +1045,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v164",   # カレンダー: 月スワイプ送り・タブ中央寄せ・終了時刻
+    "danran_lp_v165",   # カレンダー: スワイプ堅牢化・予定の全画面詳細＋編集（✏️）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2770,58 +2784,135 @@ def show_calendar(current_user: dict) -> None:
 
     day_events = by_day.get(sel) or fetch_events_day(sel)
     if day_events:
+        # 1ブロックの HTML で描画。各行 data-event-id でタップ → 全画面詳細へ
+        _rows = []
         for e in day_events:
-            ec1, ec2 = st.columns([6, 1])
-            with ec1:
-                _uid = e.get("created_by", "")
-                _u   = _umap.get(_uid, {})
-                _name = _u.get("name") or e.get("created_by_name", "")
-                _dot = (f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;'
-                        f'background:{_event_color(_uid)};margin-right:6px;flex:0 0 auto"></span>')
-                _tl  = _event_time_label(e) or "終日"
-                _title = (f"{_dot}<b>{_html.escape(_tl)}</b>　{_html.escape(e['title'])}")
-                # タイトル行（左）と 作成者アイコン＋名前（右）を横並び
-                _who = (f'<div style="display:flex;align-items:center;gap:5px;flex:0 0 auto">'
-                        f'{_avatar_html(_u.get("avatar", ""), 22)}'
-                        f'<span style="font-size:0.74rem;color:rgba(240,232,224,0.7)">'
-                        f'{_html.escape(_name)}</span></div>')
-                _row = (f'<div style="display:flex;align-items:center;gap:8px">'
-                        f'<div style="flex:1;min-width:0">{_title}</div>{_who}</div>')
-                _n = (f"<div style='font-size:0.78rem;color:rgba(240,232,224,0.55);"
-                      f"margin:2px 0 0 15px'>{_html.escape(e['note'])}</div>" if e.get("note") else "")
-                st.markdown(f"<div style='padding:8px 2px;border-bottom:1px solid "
-                            f"rgba(255,255,255,0.07)'>{_row}{_n}</div>", unsafe_allow_html=True)
-            with ec2:
-                if st.button("🗑", key=f"cal_del_{e['id']}", use_container_width=True):
-                    delete_event(e["id"]); st.rerun()
+            _uid = e.get("created_by", "")
+            _u   = _umap.get(_uid, {})
+            _name = _u.get("name") or e.get("created_by_name", "")
+            _dot = (f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;'
+                    f'background:{_event_color(_uid)};margin-right:6px;flex:0 0 auto"></span>')
+            _tl  = _event_time_label(e) or "終日"
+            _title = (f"{_dot}<b>{_html.escape(_tl)}</b>　{_html.escape(e['title'])}")
+            _who = (f'<div style="display:flex;align-items:center;gap:5px;flex:0 0 auto">'
+                    f'{_avatar_html(_u.get("avatar", ""), 22)}'
+                    f'<span style="font-size:0.74rem;color:rgba(240,232,224,0.7)">'
+                    f'{_html.escape(_name)}</span></div>')
+            _head = (f'<div style="display:flex;align-items:center;gap:8px">'
+                     f'<div style="flex:1;min-width:0">{_title}</div>{_who}'
+                     f'<span style="color:rgba(240,232,224,0.35);flex:0 0 auto">›</span></div>')
+            _n = (f"<div style='font-size:0.78rem;color:rgba(240,232,224,0.55);"
+                  f"margin:2px 0 0 15px'>{_html.escape(e['note'])}</div>" if e.get("note") else "")
+            _rows.append(
+                f'<div data-event-id="{e["id"]}" style="padding:11px 4px;cursor:pointer;'
+                f'border-bottom:1px solid rgba(255,255,255,0.07)">{_head}{_n}</div>'
+            )
+        st.html('<div id="dr-ev-list">' + "".join(_rows) + '</div>')
     else:
         st.caption("この日の予定はまだありません。右下の＋から追加できます。")
 
+def show_event_detail(current_user: dict) -> None:
+    """予定の全画面詳細（Google 風）。作成者は右上✏️で編集・下部🗑で削除。"""
+    eid = st.session_state.get("event_view_id", "")
+    e = fetch_event(eid) if eid else None
+    if not e:
+        st.caption("予定が見つかりませんでした。")
+        return
+    _uid  = e.get("created_by", "")
+    _u    = next((u for u in fetch_all_users() if u["id"] == _uid), {})
+    _name = _u.get("name") or e.get("created_by_name", "")
+    _col  = _event_color(_uid)
+    try:
+        _d = datetime.fromisoformat(e["event_date"]).date()
+        _dlabel = f"{_d.year}年{_d.month}月{_d.day}日（{_WEEK_JP[(_d.weekday()+1)%7]}）"
+    except Exception:
+        _dlabel = e.get("event_date", "")
+    _tl = _event_time_label(e)
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.html(
+        f'<div style="display:flex;align-items:flex-start;gap:12px;padding:4px 2px">'
+        f'<span style="width:16px;height:16px;border-radius:4px;background:{_col};'
+        f'flex:0 0 auto;margin-top:5px"></span>'
+        f'<div style="flex:1;min-width:0">'
+        f'<div style="font-size:1.3rem;font-weight:800;color:#f0e8e0;word-break:break-word">'
+        f'{_html.escape(e["title"])}</div>'
+        f'<div style="font-size:0.95rem;color:rgba(240,232,224,0.8);margin-top:6px">'
+        f'{_html.escape(_dlabel)}{("　" + _html.escape(_tl)) if _tl else "　終日"}</div>'
+        f'</div></div>'
+        + (f'<div style="margin:18px 2px 0;padding:12px 14px;background:#241f1c;border-radius:12px;'
+           f'color:#f0e8e0;font-size:0.92rem;line-height:1.6;white-space:pre-wrap;word-break:break-word">'
+           f'{_html.escape(e["note"])}</div>' if e.get("note") else "")
+        + f'<div style="display:flex;align-items:center;gap:8px;margin:20px 2px 0;'
+          f'padding-top:14px;border-top:1px solid rgba(255,255,255,0.08)">'
+          f'{_avatar_html(_u.get("avatar", ""), 28)}'
+          f'<span style="color:rgba(240,232,224,0.75);font-size:0.9rem">'
+          f'{_html.escape(_name)} が登録</span></div>'
+    )
+    # 作成者のみ削除（編集はヘッダー右上の✏️）
+    if _uid and _uid == current_user.get("id", ""):
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🗑 この予定を削除", use_container_width=True, key="evd_del"):
+            delete_event(eid)
+            st.session_state["view"] = "calendar"
+            st.rerun()
+
 def show_event_new(current_user: dict) -> None:
-    """予定登録画面（カレンダーの＋FABから）。"""
+    """予定の登録／編集画面（＋FAB＝新規／詳細の✏️＝編集）。"""
     import time as _time
     from datetime import date as _date
     today = datetime.now(JST).date()
-    sel = st.session_state.get("cal_selected", today.isoformat())
-    try:
-        default_d = _date.fromisoformat(sel)
-    except Exception:
-        default_d = today
+    edit_id = st.session_state.get("event_edit_id", "")
+    ev = fetch_event(edit_id) if edit_id else None
+
+    def _parse_t(s):
+        try:
+            return datetime.strptime(s, "%H:%M").time() if s else None
+        except Exception:
+            return None
+
+    # 入場時に一度だけウィジェット初期値を session_state に種まき（編集=既存値／新規=選択日）
+    _seed = ("edit:" + edit_id) if edit_id else "new"
+    if st.session_state.get("_ev_seed") != _seed:
+        st.session_state["_ev_seed"] = _seed
+        if ev:
+            try:
+                st.session_state["ev_date"] = _date.fromisoformat(ev["event_date"])
+            except Exception:
+                st.session_state["ev_date"] = today
+            st.session_state["ev_title"]    = ev.get("title", "")
+            st.session_state["ev_allday"]   = not (ev.get("event_time") or "")
+            st.session_state["ev_time"]     = _parse_t(ev.get("event_time", ""))
+            st.session_state["ev_time_end"] = _parse_t(ev.get("event_end_time", ""))
+            st.session_state["ev_note"]     = ev.get("note", "")
+        else:
+            try:
+                st.session_state["ev_date"] = _date.fromisoformat(
+                    st.session_state.get("cal_selected", today.isoformat()))
+            except Exception:
+                st.session_state["ev_date"] = today
+            st.session_state["ev_title"] = ""
+            st.session_state["ev_allday"] = True
+            st.session_state["ev_time"] = None
+            st.session_state["ev_time_end"] = None
+            st.session_state["ev_note"] = ""
+
     st.markdown("<br>", unsafe_allow_html=True)
-    d = st.date_input("日付", value=default_d, key="ev_date", format="YYYY/MM/DD")
+    # 種まき済みなので value= は渡さず key のみ（Streamlit 推奨パターン）
+    d = st.date_input("日付", key="ev_date", format="YYYY/MM/DD")
     title = st.text_input("予定", placeholder="例：パパ通院 / 〇〇の誕生日", key="ev_title")
-    allday = st.checkbox("終日", value=True, key="ev_allday")
+    allday = st.checkbox("終日", key="ev_allday")
     if not allday:
         tc1, tc2 = st.columns(2)
         with tc1:
-            tval = st.time_input("開始", value=None, key="ev_time")
+            tval = st.time_input("開始", key="ev_time")
         with tc2:
-            tend = st.time_input("終了（任意）", value=None, key="ev_time_end")
+            tend = st.time_input("終了（任意）", key="ev_time_end")
     else:
         tval = tend = None
     note = st.text_input("メモ（任意）", key="ev_note")
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("✅ この予定を登録", type="primary", use_container_width=True, key="ev_save"):
+    _btn = "✅ 変更を保存" if ev else "✅ この予定を登録"
+    if st.button(_btn, type="primary", use_container_width=True, key="ev_save"):
         if not (title or "").strip():
             st.error("予定の内容を入力してください")
         else:
@@ -2832,22 +2923,27 @@ def show_event_new(current_user: dict) -> None:
                 st.error("終了時刻は開始時刻より後にしてください")
                 return
             try:
-                create_event(iso, tstr, title.strip(), (note or "").strip(),
-                             current_user.get("id", ""), current_user.get("name", ""), end_str=estr)
-                _push_event_added(current_user.get("id", ""),
-                                  current_user.get("name", ""), iso, tstr, title.strip())
-                for k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_time_end", "ev_note"):
+                if ev:
+                    update_event(edit_id, iso, tstr, title.strip(), (note or "").strip(), end_str=estr)
+                    _msg = "✅ 予定を更新しました"
+                else:
+                    create_event(iso, tstr, title.strip(), (note or "").strip(),
+                                 current_user.get("id", ""), current_user.get("name", ""), end_str=estr)
+                    _push_event_added(current_user.get("id", ""),
+                                      current_user.get("name", ""), iso, tstr, title.strip())
+                    _msg = "✅ 予定を登録しました"
+                for k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_time_end", "ev_note",
+                          "_ev_seed", "event_edit_id"):
                     st.session_state.pop(k, None)
-                # 登録した日へ移動してカレンダーに戻る
                 st.session_state["cal_selected"] = iso
                 st.session_state["cal_year"]  = d.year
                 st.session_state["cal_month"] = d.month
                 st.session_state["view"] = "calendar"
-                st.success("✅ 予定を登録しました")
+                st.success(_msg)
                 _time.sleep(0.3)
                 st.rerun()
             except Exception as ex:
-                st.error(f"❌ 登録に失敗しました: {ex}")
+                st.error(f"❌ 保存に失敗しました: {ex}")
 
 # ─────────────────────────────────────
 # 画面⑤-d メッセージ検索（チャット☰メニューから）
@@ -3471,7 +3567,7 @@ _clear_flag  = st.session_state.pop("_clear_session", False)
 # JS に「ブラウザ側も unsubscribe して再登録せよ」を伝えるフラグ（1回のみ）
 _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
-_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album", "search", "settings", "calendar", "event_new")
+_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album", "search", "settings", "calendar", "event_new", "event_detail")
 _active_room_id = ""
 if "current_user" in st.session_state and not _is_profile:
     # active_room が未セット（セッション復元直後）のときは参加ルームの先頭をフォールバック
@@ -3538,14 +3634,23 @@ if "current_user" in st.session_state:
             "search":        "🔍 メッセージ検索",
             "settings":      "⚙️ 設定",
             "calendar":      "📅 カレンダー",
-            "event_new":     "➕ 予定を登録",
+            "event_new":     ("✏️ 予定を編集" if st.session_state.get("event_edit_id") else "➕ 予定を登録"),
+            "event_detail":  "予定",
         }
         _hdr_title_text = _title_map.get(_cur_view, "設定")
+        # 予定詳細: 作成者なら右上に ✏️（編集）。それ以外はスペーサー。
+        _hdr_right_extra = '<div style="flex-shrink:0;min-width:44px;"></div>'
+        if _cur_view == "event_detail":
+            _ev_d = fetch_event(st.session_state.get("event_view_id", ""))
+            if _ev_d and _ev_d.get("created_by") == _cu.get("id", ""):
+                _hdr_right_extra = (
+                    f'<button data-hdr-eventedit style="{_HDR_BTN_STYLE}font-size:1.1rem">✏️</button>'
+                )
         _hdr_html = (
             f'<div id="_danran_hdr" style="{_HDR_DIV_STYLE}">'
             f'<button data-hdr-back style="{_HDR_BTN_STYLE}">＜</button>'
             f'<div style="{_HDR_TITLE_STYLE}">{_html.escape(_hdr_title_text)}</div>'
-            f'<div style="flex-shrink:0;min-width:44px;"></div>'
+            f'{_hdr_right_extra}'
             f'</div>'
         )
     elif _show_rooms or _active_room:
@@ -3743,7 +3848,14 @@ if isinstance(_lp_result, dict):
                 st.session_state.pop("_show_rooms", None)
                 st.rerun()
             if cur == "event_new":
-                # 予定登録 → カレンダーに戻る
+                # 予定登録/編集 → 編集中なら詳細へ、新規ならカレンダーへ
+                _was_edit = st.session_state.pop("event_edit_id", None)
+                for _k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_time_end",
+                           "ev_note", "_ev_seed"):
+                    st.session_state.pop(_k, None)
+                st.session_state["view"] = "event_detail" if _was_edit else "calendar"
+                st.rerun()
+            if cur == "event_detail":
                 st.session_state["view"] = "calendar"
                 st.rerun()
             if cur == "profile":
@@ -3817,9 +3929,26 @@ if isinstance(_lp_result, dict):
             except Exception:
                 pass
         elif _nav == "go_event_new":
-            # カレンダー右下の＋FAB → 予定登録画面
+            # カレンダー右下の＋FAB → 予定登録画面（新規）
+            st.session_state.pop("event_edit_id", None)
+            st.session_state.pop("_ev_seed", None)
             st.session_state["view"] = "event_new"
             st.rerun()
+        elif _nav == "go_event_detail":
+            # 予定リストのタップ → 全画面詳細
+            _eid = _lp_result.get("event_id", "")
+            if _eid:
+                st.session_state["event_view_id"] = _eid
+                st.session_state["view"] = "event_detail"
+                st.rerun()
+        elif _nav == "go_event_edit":
+            # 予定詳細の ✏️ → 編集画面（現在の予定をプリフィル）
+            _eid = st.session_state.get("event_view_id", "")
+            if _eid:
+                st.session_state["event_edit_id"] = _eid
+                st.session_state.pop("_ev_seed", None)
+                st.session_state["view"] = "event_new"
+                st.rerun()
         elif _nav == "go_search":
             # チャットヘッダー ☰ メニュー → メッセージ検索画面
             _room_id = _lp_result.get("room_id", "")
@@ -3970,6 +4099,8 @@ else:
             show_calendar(st.session_state["current_user"])
         case "event_new" if "current_user" in st.session_state:
             show_event_new(st.session_state["current_user"])
+        case "event_detail" if "current_user" in st.session_state:
+            show_event_detail(st.session_state["current_user"])
         case "room_create" if "current_user" in st.session_state:
             show_room_create()
         case "notifications" if "current_user" in st.session_state:

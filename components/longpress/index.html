@@ -1493,30 +1493,39 @@
     var idx = (y * 12 + (m - 1)) + delta;
     return (Math.floor(idx / 12)) + '-' + ('0' + (idx % 12 + 1)).slice(-2);
   }
+  // グリッド要素に直接バインド（再描画で要素が変わるたび貼り直す）。指追従＋touchcancel対応。
   function setupCalSwipe(pDoc) {
-    if (pDoc._danranCalSwipe) return;
-    pDoc._danranCalSwipe = true;
-    var sx = 0, sy = 0, active = false;
-    pDoc.addEventListener('touchstart', function (e) {
-      active = false;
-      if (pDoc._danranView !== 'calendar' || e.touches.length !== 1) return;
-      var t = e.target;
-      if (!t || !t.closest) return;
-      if (t.closest('.dr-mtabs')) return;          // タブ自体の横スクロールは邪魔しない
-      if (!t.closest('#dr-cal-swipe')) return;     // グリッド領域でのみ
-      active = true; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-    }, { capture: true, passive: true });
-    pDoc.addEventListener('touchend', function (e) {
-      if (!active) return;
-      active = false;
-      var tch = (e.changedTouches && e.changedTouches[0]); if (!tch) return;
-      var dx = tch.clientX - sx, dy = tch.clientY - sy;
-      if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.4) return;  // 横スワイプのみ
-      var wrap = pDoc.getElementById('dr-cal-swipe'); if (!wrap) return;
-      var cur = wrap.getAttribute('data-cal-cur') || '';
-      var ym  = _shiftMonth(cur, dx < 0 ? 1 : -1);  // 左へ=翌月 / 右へ=前月
+    var el = pDoc.getElementById('dr-cal-swipe');
+    if (!el || el._danranSwipeBound) return;
+    el._danranSwipeBound = true;
+    var sx = 0, sy = 0, dragging = false, decided = false, horiz = false;
+    el.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) { dragging = false; return; }
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      dragging = true; decided = false; horiz = false;
+    }, { passive: true });
+    el.addEventListener('touchmove', function (e) {
+      if (!dragging || e.touches.length !== 1) return;
+      var dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
+      if (!decided && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+        decided = true; horiz = Math.abs(dx) > Math.abs(dy);
+      }
+      if (horiz) { el.style.transition = 'none'; el.style.transform = 'translateX(' + dx + 'px)'; }
+    }, { passive: true });
+    var endFn = function (e) {
+      if (!dragging) return;
+      dragging = false;
+      el.style.transition = 'transform .18s ease';
+      el.style.transform = 'translateX(0)';
+      var tch = (e.changedTouches && e.changedTouches[0]);
+      if (!tch || !horiz) return;
+      var dx = tch.clientX - sx;
+      if (Math.abs(dx) < 50) return;
+      var ym = _shiftMonth(el.getAttribute('data-cal-cur') || '', dx < 0 ? 1 : -1);
       if (ym) sendNav({ action: 'cal_month', ym: ym, ts: Date.now() });
-    }, { capture: true, passive: true });
+    };
+    el.addEventListener('touchend', endFn, { passive: true });
+    el.addEventListener('touchcancel', endFn, { passive: true });
   }
 
   // カレンダーの月タブ: 選択中(.on)タブを横スクロールで中央に寄せる（描画ごとに1回）。
@@ -1569,6 +1578,13 @@
         if (calDay) {
           e.preventDefault(); e.stopPropagation();
           sendNav({ action: 'cal_select', date: calDay.getAttribute('data-cal-day'), ts: Date.now() });
+          return;
+        }
+        var evRow = t.closest('[data-event-id]');
+        if (evRow) {
+          e.preventDefault(); e.stopPropagation();
+          try { showEditCover(); } catch (e2) {}
+          sendNav({ action: 'go_event_detail', event_id: evRow.getAttribute('data-event-id'), ts: Date.now() });
           return;
         }
         var nav = t.closest('[data-room-nav]');
@@ -2176,6 +2192,15 @@
         profBtn.addEventListener('click', function () {
           try { showEditCover(); } catch (e2) {}
           sendNav({ action: 'go_profile', ts: Date.now() });
+        });
+      }
+      // 予定詳細ヘッダー右上の ✏️ → 編集画面
+      var evEdit = pDoc.querySelector('[data-hdr-eventedit]');
+      if (evEdit && !evEdit._danranHdrEvEdit) {
+        evEdit._danranHdrEvEdit = true;
+        evEdit.addEventListener('click', function () {
+          try { showEditCover(); } catch (e2) {}
+          sendNav({ action: 'go_event_edit', ts: Date.now() });
         });
       }
       // ルーム選択ヘッダー左の 📅 → カレンダー画面
@@ -3920,7 +3945,7 @@
   var _lastViewForScroll = '';
   function scrollTopOnEditEnter() {
     try {
-      var editViews = { profile: 1, room_edit: 1, notifications: 1, album: 1, room_create: 1, settings: 1, calendar: 1, event_new: 1 };
+      var editViews = { profile: 1, room_edit: 1, notifications: 1, album: 1, room_create: 1, settings: 1, calendar: 1, event_new: 1, event_detail: 1 };
       if (!editViews[VIEW]) {
         _lastViewForScroll = VIEW;   // chat 等に戻ったらリセット（次に編集へ入ると再度トップへ）
         return;

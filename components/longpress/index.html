@@ -1484,6 +1484,50 @@
   // ★ ルームタップ等は委譲方式（document の capture click）で、毎 scan に「生きた iframe」へ
   //   貼り直す。旧方式（要素ごとに1回 addEventListener）だと、要素が古い iframe に取り残されると
   //   sendNav が死んだ iframe 経由になり go_room が届かず「スプラッシュ→一覧へ戻る」原因になった。
+  // カレンダー: グリッドを左右スワイプで月送り（Google カレンダー風）。
+  //   document に1回だけ委譲登録。calendar view かつ #dr-cal-swipe 上の横スワイプのみ反応。
+  function _shiftMonth(ym, delta) {
+    var p = (ym || '').split('-');
+    var y = parseInt(p[0], 10), m = parseInt(p[1], 10);
+    if (!y || !m) return '';
+    var idx = (y * 12 + (m - 1)) + delta;
+    return (Math.floor(idx / 12)) + '-' + ('0' + (idx % 12 + 1)).slice(-2);
+  }
+  function setupCalSwipe(pDoc) {
+    if (pDoc._danranCalSwipe) return;
+    pDoc._danranCalSwipe = true;
+    var sx = 0, sy = 0, active = false;
+    pDoc.addEventListener('touchstart', function (e) {
+      active = false;
+      if (pDoc._danranView !== 'calendar' || e.touches.length !== 1) return;
+      var t = e.target;
+      if (!t || !t.closest) return;
+      if (t.closest('.dr-mtabs')) return;          // タブ自体の横スクロールは邪魔しない
+      if (!t.closest('#dr-cal-swipe')) return;     // グリッド領域でのみ
+      active = true; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    }, { capture: true, passive: true });
+    pDoc.addEventListener('touchend', function (e) {
+      if (!active) return;
+      active = false;
+      var tch = (e.changedTouches && e.changedTouches[0]); if (!tch) return;
+      var dx = tch.clientX - sx, dy = tch.clientY - sy;
+      if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.4) return;  // 横スワイプのみ
+      var wrap = pDoc.getElementById('dr-cal-swipe'); if (!wrap) return;
+      var cur = wrap.getAttribute('data-cal-cur') || '';
+      var ym  = _shiftMonth(cur, dx < 0 ? 1 : -1);  // 左へ=翌月 / 右へ=前月
+      if (ym) sendNav({ action: 'cal_month', ym: ym, ts: Date.now() });
+    }, { capture: true, passive: true });
+  }
+
+  // カレンダーの月タブ: 選択中(.on)タブを横スクロールで中央に寄せる（描画ごとに1回）。
+  function centerCalTab() {
+    var pDoc = window.parent.document;
+    var on = pDoc.querySelector('.dr-mtab.on');
+    if (!on || on._danranCentered) return;
+    on._danranCentered = true;
+    try { on.scrollIntoView({ inline: 'center', block: 'nearest' }); } catch (e) {}
+  }
+
   function attachRoomHandlers() {
     try {
       var pDoc = window.parent.document;
@@ -2195,6 +2239,8 @@
     attachHdrButtons();     // Python レンダリングヘッダーのクリックハンドラを付与
     attachMyAvatarClick();  // 自分のアバタータップ → プロフィール画面
     attachRoomHandlers();   // ルームリストのカスタムHTMLボタンにイベントを付与
+    try { centerCalTab(); } catch (e) {}   // カレンダー: 選択中の月タブを中央に寄せる
+    try { setupCalSwipe(window.parent.document); } catch (e) {}   // カレンダー: 左右スワイプで月送り
     injectSwSetup();        // Service Worker 登録（1回のみ）
     injectPushPrompt();     // 通知許可バナー（ルーム一覧・未許可時のみ・JSフォールバック）
     injectNotifSettings();  // 通知設定画面の UI（VIEW=notifications のときのみ）

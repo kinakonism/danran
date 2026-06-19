@@ -423,8 +423,10 @@ AI_ROOM_FOR_EVENTS  = ROOM   # 一覧投稿はしない（Push のみ）。将�
 def _fmt_events(rows):
     out = []
     for e in rows:
-        t = (e.get("event_time") or "").strip()
-        out.append((f"{t} " if t else "") + (e.get("title") or ""))
+        t  = (e.get("event_time") or "").strip()
+        en = (e.get("event_end_time") or "").strip()
+        tl = (f"{t}〜{en} " if (t and en) else f"{t} " if t else "")
+        out.append(tl + (e.get("title") or ""))
     return "・".join(out)
 
 def fire_event_reminders():
@@ -440,9 +442,9 @@ def fire_event_reminders():
         except Exception:
             pass
         tomorrow = (now.date() + timedelta(days=1)).isoformat()
-        ev_today = api("GET", "events?select=event_time,title&event_date=eq." + today
+        ev_today = api("GET", "events?select=event_time,event_end_time,title&event_date=eq." + today
                        + "&order=event_time.asc") or []
-        ev_tom   = api("GET", "events?select=event_time,title&event_date=eq." + tomorrow
+        ev_tom   = api("GET", "events?select=event_time,event_end_time,title&event_date=eq." + tomorrow
                        + "&order=event_time.asc") or []
         # マーカーは「予定の有無に関わらず」今日分として記録（毎ループ走査を防ぐ）
         open(EVENT_REMIND_MARKER, "w").write(today)

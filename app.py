@@ -550,9 +550,9 @@ def fetch_events_day(day_iso: str) -> list[dict]:
         return []
 
 def create_event(day_iso: str, time_str: str, title: str, note: str,
-                 uid: str, name: str) -> dict:
-    row = {"event_date": day_iso, "event_time": time_str or "", "title": title,
-           "note": note or "", "created_by": uid, "created_by_name": name}
+                 uid: str, name: str, end_str: str = "") -> dict:
+    row = {"event_date": day_iso, "event_time": time_str or "", "event_end_time": end_str or "",
+           "title": title, "note": note or "", "created_by": uid, "created_by_name": name}
     return supabase.table("events").insert(row).execute().data[0]
 
 def delete_event(event_id: str) -> None:
@@ -1031,7 +1031,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v163",   # カレンダーGoogle風グリッド（月タブ/日タップ/＋FAB）
+    "danran_lp_v164",   # カレンダー: 月スワイプ送り・タブ中央寄せ・終了時刻
     path=_LP_COMPONENT_DIR,
 )
 
@@ -2641,6 +2641,25 @@ def _event_color(uid: str) -> str:
         return "#8a8a8a"
     return _EVENT_COLORS[sum(ord(c) for c in uid) % len(_EVENT_COLORS)]
 
+def _event_time_label(e: dict) -> str:
+    """予定の時刻表示: '' / 'HH:MM' / 'HH:MM〜HH:MM'。"""
+    s = (e.get("event_time") or "").strip()
+    en = (e.get("event_end_time") or "").strip()
+    if not s:
+        return ""
+    return f"{s}〜{en}" if en else s
+
+def _avatar_html(av: str, size: int = 22) -> str:
+    """アバター（絵文字 or 写真URL）を小さく描く。"""
+    av = av or "🙂"
+    if av.startswith("http"):
+        return (f'<img src="{_html.escape(av)}" style="width:{size}px;height:{size}px;'
+                f'border-radius:50%;object-fit:cover;flex:0 0 auto;vertical-align:middle">')
+    return (f'<span style="width:{size}px;height:{size}px;border-radius:50%;'
+            f'background:rgba(255,255,255,0.1);display:inline-flex;align-items:center;'
+            f'justify-content:center;font-size:{int(size*0.62)}px;flex:0 0 auto;'
+            f'vertical-align:middle">{_html.escape(av)}</span>')
+
 def show_calendar(current_user: dict) -> None:
     import calendar as _cal
     today = datetime.now(JST).date()
@@ -2653,10 +2672,12 @@ def show_calendar(current_user: dict) -> None:
     by_day: dict[str, list[dict]] = {}
     for e in ev_month:
         by_day.setdefault(e["event_date"], []).append(e)
+    # 作成者 uid → {name, avatar}（予定リストにアイコン＋名前を出すため）
+    _umap = {u["id"]: u for u in fetch_all_users()}
 
-    # ── 月切り替えタブ（Google 風・横スクロール。今月の1つ前〜13ヶ月先）──
+    # ── 月切り替えタブ（Google 風・横スクロール。今年1月〜13ヶ月先＝過去の予定も見られる）──
     _tabs = []
-    for off in range(-1, 14):
+    for off in range(-(today.month - 1), 14):   # 今年1月 〜 今月+13
         ty = today.year + (today.month - 1 + off) // 12
         tm = (today.month - 1 + off) % 12 + 1
         on = (ty == y and tm == m)
@@ -2689,14 +2710,16 @@ def show_calendar(current_user: dict) -> None:
                 f'{(_html.escape(e.get("event_time") + " ") if e.get("event_time") else "")}'
                 f'{_html.escape(e["title"])}</div>'
                 for e in _evs[:3]
-            )
+            )  # グリッドのチップは開始時刻のみ（幅節約）
             if len(_evs) > 3:
                 _chips += f'<div class="dr-cal-more">+{len(_evs) - 3}</div>'
             cells.append(
                 f'<div class="{_cls}" data-cal-day="{iso}">'
                 f'<div class="{_numcls}">{d.day}</div>{_chips}</div>'
             )
-    grid_html = '<div class="dr-cal">' + "".join(cells) + '</div>'
+    # data-cal-cur: JS のスワイプ月送りが現在表示月を読む
+    grid_html = (f'<div id="dr-cal-swipe" data-cal-cur="{y:04d}-{m:02d}">'
+                 + wd_html + '<div class="dr-cal">' + "".join(cells) + '</div></div>')
 
     _cal_css = (
         '<style>'
@@ -2731,7 +2754,7 @@ def show_calendar(current_user: dict) -> None:
         '-webkit-tap-highlight-color:transparent}'
         '</style>'
     )
-    st.html(_cal_css + tabs_html + wd_html + grid_html
+    st.html(_cal_css + tabs_html + grid_html
             + '<button id="dr-cal-fab" data-cal-add="1">＋</button>')
 
     # ── 選択日の予定一覧（タップした日／既定は今日）──
@@ -2748,18 +2771,26 @@ def show_calendar(current_user: dict) -> None:
     day_events = by_day.get(sel) or fetch_events_day(sel)
     if day_events:
         for e in day_events:
-            ec1, ec2 = st.columns([5, 1])
+            ec1, ec2 = st.columns([6, 1])
             with ec1:
+                _uid = e.get("created_by", "")
+                _u   = _umap.get(_uid, {})
+                _name = _u.get("name") or e.get("created_by_name", "")
                 _dot = (f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;'
-                        f'background:{_event_color(e.get("created_by",""))};margin-right:6px"></span>')
-                _t = (f"{_dot}<b>{_html.escape(e.get('event_time') or '終日')}</b>　"
-                      f"{_html.escape(e['title'])}")
+                        f'background:{_event_color(_uid)};margin-right:6px;flex:0 0 auto"></span>')
+                _tl  = _event_time_label(e) or "終日"
+                _title = (f"{_dot}<b>{_html.escape(_tl)}</b>　{_html.escape(e['title'])}")
+                # タイトル行（左）と 作成者アイコン＋名前（右）を横並び
+                _who = (f'<div style="display:flex;align-items:center;gap:5px;flex:0 0 auto">'
+                        f'{_avatar_html(_u.get("avatar", ""), 22)}'
+                        f'<span style="font-size:0.74rem;color:rgba(240,232,224,0.7)">'
+                        f'{_html.escape(_name)}</span></div>')
+                _row = (f'<div style="display:flex;align-items:center;gap:8px">'
+                        f'<div style="flex:1;min-width:0">{_title}</div>{_who}</div>')
                 _n = (f"<div style='font-size:0.78rem;color:rgba(240,232,224,0.55);"
-                      f"margin:1px 0 0 15px'>{_html.escape(e['note'])}</div>" if e.get("note") else "")
-                _by = (f"<div style='font-size:0.68rem;color:rgba(240,232,224,0.4);"
-                       f"margin:2px 0 0 15px'>by {_html.escape(e.get('created_by_name', ''))}</div>")
-                st.markdown(f"<div style='padding:7px 2px;border-bottom:1px solid "
-                            f"rgba(255,255,255,0.07)'>{_t}{_n}{_by}</div>", unsafe_allow_html=True)
+                      f"margin:2px 0 0 15px'>{_html.escape(e['note'])}</div>" if e.get("note") else "")
+                st.markdown(f"<div style='padding:8px 2px;border-bottom:1px solid "
+                            f"rgba(255,255,255,0.07)'>{_row}{_n}</div>", unsafe_allow_html=True)
             with ec2:
                 if st.button("🗑", key=f"cal_del_{e['id']}", use_container_width=True):
                     delete_event(e["id"]); st.rerun()
@@ -2779,12 +2810,15 @@ def show_event_new(current_user: dict) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
     d = st.date_input("日付", value=default_d, key="ev_date", format="YYYY/MM/DD")
     title = st.text_input("予定", placeholder="例：パパ通院 / 〇〇の誕生日", key="ev_title")
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        allday = st.checkbox("終日", value=True, key="ev_allday")
-    with c2:
-        tval = st.time_input("時刻", value=None, key="ev_time",
-                             label_visibility="collapsed", disabled=allday)
+    allday = st.checkbox("終日", value=True, key="ev_allday")
+    if not allday:
+        tc1, tc2 = st.columns(2)
+        with tc1:
+            tval = st.time_input("開始", value=None, key="ev_time")
+        with tc2:
+            tend = st.time_input("終了（任意）", value=None, key="ev_time_end")
+    else:
+        tval = tend = None
     note = st.text_input("メモ（任意）", key="ev_note")
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("✅ この予定を登録", type="primary", use_container_width=True, key="ev_save"):
@@ -2793,12 +2827,16 @@ def show_event_new(current_user: dict) -> None:
         else:
             iso  = d.isoformat()
             tstr = "" if allday or tval is None else tval.strftime("%H:%M")
+            estr = "" if allday or tend is None else tend.strftime("%H:%M")
+            if tstr and estr and estr < tstr:
+                st.error("終了時刻は開始時刻より後にしてください")
+                return
             try:
                 create_event(iso, tstr, title.strip(), (note or "").strip(),
-                             current_user.get("id", ""), current_user.get("name", ""))
+                             current_user.get("id", ""), current_user.get("name", ""), end_str=estr)
                 _push_event_added(current_user.get("id", ""),
                                   current_user.get("name", ""), iso, tstr, title.strip())
-                for k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_note"):
+                for k in ("ev_date", "ev_title", "ev_allday", "ev_time", "ev_time_end", "ev_note"):
                     st.session_state.pop(k, None)
                 # 登録した日へ移動してカレンダーに戻る
                 st.session_state["cal_selected"] = iso

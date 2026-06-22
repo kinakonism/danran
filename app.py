@@ -1973,13 +1973,13 @@ def show_register() -> None:
 
         name = st.text_input("お名前", placeholder="例：パパ、ママ、はなこ…", max_chars=20)
         st.markdown("**アバター**")
-        atype = st.radio("", ["絵文字", "写真"], horizontal=True, label_visibility="collapsed")
+        atype = st.radio("アバターの種類", ["絵文字", "写真"], horizontal=True, label_visibility="collapsed")
         avatar_emoji = "🙂"; avatar_photo = None
         if atype == "絵文字":
             st.caption("スマホのキーボードから絵文字を選んでね 😊")
-            avatar_emoji = st.text_input("", value="🙂", max_chars=8, label_visibility="collapsed") or "🙂"
+            avatar_emoji = st.text_input("絵文字", value="🙂", max_chars=8, label_visibility="collapsed") or "🙂"
         else:
-            avatar_photo = st.file_uploader("", type=["jpg","jpeg","png","webp"], label_visibility="collapsed")
+            avatar_photo = st.file_uploader("写真", type=["jpg","jpeg","png","webp"], label_visibility="collapsed")
             if avatar_photo:
                 try:
                     preview_bytes, _ = _fix_exif(avatar_photo)
@@ -1987,11 +1987,11 @@ def show_register() -> None:
                 except Exception:
                     st.image(avatar_photo, width=80)
         st.markdown("**電話番号**（任意）")
-        phone = st.text_input("", placeholder="例：09012345678（ハイフンなし）", label_visibility="collapsed",
+        phone = st.text_input("電話番号", placeholder="例：09012345678（ハイフンなし）", label_visibility="collapsed",
                               key="reg_phone")
         st.caption("ハイフンなしで入力してください。電話番号でもログインできるようになります。")
         st.markdown("**パスワード**")
-        pw  = st.text_input("", type="password", placeholder="4文字以上", label_visibility="collapsed")
+        pw  = st.text_input("パスワード", type="password", placeholder="4文字以上", label_visibility="collapsed")
         pw2 = st.text_input("パスワード（確認）", type="password", placeholder="もう一度入力")
         st.divider()
         # ── ボタン（主アクション→戻る の順） ──
@@ -2082,7 +2082,7 @@ def show_profile(current_user: dict) -> None:
             st.caption("スマホのキーボードから絵文字を選んでね 😊")
             cur_emoji = av if not av.startswith("http") else "🙂"
             new_emoji = (
-                st.text_input("", value=cur_emoji, max_chars=8,
+                st.text_input("絵文字", value=cur_emoji, max_chars=8,
                               label_visibility="collapsed", key="profile_emoji")
                 or cur_emoji
             )
@@ -2332,7 +2332,7 @@ def show_room_edit(room: dict) -> None:
         # ── ルーム名変更 ──
         st.markdown("**ルーム名を変更**")
         new_name = (
-            st.text_input("", value=room_name, max_chars=30,
+            st.text_input("ルーム名", value=room_name, max_chars=30,
                           label_visibility="collapsed", key="room_edit_name")
             or room_name
         ).strip()
@@ -2342,7 +2342,7 @@ def show_room_edit(room: dict) -> None:
         st.markdown("**アイコンを変更**")
         if "room_edit_atype" not in st.session_state:
             st.session_state["room_edit_atype"] = "写真" if room_icon.startswith("http") else "絵文字"
-        atype = st.radio("", ["絵文字", "写真"], horizontal=True,
+        atype = st.radio("アイコンの種類", ["絵文字", "写真"], horizontal=True,
                          label_visibility="collapsed", key="room_edit_atype")
 
         new_icon: str | None = None
@@ -2352,14 +2352,14 @@ def show_room_edit(room: dict) -> None:
             st.caption("スマホのキーボードから絵文字を選んでね 😊")
             cur_emoji = room_icon if not room_icon.startswith("http") else "💬"
             new_emoji = (
-                st.text_input("", value=cur_emoji, max_chars=8,
+                st.text_input("絵文字", value=cur_emoji, max_chars=8,
                               label_visibility="collapsed", key="room_edit_emoji")
                 or cur_emoji
             )
             st.markdown(f"プレビュー: {new_emoji} **{new_name}**")
             new_icon = new_emoji
         else:
-            icon_photo = st.file_uploader("", type=["jpg", "jpeg", "png", "webp"],
+            icon_photo = st.file_uploader("写真", type=["jpg", "jpeg", "png", "webp"],
                                           label_visibility="collapsed", key="room_edit_photo")
             if icon_photo:
                 try:
@@ -3248,7 +3248,7 @@ def show_room_create() -> None:
         # ── ルーム名 ──
         st.markdown("**ルーム名**")
         new_name = (
-            st.text_input("", placeholder="例：おでかけ計画", max_chars=30,
+            st.text_input("ルーム名", placeholder="例：おでかけ計画", max_chars=30,
                           label_visibility="collapsed", key="room_create_name")
             or ""
         ).strip()
@@ -3256,7 +3256,7 @@ def show_room_create() -> None:
         # ── アイコン ──
         st.divider()
         st.markdown("**アイコン**")
-        atype = st.radio("", ["絵文字", "写真"], horizontal=True,
+        atype = st.radio("アイコンの種類", ["絵文字", "写真"], horizontal=True,
                          label_visibility="collapsed", key="room_create_atype")
 
         new_icon: str = "💬"
@@ -3265,14 +3265,14 @@ def show_room_create() -> None:
         if atype == "絵文字":
             st.caption("スマホのキーボードから絵文字を選んでね 😊")
             new_icon = (
-                st.text_input("", value="💬", max_chars=8,
+                st.text_input("絵文字", value="💬", max_chars=8,
                               label_visibility="collapsed", key="room_create_emoji")
                 or "💬"
             )
             if new_name:
                 st.markdown(f"プレビュー: {new_icon} **{new_name}**")
         else:
-            icon_photo = st.file_uploader("", type=["jpg", "jpeg", "png", "webp"],
+            icon_photo = st.file_uploader("写真", type=["jpg", "jpeg", "png", "webp"],
                                           label_visibility="collapsed", key="room_create_photo")
             if icon_photo:
                 try:

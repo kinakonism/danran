@@ -2630,38 +2630,43 @@ _WEEK_JP = ["日", "月", "火", "水", "木", "金", "土"]
 
 def _push_event_added(creator_uid: str, creator_name: str, day_iso: str,
                       time_str: str, title: str) -> None:
-    """予定追加を家族全員（追加者以外）に Web Push。メインスレッドから呼ぶ。"""
+    """予定追加を家族全員（追加者以外）に Web Push。
+    ★ VAPID 鍵はメインスレッドで取得し、送信(DBクエリ＋webpush)は別スレッドで実行する。
+      死んだ購読の webpush タイムアウトで『登録』ボタンが固まるのを防ぐ。"""
+    cfg  = _vapid_cfg()
+    priv = cfg.get("vapid_private_key", "")
+    subj = cfg.get("vapid_subject", "")
+    if not (priv and subj):
+        return
     try:
-        cfg  = _vapid_cfg()
-        priv = cfg.get("vapid_private_key", "")
-        subj = cfg.get("vapid_subject", "")
-        if not (priv and subj):
-            return
-        from pywebpush import webpush, WebPushException
-        try:
-            _d = datetime.fromisoformat(day_iso)
-            _when = f"{_d.month}月{_d.day}日（{_WEEK_JP[(_d.weekday() + 1) % 7]}）"
-        except Exception:
-            _when = day_iso
-        if time_str:
-            _when += f" {time_str}"
-        rows = supabase.table("push_subscriptions")\
-            .select("endpoint, p256dh, auth, user_id")\
-            .neq("user_id", creator_uid).execute().data or []
-        payload = json.dumps({
-            "title": "📅 予定が追加されました",
-            "body":  f"{creator_name}: {_when} {title}",
-            "url":   "/",
-        }, ensure_ascii=False)
-        for row in rows:
-            try:
-                webpush(subscription_info={"endpoint": row["endpoint"],
-                        "keys": {"p256dh": row["p256dh"], "auth": row["auth"]}},
-                        data=payload, vapid_private_key=priv, vapid_claims={"sub": subj})
-            except Exception:
-                pass
+        _d = datetime.fromisoformat(day_iso)
+        _when = f"{_d.month}月{_d.day}日（{_WEEK_JP[(_d.weekday() + 1) % 7]}）"
     except Exception:
-        pass
+        _when = day_iso
+    if time_str:
+        _when += f" {time_str}"
+    payload = json.dumps({
+        "title": "📅 予定が追加されました",
+        "body":  f"{creator_name}: {_when} {title}",
+        "url":   "/",
+    }, ensure_ascii=False)
+
+    def _worker():
+        try:
+            from pywebpush import webpush
+            rows = supabase.table("push_subscriptions")\
+                .select("endpoint, p256dh, auth, user_id")\
+                .neq("user_id", creator_uid).execute().data or []
+            for row in rows:
+                try:
+                    webpush(subscription_info={"endpoint": row["endpoint"],
+                            "keys": {"p256dh": row["p256dh"], "auth": row["auth"]}},
+                            data=payload, vapid_private_key=priv, vapid_claims={"sub": subj})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    threading.Thread(target=_worker, daemon=True).start()
 
 # 予定チップの色（作成者ごとに固定）。最初の数人が最大限はっきり違う色になる並び。
 _EVENT_COLORS = ["#5bbf8a", "#6a9bd0", "#c98fb0", "#d4a24c",

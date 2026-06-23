@@ -452,13 +452,22 @@ UNIQUE(user_id, room_name) で upsert。
 - 既存導入時は `rooms × users` を全 backfill して「全員が全ルーム」を維持（新規ルームのみ招待制）。
 - **注意**: anon key + RLS全許可のため「ソフトな制限」。完全秘匿はマルチテナント＋RLS強制が必要。
 
-### Supabase Storage バケット
+### ★ 写真も R2 へ移行（2026-06-23・Supabase egress 超過対策）
+
+Supabase 無料枠の **Egress(通信量) 5.5GB を超過**（12.84GB・6/25 停止予告）したため、**写真の配信を R2（egress 無料）へ移行**した。動画は既に R2 だったので、これで画像・動画・アバター・ルームアイコン・プロフィール背景・スタンプ以外すべて R2 配信。
+- **新規アップロード**: チャット画像＝JS `uploadOneImage`→`/media/upload`（R2）。アバター類＝Python `upload_photo`→`_upload_to_r2`（**絶対URL** `https://…workers.dev/media/<key>` を返す。`startswith("http")` のアバター画像判定と整合させるため絶対URL必須）。
+- **既存写真の移行**: `tools/migrate_images_to_r2.py`（冪等・IPv4固定・リトライ）で Supabase Storage の既存画像を R2 へコピーし、DB 参照（`messages.image_url/user_avatar`・`users.avatar/cover_url`・`rooms.icon`）を R2 URL に差し替え済み。**Supabase 原本は削除せず保持**（凍結アーカイブ）。
+- **AIボットアイコン**: `AI_BOT_AVATAR`(app.py)・`BOT_AVATAR`(bridge) も R2 URL に更新済み。
+- **★ bridge 掃除の注意**: 写真が R2 に来たので `r2_sweep` の参照集合は**全カラム**（image_url/video_url/reply_to_image/**user_avatar**/users.avatar/cover_url/rooms.icon/BOT_AVATAR）を見る（漏れるとアバターを孤児誤判定で削除）。**`orphan_sweep`（Supabase Storage 掃除）は無効化**（DB が R2 を指すため、動かすと Supabase 原本＝残すべき写真を消す）。
+- Realtime/DB アクセスは引き続き Supabase 直（egress は小）。
+
+### Supabase Storage バケット（現在は凍結アーカイブ＝新規書き込みなし・配信は R2）
 
 | バケット      | 用途                                      |
 |-------------|------------------------------------------|
-| avatars     | ユーザーアイコン写真（`{user_id}.jpg`）、ルームアイコン写真（`room_{room_id}.jpg`）、プロフィール背景（`cover_{user_id}.jpg`）、AIボットアイコン（`ai-bot.png`） |
-| chat-images | チャット添付画像（JS が直接アップロード）   |
-| stamps      | カスタムスタンプ（`stamp_*.png/jpg`）。**orphan_sweep の対象外**＝トレイから削除しても画像本体は残す（送信済みメッセージを壊さない設計） |
+| avatars     | （旧）ユーザー/ルームアイコン・背景・AIボットアイコン。現在は R2 へ移行済み・原本のみ残置 |
+| chat-images | （旧）チャット添付画像。現在は R2 へ移行済み・原本のみ残置 |
+| stamps      | カスタムスタンプ（`stamp_*.png/jpg`）。まだ Supabase 配信（少量）。**orphan_sweep 対象外** |
 
 ### カスタムスタンプ（2026-06-10〜）
 

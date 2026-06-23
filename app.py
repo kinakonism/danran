@@ -503,11 +503,31 @@ def _fix_exif(f) -> tuple[bytes, str]:
     return buf.getvalue(), "image/jpeg"
 
 
+# R2 メディアアップロード先（worker。egress 無料）。Supabase egress 超過対策で
+# 写真も R2 へ寄せる。worker は x-danran-auth(anon key) と User-Agent を要求。
+_R2_WORKER = "https://danran-chat.kinakonism.workers.dev"
+
+def _upload_to_r2(data: bytes, content_type: str = "image/jpeg") -> str:
+    """バイト列を R2 にアップロードし、相対URL /media/<key> を返す。"""
+    import urllib.request as _ur
+    req = _ur.Request(_R2_WORKER + "/media/upload", data=data, method="POST",
+                      headers={"Content-Type": content_type,
+                               "x-danran-auth": (_sb_key_runtime() or ""),
+                               "User-Agent": "danran-app/1.0"})
+    with _ur.urlopen(req, timeout=60) as r:
+        j = json.loads(r.read())
+    # 絶対URLで返す（avatar 等は startswith("http") で画像判定されるため）
+    return _R2_WORKER + j["url"]   # 例: https://danran-chat.kinakonism.workers.dev/media/...jpg
+
+def _sb_key_runtime() -> str:
+    return ((st.secrets.get("supabase") or {}).get("anon_key")
+            or os.environ.get("SUPABASE_ANON_KEY", ""))
+
 def upload_photo(bucket: str, file_id: str, f) -> str:
+    """写真を R2 に保存して /media/<key> を返す（旧: Supabase Storage）。
+    egress 無料の R2 配信に統一。bucket/file_id は後方互換のため受けるが R2 では未使用。"""
     data, content_type = _fix_exif(f)   # EXIF 回転適用 + JPEG 変換
-    fn = f"{file_id}.jpg"               # 常に .jpg（JPEG 変換後）
-    supabase.storage.from_(bucket).upload(fn, data, {"content-type": content_type, "upsert": "true"})
-    return supabase.storage.from_(bucket).get_public_url(fn)
+    return _upload_to_r2(data, content_type)
 
 # ─────────────────────────────────────
 # ユーザー DB
@@ -721,7 +741,7 @@ AI_BOT_UID    = "00000000-0000-0000-0000-0000000000a1"
 AI_BOT_NAME   = "🤖 アシスタント"
 # 専用アイコン画像（絵文字🤖はメンション補完等で小さく潰れて見づらいため画像化。
 # bridge の BOT_AVATAR・rooms.icon・既存 messages.user_avatar も同じ URL に統一済み）
-AI_BOT_AVATAR = "https://fyadpbzlvyzihynpcckw.supabase.co/storage/v1/object/public/avatars/ai-bot.png"
+AI_BOT_AVATAR = "https://danran-chat.kinakonism.workers.dev/media/1782217489159-8c98f3296ab749d3.png"
 AI_SYSTEM_PROMPT = (
     "あなたは家族専用チャットアプリ「danran」のサポート用 AI アシスタントです。"
     "ここは家族みんなが見る『🤖 AIサポート』ルームで、使い方の質問やバグ報告に日本語でやさしく簡潔に答えます。\n\n"
@@ -1052,7 +1072,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v170",   # 入力欄の改行を自前挿入（空改行が消しにくいバグ対策）
+    "danran_lp_v171",   # チャット画像を R2 アップロードに移行（Supabase egress超過対策）
     path=_LP_COMPONENT_DIR,
 )
 

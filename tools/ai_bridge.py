@@ -48,7 +48,7 @@ JST = timezone(timedelta(hours=9), "JST")
 ROOM       = "🤖 AIサポート"
 BOT_UID    = "00000000-0000-0000-0000-0000000000a1"
 BOT_NAME   = "🤖 アシスタント"
-BOT_AVATAR = "https://fyadpbzlvyzihynpcckw.supabase.co/storage/v1/object/public/avatars/ai-bot.png"
+BOT_AVATAR = "https://danran-chat.kinakonism.workers.dev/media/1782217489159-8c98f3296ab749d3.png"
 REPO_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # claude を動かす作業ディレクトリ。REPO_DIR にすると danran のコード/CLAUDE.md を読んで
 # 正確に答えられる（その分ファイルにアクセスできる）。安全重視なら中立なフォルダに変える。
@@ -801,8 +801,13 @@ def _sweep_bucket(bucket, referenced):
     return deleted
 
 def orphan_sweep():
-    """孤児ファイル（削除済みメッセージ/ルームの画像など）を Storage から自動掃除。日次。"""
-    try:
+    """【無効化 2026-06-23】写真を R2 へ移行したため Supabase Storage は『凍結アーカイブ』
+    （新規アップロードなし＝新たな孤児は出ない／既存原本はバックアップとして残す方針）。
+    DB は R2 を指すようになったので、この掃除を動かすと Supabase 原本(=残すべき写真)を
+    全部消してしまう。よって無効化。Supabase Storage の整理が必要になったら手動で行う。"""
+    print("[danran-bridge] 🧹 Sup孤児掃除: 無効化済み（写真はR2移行・原本はアーカイブ保持）")
+    return
+    try:  # noqa: unreachable（参考に旧実装を残す）
         # chat-images: messages.image_url で参照されている name 集合
         # ★ api_all 必須: api() は最大1000行で切れ、参照集合が欠けると「使用中の画像」を
         #   孤児と誤判定して消してしまう。
@@ -864,12 +869,22 @@ def r2_sweep():
     /media/<key> を、アップロード24時間猶予つきで Worker 経由で削除する。日次。
     （メッセージ削除は R2 オブジェクトを消さないため、放置すると無料枠10GBを食う）"""
     try:
+        # ★ 写真を R2 へ移行(2026-06-23)後、画像/動画だけでなく アバター・ルームアイコン・
+        #   プロフィール背景・メッセージのアバタースナップショット も R2 を指す。これらを
+        #   参照集合に入れないと「使用中のアバター」を孤児と誤判定して消す（要全カラム）。
         refs = set()
-        rows = api_all("messages?select=image_url,video_url&order=created_at.asc")
-        for m in rows:
-            for u in (m.get("image_url"), m.get("video_url")):
-                if u and "/media/" in u:
-                    refs.add(u.split("/media/", 1)[1].split("?")[0])
+        def _add(u):
+            if u and "/media/" in u:
+                refs.add(u.split("/media/", 1)[1].split("?")[0])
+        for m in api_all("messages?select=image_url,video_url,reply_to_image,user_avatar"
+                         "&order=created_at.asc"):
+            _add(m.get("image_url")); _add(m.get("video_url"))
+            _add(m.get("reply_to_image")); _add(m.get("user_avatar"))
+        for u in api_all("users?select=avatar,cover_url&order=created_at.asc"):
+            _add(u.get("avatar")); _add(u.get("cover_url"))
+        for r in api_all("rooms?select=icon&order=created_at.asc"):
+            _add(r.get("icon"))
+        _add(BOT_AVATAR)   # AI ボットアイコン（users 表に無い固定参照）
         objs = worker_api("GET", "/media-admin/list") or []
         from datetime import timezone, timedelta
         cutoff = datetime.now(timezone.utc) - timedelta(hours=ORPHAN_GRACE_H)

@@ -4033,27 +4033,23 @@
   }
 
   async function uploadOneImage(file, room, avatar) {
-    var up      = await compressImage(file);
-    var ext     = (up.type === 'image/jpeg') ? 'jpg' : ((file.name.split('.').pop() || 'jpg').toLowerCase());
-    var objName = Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
-    var uploadResp = await fetch(
-      SB_URL + '/storage/v1/object/' + CHAT_IMG_BUCKET + '/' + objName,
-      {
-        method: 'POST',
-        headers: {
-          'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY,
-          'Content-Type': up.type || 'image/jpeg', 'x-upsert': 'true',
-          // 長期キャッシュ（再描画時のブランク/再取得を減らす）
-          'cache-control': 'max-age=31536000',
-        },
-        body: up,
-      }
-    );
+    // ★ Supabase の egress(無料枠5.5GB)超過対策で R2 に保存（egress無料・worker配信）。
+    //   動画と同じ /media/upload へ。image_url は相対 /media/<key>（= worker オリジンで配信）。
+    var up   = await compressImage(file);
+    var base = '';
+    try { base = window.parent.location.origin; } catch (e) { base = ''; }
+    var uploadResp = await fetch(base + '/media/upload', {
+      method: 'POST',
+      headers: { 'content-type': up.type || 'image/jpeg', 'x-danran-auth': SB_KEY },
+      body: up,
+    });
     if (!uploadResp.ok) {
       var et = await uploadResp.text();
       throw new Error('Upload ' + uploadResp.status + ': ' + et.slice(0, 120));
     }
-    var imageUrl = SB_URL + '/storage/v1/object/public/' + CHAT_IMG_BUCKET + '/' + objName;
+    var j = await uploadResp.json();
+    if (!j || !j.url) throw new Error('no url');
+    var imageUrl = (base || '') + j.url;   // 絶対URL（worker配信・他箇所のhttp判定と整合）
     var insertResp = await sbPost('messages', {
       // ★ user_id を必ず入れる（削除は user_id 認可のため、無いと画像が消せない）
       room_name: room, user_id: ME_UID, user_name: ME, user_avatar: avatar,

@@ -295,6 +295,14 @@ export default {
     if (url.pathname === '/media-admin/delete' && request.method === 'POST') {
       return handleMediaAdmin(request, env, 'delete');
     }
+    //   /backup-admin/*: bridge(mini) の日次 DB バックアップ off-site 保管（put / list）。
+    //   ★ 公開 GET は無い（パスワードハッシュ等を含むため絶対に配信しない）。
+    if (url.pathname === '/backup-admin/put' && request.method === 'PUT') {
+      return handleBackupAdmin(request, url, env, 'put');
+    }
+    if (url.pathname === '/backup-admin/list' && request.method === 'GET') {
+      return handleBackupAdmin(request, url, env, 'list');
+    }
 
     // ── WebSocket プロキシ ───────────────────────────────────────────
     if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
@@ -409,6 +417,39 @@ async function handleMediaAdmin(request, env, op) {
     });
   } catch (e) {
     return new Response('admin error: ' + (e && e.message), { status: 500 });
+  }
+}
+
+// ── R2 バックアップ: 管理（bridge の日次 DB バックアップ off-site 保管）─────────
+//   /backup-admin/put?key=NAME (PUT)  → 本文をそのまま danran-backups バケットへ保存
+//   /backup-admin/list        (GET)  → {key,size,uploaded} 一覧（容量確認・世代管理用）
+//   ★ 公開 GET 配信は用意しない（中身に password_hash 等を含むため）。x-danran-auth ゲート。
+async function handleBackupAdmin(request, url, env, op) {
+  try {
+    if (!env || !env.danran_backups) return new Response('R2 unbound', { status: 500 });
+    if ((request.headers.get('x-danran-auth') || '') !== SB_ANON)
+      return new Response('forbidden', { status: 403 });
+    if (op === 'list') {
+      const out = [];
+      let cursor;
+      do {
+        const page = await env.danran_backups.list({ cursor, limit: 1000 });
+        for (const o of page.objects) out.push({ key: o.key, size: o.size, uploaded: o.uploaded });
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor);
+      return new Response(JSON.stringify(out), { headers: { 'Content-Type': 'application/json' } });
+    }
+    // put
+    const key = (url.searchParams.get('key') || '').replace(/[^A-Za-z0-9._-]/g, '');
+    if (!key) return new Response('bad key', { status: 400 });
+    await env.danran_backups.put(key, request.body, {
+      httpMetadata: { contentType: request.headers.get('content-type') || 'application/gzip' },
+    });
+    return new Response(JSON.stringify({ ok: true, key: key }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (e) {
+    return new Response('backup-admin error: ' + (e && e.message), { status: 500 });
   }
 }
 

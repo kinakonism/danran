@@ -864,6 +864,18 @@ def worker_api(method, path, body=None):
         raw = r.read()
         return json.loads(raw) if raw else None
 
+def backup_to_r2(local_path, key):
+    """ローカルの gz を Worker 経由で R2 の非公開バケット(danran-backups)へ PUT。"""
+    with open(local_path, "rb") as f:
+        data = f.read()
+    req = urllib.request.Request(
+        WORKER_URL + "/backup-admin/put?key=" + urllib.parse.quote(key), data=data, method="PUT",
+        headers={"x-danran-auth": KEY, "Content-Type": "application/gzip",
+                 "User-Agent": "danran-bridge/1.0"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        r.read()
+    print(f"[danran-bridge] ☁️ R2バックアップ保存: {key}")
+
 def r2_sweep():
     """R2（danran-media）の孤児掃除。messages の video_url / image_url が参照しない
     /media/<key> を、アップロード24時間猶予つきで Worker 経由で削除する。日次。
@@ -951,6 +963,12 @@ def backup_daily():
         os.replace(tmp, path)   # 書きかけファイルを正規名にしない
         n_msg = len(dump.get("messages", []))
         print(f"[danran-bridge] 💾 バックアップ保存: {path}（messages {n_msg} 件）")
+        # ★ off-site コピー: R2 の非公開バケットへも保存（Supabase でも mini 単独でもない
+        #   3つ目の場所。mini が壊れてもデータが残る）。失敗してもローカルは確保済みなので警告のみ。
+        try:
+            backup_to_r2(path, f"danran-{day}.json.gz")
+        except Exception as e:
+            print("[danran-bridge] R2バックアップ失敗(ローカルは確保済み):", e)
         # 古い世代を削除（新しい順に BACKUP_KEEP 件残す）
         gens = sorted(glob.glob(os.path.join(BACKUP_DIR, "danran-*.json.gz")), reverse=True)
         for old in gens[BACKUP_KEEP:]:

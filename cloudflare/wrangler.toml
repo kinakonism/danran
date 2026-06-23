@@ -8,6 +8,12 @@ compatibility_date = "2024-01-01"
 bucket_name = "danran-media"
 binding = "danran_media"
 
+# DBバックアップ(JSON.gz)の off-site 保管先（非公開＝/media のように公開配信しない）。
+# bridge が日次でここへ PUT。Supabase でも mini 単独でもない3つ目のコピー。
+[[r2_buckets]]
+bucket_name = "danran-backups"
+binding = "danran_backups"
+
 [triggers]
 # 15分おきにウォームアップ（Streamlit をスリープさせず、起動時の詰まり/暗転を防ぐ）
 crons = ["*/15 * * * *"]

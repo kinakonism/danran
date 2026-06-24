@@ -4355,7 +4355,6 @@ if isinstance(_lp_result, dict):
 # _session_retry 中（通信エラーで復元を一時保留）もスプラッシュを維持し、
 # splashWatchdog の restore_session 再送で回復を待つ（誤ログアウト＝ログイン画面を出さない）。
 _waiting_for_js = ((_lp_result is None or st.session_state.get("_session_retry"))
-                   and "current_user" not in st.session_state
                    and st.session_state.get("view") not in ("register",))
 if _waiting_for_js:
     # セッション復元待ちの間、意図的なスプラッシュを全画面で表示する。

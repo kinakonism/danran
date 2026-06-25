@@ -4766,10 +4766,16 @@
       setNativeValue(ta, before + insert + after);
       var pos = (before + insert).length;
       try { ta.setSelectionRange(pos, pos); } catch (e) {}
-      ta.focus();
       hide();
-      // ★ iOS で補完直後にフォーカスが外れ、続けて打とうとするとキーボードが
-      //   固まることがあるので、次フレームでもう一度フォーカスとカーソル位置を念押し。
+      // ★ iOS: 補完で値を差し込むと textarea が「見た目はフォーカスされてるのに
+      //   IME(キーボード)の入力先になっていない」状態に陥り、続けて打っても文字が
+      //   出ない（キーボード右上の確定マークを押して戻すと直る＝blur→focusで復帰する）。
+      //   そこで一度 blur して即 focus し直し、IME の入力先を強制的にリセットする。
+      //   この applyMention は touchstart/click のユーザー操作起点なので、同一ジェスチャー内の
+      //   blur→focus ではキーボードは閉じない（IME の状態だけ作り直される）。
+      try { ta.blur(); } catch (e) {}
+      try { ta.focus(); ta.setSelectionRange(pos, pos); } catch (e) {}
+      // 念のため次フレームでもフォーカスとカーソル位置を確定。
       try {
         pWin().requestAnimationFrame(function () {
           try { ta.focus(); ta.setSelectionRange(pos, pos); } catch (e) {}

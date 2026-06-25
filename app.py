@@ -1072,7 +1072,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v172",   # @メンション補完ポップを透過化＋補完後にフォーカス念押し（キーボード固まり対策）
+    "danran_lp_v173",   # @メンション補完後に blur→focus で IME 入力先をリセット（文字が出ない固まり対策）
     path=_LP_COMPONENT_DIR,
 )
 

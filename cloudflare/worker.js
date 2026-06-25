@@ -573,6 +573,17 @@ async function proxyHttp(request, url) {
           //   保持したまま health を払い続け、通った時だけリロード（健全時のみ＝無限高速
           //   ループにならない）。リロード間隔は _dws で漸増（8s→16s→…→60s 上限）。
           //   正常表示で _dwd/_dws とも解除。これで「3回失敗→永久に真っ暗」を根絶する。
+          // ★ Safari/WebKit 対策: remark/parse5 が絵文字(サロゲートペア)をタグ名に混入する
+          //   バグを防ぐ。lone surrogate がタグ名に入ると WebKit が InvalidCharacterError を
+          //   投げて React ツリーが落ちる（AIサポートルームの 👎 リアクションで発症）。
+          //   Python 側の HTML エンティティ化でも対処しているが、Worker 側でも二重防衛する。
+          el.append(
+            '<script>(function(){try{var _oce=Document.prototype.createElement;' +
+            'Document.prototype.createElement=function(tag,o){' +
+            'if(typeof tag==="string"){tag=tag.replace(/[\\uD800-\\uDFFF]/g,"");}' +
+            'return _oce.call(this,tag,o);};}catch(ignore){}})();</script>',
+            { html: true },
+          );
           el.append(
             '<script>(function(){try{setTimeout(function(){try{' +
             'var stuck=(!document.getElementById("_danran_cfg"))||document.getElementById("_danran_splash_wait");' +

@@ -1575,6 +1575,15 @@ def build_messages_html(selected_room: str, current_user: dict, limit: int = 100
         extras  = sorted(e for e in msg_reactions if e not in REACTION_EMOJIS and msg_reactions.get(e))
         return present + extras
 
+    def _esc_nonbmp(text: str) -> str:
+        """サロゲートペア(>U+FFFF)が必要な文字を数値文字参照にエンコード。
+        parse5/WebKit バグ回避: 絵文字がタグ名に混入するとサファリが InvalidCharacterError。
+        HTML エンティティにすれば parse5 は ASCII だけ読むため surrogate pair 問題が起きない。"""
+        return "".join(
+            f"&#{ord(c)};" if ord(c) > 0xFFFF else c
+            for c in text
+        )
+
     def _build_pills(msg_reactions: dict) -> str:
         pills = ""
         for emoji in _pill_emojis(msg_reactions):
@@ -1583,20 +1592,24 @@ def build_messages_html(selected_room: str, current_user: dict, limit: int = 100
                 my  = uname in users
                 bg  = "rgba(232,145,91,0.32)" if my else "rgba(255,255,255,0.08)"
                 bdr = "rgba(240,168,104,0.9)" if my else "rgba(255,255,255,0.2)"
+                safe_emoji = _esc_nonbmp(_html.escape(emoji))
                 # data-react-pill: 長押しで「誰が押したか」ポップアップ（JS）。
+                # ★ 絵文字を数値文字参照で出力: parse5 に raw surrogate pair を渡さない。
                 pills += (
-                    f'<span data-react-pill="1" data-emoji="{_html.escape(emoji)}" '
+                    f'<span data-react-pill="1" data-emoji="{safe_emoji}" '
                     f'style="display:inline-flex;align-items:center;gap:2px;'
                     f'background:{bg};border:1px solid {bdr};border-radius:20px;'
                     f'padding:1px 7px;font-size:0.8rem;margin-right:3px;cursor:pointer">'
-                    f'{emoji}&nbsp;{len(users)}</span>'
+                    f'{_esc_nonbmp(emoji)}&nbsp;{len(users)}</span>'
                 )
         return pills
 
     def _react_users_json(msg_reactions: dict) -> str:
-        """{emoji: [name,...]} を data 属性用 JSON に（誰がどのスタンプを押したか）。"""
+        """{emoji: [name,...]} を data 属性用 JSON に（誰がどのスタンプを押したか）。
+        ★ ensure_ascii=True: JSON 内の絵文字を \\uXXXX エスケープに変換し
+           parse5 に raw surrogate pair を渡さない（WebKit クラッシュ防止）。"""
         data = {e: msg_reactions.get(e, []) for e in _pill_emojis(msg_reactions)}
-        return _html.escape(json.dumps(data, ensure_ascii=False), quote=True)
+        return _html.escape(json.dumps(data, ensure_ascii=True), quote=True)
 
     # ── 連投画像のグルーピング（LINE 風コンパクトグリッド）──
     #   同一送信者・画像のみ（本文なし）・直前から WINDOW 秒以内 のメッセージが

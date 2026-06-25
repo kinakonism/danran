@@ -1072,7 +1072,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v174",   # @メンション補完を execCommand('insertText') で挿入＝IME 入力先を保ったまま（文字が出ない固まり根治）
+    "danran_lp_v175",   # @メンション補完: 選択範囲を delete してから挿入＝@が二重(@〇〇@テスト)になるバグ根治
     path=_LP_COMPONENT_DIR,
 )
 

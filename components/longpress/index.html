@@ -4774,6 +4774,12 @@
         ta.focus();
         ta.setSelectionRange(at, caret);   // 置き換える「@クエリ」部分を選択
         if (pDoc.execCommand) {
+          // ★ iOS で「@が重なる(@〇〇@テスト)」バグの根治。
+          //   insertText 単体だと、タップ起点の編集では setSelectionRange の選択が
+          //   無視されて元の「@クエリ」が消えず、その後ろに「@名前 」が挿し込まれて
+          //   @ が二重になることがある。そこで先に選択範囲を delete で確実に消してから
+          //   挿入する（どちらも execCommand なので focus / IME 入力先は保たれる）。
+          if (at !== caret) { try { pDoc.execCommand('delete', false, null); } catch (e) {} }
           done = pDoc.execCommand('insertText', false, insert);
         }
       } catch (e) { done = false; }

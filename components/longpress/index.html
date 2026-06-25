@@ -4759,26 +4759,41 @@
     function applyMention(tag) {
       var ta = getTa();
       if (!ta || state.at < 0) { hide(); return; }
-      var val = ta.value || '';
-      var before = val.slice(0, state.at);
-      var after  = val.slice(state.caret);
+      var at = state.at, caret = state.caret;   // hide() で state がリセットされる前に退避
       var insert = '@' + tag + ' ';
-      setNativeValue(ta, before + insert + after);
-      var pos = (before + insert).length;
-      try { ta.setSelectionRange(pos, pos); } catch (e) {}
       hide();
-      // ★ iOS: 補完で値を差し込むと textarea が「見た目はフォーカスされてるのに
-      //   IME(キーボード)の入力先になっていない」状態に陥り、続けて打っても文字が
-      //   出ない（キーボード右上の確定マークを押して戻すと直る＝blur→focusで復帰する）。
-      //   そこで一度 blur して即 focus し直し、IME の入力先を強制的にリセットする。
-      //   この applyMention は touchstart/click のユーザー操作起点なので、同一ジェスチャー内の
-      //   blur→focus ではキーボードは閉じない（IME の状態だけ作り直される）。
+      // ★ iOS で「メンション補完後にキーボードは出てるのに文字が打てない」固まりの根治。
+      //   原因は textarea.value をセッターで丸ごと差し替えると、iOS の IME(変換)の入力先が
+      //   textarea から外れたまま残ること（キーボード右上の確定マークを押すと直る＝復帰する）。
+      //   blur→focus でのリセットは2回試して効かなかったので、方針を変えて
+      //   execCommand('insertText') で“その場でユーザーが打った”のと同じ編集として差し込む。
+      //   これは focus も IME 状態も保ったまま input イベントを発火する（React にも届く）ので、
+      //   入力先が外れず、補完後そのまま続けて打てる。
+      var done = false;
+      try {
+        ta.focus();
+        ta.setSelectionRange(at, caret);   // 置き換える「@クエリ」部分を選択
+        if (pDoc.execCommand) {
+          done = pDoc.execCommand('insertText', false, insert);
+        }
+      } catch (e) { done = false; }
+      if (done) {
+        var pos = at + insert.length;
+        try { ta.setSelectionRange(pos, pos); } catch (e) {}
+        return;
+      }
+      // フォールバック（execCommand 非対応環境）: 従来どおり値を差し替えて blur→focus で復帰。
+      var val = ta.value || '';
+      var before = val.slice(0, at);
+      var after  = val.slice(caret);
+      setNativeValue(ta, before + insert + after);
+      var pos2 = (before + insert).length;
+      try { ta.setSelectionRange(pos2, pos2); } catch (e) {}
       try { ta.blur(); } catch (e) {}
-      try { ta.focus(); ta.setSelectionRange(pos, pos); } catch (e) {}
-      // 念のため次フレームでもフォーカスとカーソル位置を確定。
+      try { ta.focus(); ta.setSelectionRange(pos2, pos2); } catch (e) {}
       try {
         pWin().requestAnimationFrame(function () {
-          try { ta.focus(); ta.setSelectionRange(pos, pos); } catch (e) {}
+          try { ta.focus(); ta.setSelectionRange(pos2, pos2); } catch (e) {}
         });
       } catch (e) {}
     }

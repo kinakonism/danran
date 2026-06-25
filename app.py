@@ -1175,6 +1175,38 @@ def _og_card_html(og: dict) -> str:
         f'</div></a>'
     )
 
+# ── YouTube サムネカード ──────────────────────────────────────────
+# ★ OGP（fetch_og）と違い、ネットワーク取得を一切しない。YouTube のサムネは
+#   https://img.youtube.com/vi/<id>/hqdefault.jpg に必ず存在するので、本文から
+#   動画 ID を取り出すだけでカードを作れる（2秒ポーリング描画を重くしない＝安全）。
+_YT_RE = re.compile(
+    r'(?:https?://)?(?:www\.|m\.)?'
+    r'(?:youtube\.com/(?:watch\?(?:[^\s]*&)?v=|shorts/|live/|embed/)|youtu\.be/)'
+    r'([A-Za-z0-9_-]{11})'
+)
+
+def _youtube_card_html(vid: str, url: str) -> str:
+    """YouTube リンクのサムネ付きプレビューカード。タップで data-lp-link（既存のリンクメニュー）。"""
+    u = _html.escape(url)
+    thumb = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
+    return (
+        f'<a href="{u}" data-lp-link="{u}" target="_blank" rel="noopener noreferrer" '
+        f'style="display:block;margin-top:5px;max-width:230px;border-radius:10px;overflow:hidden;'
+        f'border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);'
+        f'text-decoration:none;color:inherit">'
+        f'<span style="position:relative;display:block;line-height:0">'
+        f'<img src="{thumb}" loading="lazy" '
+        f'style="width:100%;height:130px;object-fit:cover;display:block;background:#000">'
+        # 中央の赤い再生ボタン
+        f'<span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'
+        f'width:46px;height:32px;border-radius:8px;background:rgba(255,0,0,0.85);'
+        f'display:flex;align-items:center;justify-content:center;color:#fff;font-size:0.95rem">▶</span>'
+        f'</span>'
+        f'<div style="padding:6px 9px;display:flex;align-items:center;gap:5px">'
+        f'<span style="font-size:0.72rem;color:rgba(240,232,224,0.7);font-weight:700">▶ YouTube</span>'
+        f'</div></a>'
+    )
+
 def _body_attr(body: str) -> str:
     """data-lp-body 属性用エスケープ。生の改行を属性に入れると st.markdown の
     Markdown 処理が HTML タグを壊すため &#10; に変換（getAttribute では \\n に復元される）。"""
@@ -1643,7 +1675,14 @@ def build_messages_html(selected_room: str, current_user: dict) -> str | None:
         #     （Google 共有リンク等）で 2秒ポーリング描画が引っかかり、入力・送信まで
         #     不安定になることがあった。URL は linkify_body で常にクリック可能なリンクに
         #     なっているので、プレビューは無くても貼って開ける。将来は非同期取得で再有効化する。
-        if LINK_PREVIEW_ON and not img_url:
+        #   YouTube URL は最優先で「サムネカード」を出す（ネットワーク取得なし＝軽い）。
+        _ytm = _YT_RE.search(body) if not img_url else None
+        if _ytm:
+            _yt_url = _ytm.group(0)
+            if not _yt_url.startswith("http"):
+                _yt_url = "https://www.youtube.com/watch?v=" + _ytm.group(1)
+            content += _youtube_card_html(_ytm.group(1), _yt_url)
+        elif LINK_PREVIEW_ON and not img_url:
             _um = _URL_RE.search(body)
             if _um:
                 _og = fetch_og(_um.group(1))

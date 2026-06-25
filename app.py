@@ -683,10 +683,11 @@ def fetch_messages(room: str, limit: int = 100) -> list[dict] | None:
     ★ 一時的なエラーで [] を返すと「0件」描画でチャットが一瞬空になるため、
       呼び出し元は None のとき前回表示を維持する。"""
     try:
-        return supabase.table("messages")\
+        rows = supabase.table("messages")\
             .select("id, user_id, user_name, user_avatar, content, image_url, video_url, created_at, "
                     "reply_to_id, reply_to_name, reply_to_text, reply_to_image, event_ref")\
-            .eq("room_name", room).order("created_at").limit(limit).execute().data or []
+            .eq("room_name", room).order("created_at", desc=True).limit(limit).execute().data or []
+        return list(reversed(rows))
     except Exception:
         return None
 

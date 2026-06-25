@@ -1362,7 +1362,7 @@ def main():
                         # 肯定でも否定でもない → 下の通常処理（新たな依頼/雑談かも）
 
                 # ── 2) 新規の問い合わせ/依頼（AIサポートは常時 / 他ルームは @AI）──
-                is_ai_room = (rn == ROOM)
+                is_ai_room = rn in (ROOM, "AIサポート")
                 if not is_ai_room and not mentions_ai(content):
                     last_by_room[rn] = nts
                     continue

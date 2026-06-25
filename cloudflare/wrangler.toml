@@ -14,6 +14,11 @@ binding = "danran_media"
 bucket_name = "danran-backups"
 binding = "danran_backups"
 
+# トンネルURL保存（Supabase REST API に依存しない・egress 超過影響なし）
+[[kv_namespaces]]
+binding = "TUNNEL_KV"
+id = "21e925b82dcb487f9259a489e1886000"
+
 [triggers]
 # 15分おきにウォームアップ（Streamlit をスリープさせず、起動時の詰まり/暗転を防ぐ）
 crons = ["*/15 * * * *"]

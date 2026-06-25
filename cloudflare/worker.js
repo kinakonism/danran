@@ -32,19 +32,28 @@ const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsIn
 let HOST_CACHE = { host: STREAMLIT_HOST, at: 0 };
 const HOST_TTL_MS = 60 * 1000;   // 60秒キャッシュ
 
-async function getUpstreamHost(force) {
-  // force=true でキャッシュを無視して Supabase から取り直す
-  // （トンネル再起動直後の stale ホスト固着 → 最大60秒つながらない、を接続失敗時に即解消）
+async function getUpstreamHost(force, env) {
+  // ★ KV → Supabase の順で取得（Supabase REST API が egress 超過停止しても KV は生きる）
   const now = Date.now();
   if (!force && HOST_CACHE.host && (now - HOST_CACHE.at) < HOST_TTL_MS) return HOST_CACHE.host;
+  // 1st: Cloudflare KV（egress 課金なし・高信頼）
+  if (env && env.TUNNEL_KV) {
+    try {
+      const v = await env.TUNNEL_KV.get('tunnel_host');
+      if (v) { HOST_CACHE = { host: v, at: now }; return v; }
+    } catch (e) { /* KV 失敗時は Supabase へ fallback */ }
+  }
+  // 2nd: Supabase（REST API が停止中でも KV が生きていれば到達しない）
   try {
     const r = await fetch(`${SB_URL}/rest/v1/app_config?key=eq.tunnel_host&select=value`, {
       headers: { apikey: SB_ANON, Authorization: 'Bearer ' + SB_ANON },
     });
-    const rows = await r.json();
-    const v = rows && rows[0] && rows[0].value;
-    if (v) { HOST_CACHE = { host: v, at: now }; return v; }
-  } catch (e) { console.error('[host] supabase lookup failed:', e.message); }
+    if (r.ok) {
+      const rows = await r.json();
+      const v = rows && rows[0] && rows[0].value;
+      if (v) { HOST_CACHE = { host: v, at: now }; return v; }
+    }
+  } catch (e) { /* Supabase 失敗時は stale cache / fallback へ */ }
   HOST_CACHE.at = now;   // 失敗時も叩きすぎない
   return HOST_CACHE.host || STREAMLIT_HOST;
 }
@@ -303,15 +312,35 @@ export default {
     if (url.pathname === '/backup-admin/list' && request.method === 'GET') {
       return handleBackupAdmin(request, url, env, 'list');
     }
+    //   /tunnel-admin/update (POST) → KV の tunnel_host を更新（mini の tunnel_run.sh から呼ぶ）
+    if (url.pathname === '/tunnel-admin/update' && request.method === 'POST') {
+      if ((request.headers.get('x-danran-auth') || '') !== SB_ANON) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+      try {
+        const body = await request.json();
+        const host = (body && body.host) ? String(body.host).trim() : '';
+        if (!host || !/^[a-z0-9-]+\.trycloudflare\.com$/.test(host)) {
+          return new Response('invalid host', { status: 400 });
+        }
+        await env.TUNNEL_KV.put('tunnel_host', host);
+        HOST_CACHE = { host, at: Date.now() };
+        return new Response(JSON.stringify({ ok: true, host }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      } catch (e) {
+        return new Response('error: ' + e.message, { status: 500 });
+      }
+    }
 
     // ── WebSocket プロキシ ───────────────────────────────────────────
     if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
       console.log('[WS] incoming websocket request:', url.pathname);
-      return handleWebSocket(request, url, ctx);
+      return handleWebSocket(request, url, ctx, env);
     }
 
     // ── HTTP プロキシ ────────────────────────────────────────────────
-    return proxyHttp(request, url);
+    return proxyHttp(request, url, env);
   },
 };
 
@@ -476,12 +505,12 @@ async function fetchUpstream(request, url, cookie, bodyBuf, host) {
 }
 
 // ── HTTP プロキシ: /{path} → 上流 /{path}（cookie 認証注入）──────────────
-async function proxyHttp(request, url) {
+async function proxyHttp(request, url, env) {
   // リトライで body を再送できるよう、非 GET はバッファ化
   const isBodyless = ['GET', 'HEAD'].includes(request.method);
   const bodyBuf = isBodyless ? undefined : await request.arrayBuffer();
 
-  let host = await getUpstreamHost();
+  let host = await getUpstreamHost(false, env);
   let cookie = await ensureSession(false);
   // ★ 接続失敗(throw)や 502/530（トンネル死亡）はホストをキャッシュ無視で取り直して
   //   1回だけリトライ。トンネル再起動直後の stale ホスト固着（最大60秒 502）を自己修復する。
@@ -492,15 +521,16 @@ async function proxyHttp(request, url) {
     res = null;
   }
   if (!res || res.status === 502 || res.status === 530) {
+    // ★ body を cancel したら必ず res をリセットしてリトライ。
+    //   旧実装は「ホストが変わっていない場合はリトライしない」最適化があったが、
+    //   body を cancel した後リトライしないと res.body が locked のまま残り、
+    //   後続の new Response(res.body) で ReadableStream disturbed クラッシュになる。
     try { if (res && res.body) await res.body.cancel(); } catch (e) {}
-    const host2 = await getUpstreamHost(true);
-    if (host2 !== host || !res) {
-      host = host2;
-      try {
-        res = await fetchUpstream(request, url, cookie, bodyBuf, host);
-      } catch (e) {
-        res = null;
-      }
+    host = await getUpstreamHost(true, env);
+    try {
+      res = await fetchUpstream(request, url, cookie, bodyBuf, host);
+    } catch (e) {
+      res = null;
     }
   }
   // それでもダメな場合、ページ要求には「🏠つなぎ直し」自動リトライページを返す
@@ -694,7 +724,7 @@ async function proxyHttp(request, url) {
 //
 // v4: cloudflare:sockets (手動TCP) を廃止し fetch() WebSocket API に変更。
 //     フレームエンコーダー/デコーダー不要でシンプルかつ安定。
-async function handleWebSocket(request, url, ctx) {
+async function handleWebSocket(request, url, ctx, env) {
   const wsPath = url.pathname + url.search;
 
   // ブラウザ向け WebSocket ペア
@@ -717,7 +747,7 @@ async function handleWebSocket(request, url, ctx) {
   let agreedProtocol = null;
   let lastErr = null;
   for (let attempt = 0; attempt < 4 && !upstreamWS; attempt++) {
-    const host = await getUpstreamHost(attempt > 0);
+    const host = await getUpstreamHost(attempt > 0, env);
     const upstreamUrl = `https://${host}${wsPath}`;
     const upstreamHeaders = new Headers();
     upstreamHeaders.set('Host', host);

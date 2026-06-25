@@ -723,12 +723,13 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
             daemon=True,
         ).start()
         # ── AI サポートルームならボットが自動返信（バックグラウンド）──
-        if room == AI_ROOM_NAME and uid != AI_BOT_UID:
+        # 絵文字あり「🤖 AIサポート」・なし「AIサポート」どちらでも応答
+        if room in (AI_ROOM_NAME, "AIサポート") and uid != AI_BOT_UID:
             _ai = _ai_cfg()
             if _ai.get("api_key"):
                 threading.Thread(
                     target=_generate_ai_reply,
-                    args=(_ai["api_key"], _ai.get("model", "")),
+                    args=(_ai["api_key"], _ai.get("model", ""), room),
                     daemon=True,
                 ).start()
         return True
@@ -796,20 +797,20 @@ def _build_ai_messages(history: list[dict]) -> list[dict]:
         msgs.pop(0)
     return msgs
 
-def _insert_ai_message(text: str) -> None:
+def _insert_ai_message(text: str, room: str = AI_ROOM_NAME) -> None:
     try:
         supabase.table("messages").insert({
-            "room_name": AI_ROOM_NAME, "user_id": AI_BOT_UID,
+            "room_name": room, "user_id": AI_BOT_UID,
             "user_name": AI_BOT_NAME, "user_avatar": AI_BOT_AVATAR,
             "content": (text or "")[:4000],
         }).execute()
     except Exception:
         pass
 
-def _generate_ai_reply(api_key: str, model: str) -> None:
+def _generate_ai_reply(api_key: str, model: str, room: str = AI_ROOM_NAME) -> None:
     """AI サポートルームの直近履歴を読み、Claude の返信を投稿する（別スレッド）。"""
     try:
-        history = fetch_messages(AI_ROOM_NAME, limit=20) or []
+        history = fetch_messages(room, limit=20) or []
         conv = _build_ai_messages(history)
         if not conv:
             return
@@ -833,9 +834,9 @@ def _generate_ai_reply(api_key: str, model: str) -> None:
         reply = "".join(
             p.get("text", "") for p in data.get("content", []) if p.get("type") == "text"
         ).strip()
-        _insert_ai_message(reply or "うまく応答できませんでした。もう一度試してください。")
+        _insert_ai_message(reply or "うまく応答できませんでした。もう一度試してください。", room=room)
     except Exception:
-        _insert_ai_message("⚠️ 今ちょっと応答できませんでした。少し待ってからもう一度試してください。")
+        _insert_ai_message("⚠️ 今ちょっと応答できませんでした。少し待ってからもう一度試してください。", room=room)
 
 def delete_message(msg_id: str, user_id: str) -> bool:
     """メッセージを削除する。user_id（UUID）で認可するため名前変更後も安全。"""

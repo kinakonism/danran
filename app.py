@@ -2559,7 +2559,7 @@ def show_room_edit(room: dict) -> None:
                    "「みんなでFaceTime」からこの部屋のみんなで通話に入れます。")
         _ft_cur = get_room_facetime(room_id) or ""
         _ft_new = st.text_input(
-            "", value=_ft_cur, placeholder="https://facetime.apple.com/join#...",
+            "FaceTimeリンク", value=_ft_cur, placeholder="https://facetime.apple.com/join#...",
             label_visibility="collapsed", key=f"room_ft_{room_id}",
         )
         if st.button("📹 FaceTimeリンクを保存", use_container_width=True, key="room_ft_save"):

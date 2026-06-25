@@ -53,7 +53,7 @@ REPO_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # claude を動かす作業ディレクトリ。REPO_DIR にすると danran のコード/CLAUDE.md を読んで
 # 正確に答えられる（その分ファイルにアクセスできる）。安全重視なら中立なフォルダに変える。
 WORKDIR    = REPO_DIR
-POLL_SEC   = 4
+POLL_SEC   = 15   # Supabase egress 削減: 4→15秒。差分取得と組み合わせで ~10倍削減
 SETTLE_SEC = 2.5    # 連投が落ち着くまで待ってから1回だけ返信
 MAX_HIST   = 20
 
@@ -151,10 +151,14 @@ def api_all(path, page=1000):
         offset += page
 
 
-def fetch_all_recent(n=80):
-    """全ルームの直近メッセージ（新しい順）。"""
+def fetch_all_recent(n=80, since=None):
+    """全ルームの直近メッセージ（新しい順）。
+    since: ISO8601 文字列。指定時は created_at > since の差分のみ取得（egress 削減）。
+    通常は直近数件しか来ないため応答が大幅に小さくなる。"""
     q = ("messages?select=id,room_name,user_id,user_name,content,image_url,created_at"
          "&order=created_at.desc&limit=" + str(n))
+    if since:
+        q += "&created_at=gt." + urllib.parse.quote(since)
     return api("GET", q) or []
 
 
@@ -1303,9 +1307,15 @@ def main():
     print(f"[danran-bridge] 起動。全ルームを {POLL_SEC}s ごとに監視（AIサポート＝常時 / 他＝@AI 呼びかけ時）")
     # 起動時の各ルーム最新時刻＝バックログ無視の基準
     last_by_room = {}
-    for rn, msgs in _group_by_room(fetch_all_recent()).items():
+    _since_ts = None   # 差分取得の基準時刻（ISO8601文字列）
+    init_msgs = fetch_all_recent()
+    for rn, msgs in _group_by_room(init_msgs).items():
         if msgs:
             last_by_room[rn] = parse_ts(msgs[-1].get("created_at"))
+    # 起動時の全メッセージの最新 created_at を since の初期値にする
+    all_ts = [m.get("created_at") for m in init_msgs if m.get("created_at")]
+    if all_ts:
+        _since_ts = max(all_ts)
     print(f"[danran-bridge] 既存はスキップ。新着を待機中…（Ctrl+C で停止）")
     _last_reclaim = 0.0
     _last_sweep   = 0.0   # 0 = 起動直後に1回 → 以後24時間ごと
@@ -1330,7 +1340,13 @@ def main():
             if time.time() - _last_event_remind > 300:  # カレンダー朝リマインドは5分ごとに判定
                 _last_event_remind = time.time()
                 fire_event_reminders()
-            for rn, msgs in _group_by_room(fetch_all_recent()).items():
+            # 差分取得: since 以降の新着だけ取得（通常はほぼ空 → egress を大幅削減）
+            new_msgs = fetch_all_recent(since=_since_ts)
+            if new_msgs:
+                new_ts_list = [m.get("created_at") for m in new_msgs if m.get("created_at")]
+                if new_ts_list:
+                    _since_ts = max(new_ts_list)
+            for rn, msgs in _group_by_room(new_msgs).items():
                 if not msgs:
                     continue
                 newest = msgs[-1]

@@ -495,11 +495,17 @@ def parse_ts(s):
         return 0.0
 
 
+_CTRL_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+def _sanitize(text: str) -> str:
+    """DOM に挿入できない制御文字（null バイト等）を除去する。"""
+    return _CTRL_RE.sub('', text or '')
+
 def post_reply(text, room=ROOM):
     api("POST", "messages", {
         "room_name": room, "user_id": BOT_UID,
         "user_name": BOT_NAME, "user_avatar": BOT_AVATAR,
-        "content": (text or "")[:4000],
+        "content": _sanitize(text)[:4000],
     })
 
 

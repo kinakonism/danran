@@ -810,12 +810,15 @@ def _build_ai_messages(history: list[dict]) -> list[dict]:
         msgs.pop(0)
     return msgs
 
+_AI_CTRL_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
 def _insert_ai_message(text: str, room: str = AI_ROOM_NAME) -> None:
     try:
+        clean = _AI_CTRL_RE.sub('', text or '')
         supabase.table("messages").insert({
             "room_name": room, "user_id": AI_BOT_UID,
             "user_name": AI_BOT_NAME, "user_avatar": AI_BOT_AVATAR,
-            "content": (text or "")[:4000],
+            "content": clean[:4000],
         }).execute()
     except Exception:
         pass

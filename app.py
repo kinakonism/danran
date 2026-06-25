@@ -1343,16 +1343,17 @@ def _emoji_only_info(text: str) -> tuple[bool, int]:
 # ★ リアルタイムタイムライン
 #   変化検知ポーラー（poll_messages）が変化時のみ再描画する。
 # ─────────────────────────────────────
-def build_messages_html(selected_room: str, current_user: dict) -> str | None:
+def build_messages_html(selected_room: str, current_user: dict, limit: int = 100) -> str | None:
     """チャットの全メッセージ HTML（バブル＋軽い既読）を 1 つの文字列で返す。
     副作用なし（fetch のみ）。静的描画と変化検知ポーラーの両方から共用する。
     ★ この出力が前回と同一なら再描画しない＝画像チカチカ防止の要。"""
     uname = current_user.get("name", "")
     my_id = current_user.get("id", "")
 
-    messages = fetch_messages(selected_room)
+    messages = fetch_messages(selected_room, limit=limit)
     if messages is None:
         return None   # 取得失敗（通信エラー）→ 呼び出し元が前回表示を維持
+    st.session_state["_chat_msg_count"] = len(messages)
     if not messages:
         return ('<div style="padding:22px 16px;text-align:center;'
                 'color:rgba(255,255,255,0.5);font-size:0.9rem;line-height:1.7">'
@@ -1799,11 +1800,31 @@ def render_chat_messages(current_user: dict) -> None:
     """チャットメッセージを描画（full rerun 時のみ実行＝変化駆動）。
     キャッシュ済み HTML があればそれを使い、無ければ build して保存する。"""
     room = st.session_state.get("active_room", "")
-    if st.session_state.get("_chat_html_room") != room or "_chat_html" not in st.session_state:
-        _html = build_messages_html(room, current_user)
+
+    # ルーム切り替え時は limit をリセット
+    if st.session_state.get("_chat_html_room") != room:
+        st.session_state.pop("_chat_msg_limit", None)
+        st.session_state.pop("_chat_msg_count", None)
+        st.session_state.pop("_chat_html_key", None)
+
+    _limit = st.session_state.get("_chat_msg_limit", 100)
+    _cache_key = f"{room}_{_limit}"
+
+    if st.session_state.get("_chat_html_key") != _cache_key or "_chat_html" not in st.session_state:
+        _html = build_messages_html(room, current_user, limit=_limit)
         if _html is not None:   # None=取得失敗。前回の _chat_html を維持（空表示で消さない）
             st.session_state["_chat_html"] = _html
             st.session_state["_chat_html_room"] = room
+            st.session_state["_chat_html_key"] = _cache_key
+
+    # 「もっと前を読む」ボタン（取得件数が limit に達しているときだけ表示）
+    if st.session_state.get("_chat_msg_count", 0) >= _limit:
+        if st.button("📜 もっと前を読む", use_container_width=True, key="load_more_msgs"):
+            st.session_state["_chat_msg_limit"] = _limit + 50
+            st.session_state.pop("_chat_html", None)
+            st.session_state.pop("_chat_html_key", None)
+            st.rerun()
+
     st.markdown(st.session_state.get("_chat_html", "") or "", unsafe_allow_html=True)
 
 
@@ -1833,7 +1854,8 @@ def poll_messages() -> None:
         mark_as_read(my_id, selected_room)
 
     # 新着トースト（他人のメッセージのみ）
-    _msgs = fetch_messages(selected_room)
+    _poll_limit = st.session_state.get("_chat_msg_limit", 100)
+    _msgs = fetch_messages(selected_room, limit=_poll_limit)
     if _msgs is None:
         return   # 取得失敗（通信エラー）→ 今回はスキップ（前回表示を維持）
     count_key = f"cnt_{selected_room}"
@@ -1851,7 +1873,7 @@ def poll_messages() -> None:
     #   ★ チカチカ対策: 「既読(dr-read)だけの変化」では再描画しない（既読が更新される
     #     たびに st.markdown が貼り替わってチラつくため）。既読は新着/リアクション等の
     #     実変化で再描画が走るときにまとめて反映される。
-    _html_now = build_messages_html(selected_room, current_user)
+    _html_now = build_messages_html(selected_room, current_user, limit=_poll_limit)
     if _html_now is None:
         return   # 取得失敗 → 前回表示を維持
     _prev = st.session_state.get("_chat_html")

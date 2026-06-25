@@ -7,11 +7,14 @@ danran - 家族専用チャットアプリ  Streamlit × Supabase
   mini の watcher(tools/deploy_watch.sh) が pull→app 自動再起動する（2026-06-05〜）。
 """
 
+import glob as _glob
 import html as _html
 import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -724,7 +727,11 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
         ).start()
         # ── 「使用量教えて」等: AIサポートで使用量を聞かれたら数字を即返す（APIキー不要）──
         if room in (AI_ROOM_NAME, "AIサポート") and uid != AI_BOT_UID and _is_usage_query(content):
-            threading.Thread(target=_post_usage_stats, args=(room,), daemon=True).start()
+            # 「claudeの使用量」なら CLI のトークン/コスト、それ以外は danran の数字
+            if _is_claude_usage_query(content):
+                threading.Thread(target=_post_claude_usage, args=(room,), daemon=True).start()
+            else:
+                threading.Thread(target=_post_usage_stats, args=(room,), daemon=True).start()
         # ── AI サポートルームならボットが自動返信（バックグラウンド）──
         # 絵文字あり「🤖 AIサポート」・なし「AIサポート」どちらでも応答
         if room in (AI_ROOM_NAME, "AIサポート") and uid != AI_BOT_UID:
@@ -868,6 +875,96 @@ def _usage_stats_text() -> str:
 def _post_usage_stats(room: str = AI_ROOM_NAME) -> None:
     try:
         _insert_ai_message(_usage_stats_text(), room=room)
+    except Exception:
+        pass
+
+# ── 「claudeの使用量教えて」: Claude Code(CLI) のトークン/コストを ccusage で返す ──
+# app.py は mac mini 上で動くので、~/.claude のローカルログを ccusage(npx) で集計できる。
+# Anthropic の管理者キーは不要。node/npx は nvm/homebrew 配下なので PATH を補って探す。
+_CLAUDE_USAGE_KEYWORDS = ("claude", "クロード", "claude code", "クロードコード")
+
+def _is_claude_usage_query(text: str) -> bool:
+    t = (text or "").lower()
+    if not _is_usage_query(t):
+        return False
+    return any(k in t for k in _CLAUDE_USAGE_KEYWORDS)
+
+def _node_env():
+    """nvm/homebrew の node/npx を見つけられるよう PATH を補った環境を返す。"""
+    env = dict(os.environ)
+    extra = []
+    home = os.path.expanduser("~")
+    extra += sorted(_glob.glob(os.path.join(home, ".nvm/versions/node/*/bin")), reverse=True)
+    extra += ["/opt/homebrew/bin", "/usr/local/bin", os.path.join(home, ".volta/bin")]
+    env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
+    return env
+
+def _run_ccusage(subcmd: str, env: dict) -> dict | None:
+    npx = shutil.which("npx", path=env.get("PATH"))
+    if not npx:
+        return None
+    try:
+        out = subprocess.run(
+            [npx, "-y", "ccusage@latest", subcmd, "--json"],
+            capture_output=True, text=True, timeout=120, env=env,
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            return None
+        return json.loads(out.stdout)
+    except Exception:
+        return None
+
+def _claude_code_usage_text() -> str:
+    now = datetime.now(JST)
+    env = _node_env()
+    if not shutil.which("npx", path=env.get("PATH")):
+        return ("claude code（CLI）の使用量を出すには mini に node/npx が必要だけど、"
+                "今は見つからなかったよ。まさとに確認してね🙏")
+
+    def _num(d, *keys):
+        for k in keys:
+            v = d.get(k)
+            if isinstance(v, (int, float)):
+                return v
+        return None
+
+    def _fmt_entry(e: dict) -> str:
+        tot = _num(e, "totalTokens", "total_tokens")
+        cost = _num(e, "totalCost", "total_cost", "cost")
+        parts = []
+        if tot is not None:
+            parts.append(f"{int(tot):,} トークン")
+        if cost is not None:
+            parts.append(f"約 ${cost:.2f}")
+        return " / ".join(parts) if parts else "（データなし）"
+
+    lines = [f"🤖 claude code の使用量（{now.month}月{now.day}日 {now.strftime('%H:%M')} 時点）"]
+
+    today_iso = now.strftime("%Y-%m-%d")
+    daily = _run_ccusage("daily", env)
+    if daily and isinstance(daily.get("daily"), list):
+        today_e = next((d for d in daily["daily"] if str(d.get("date", "")) == today_iso), None)
+        lines.append(f"・今日: {_fmt_entry(today_e) if today_e else '利用なし'}")
+    else:
+        lines.append("・今日: （取得できず）")
+
+    month_iso = now.strftime("%Y-%m")
+    monthly = _run_ccusage("monthly", env)
+    if monthly and isinstance(monthly.get("monthly"), list):
+        month_e = next((m for m in monthly["monthly"] if str(m.get("month", "")).startswith(month_iso)), None)
+        lines.append(f"・今月: {_fmt_entry(month_e) if month_e else '利用なし'}")
+        tot = (monthly or {}).get("totals")
+        if isinstance(tot, dict):
+            lines.append(f"・累計: {_fmt_entry(tot)}")
+    else:
+        lines.append("・今月: （取得できず）")
+
+    lines.append("（mini のローカルログ ~/.claude を集計。Maxプラン利用なので料金は概算の目安です）")
+    return "\n".join(lines)
+
+def _post_claude_usage(room: str = AI_ROOM_NAME) -> None:
+    try:
+        _insert_ai_message(_claude_code_usage_text(), room=room)
     except Exception:
         pass
 

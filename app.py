@@ -726,15 +726,18 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
             daemon=True,
         ).start()
         # ── 「使用量教えて」等: AIサポートで使用量を聞かれたら数字を即返す（APIキー不要）──
-        if room in (AI_ROOM_NAME, "AIサポート") and uid != AI_BOT_UID and _is_usage_query(content):
+        _in_ai_room = room in (AI_ROOM_NAME, "AIサポート") and uid != AI_BOT_UID
+        _usage_query = _in_ai_room and (_is_usage_query(content) or _is_claude_usage_query(content))
+        if _usage_query:
             # 「claudeの使用量」なら CLI のトークン/コスト、それ以外は danran の数字
             if _is_claude_usage_query(content):
                 threading.Thread(target=_post_claude_usage, args=(room,), daemon=True).start()
             else:
                 threading.Thread(target=_post_usage_stats, args=(room,), daemon=True).start()
         # ── AI サポートルームならボットが自動返信（バックグラウンド）──
-        # 絵文字あり「🤖 AIサポート」・なし「AIサポート」どちらでも応答
-        if room in (AI_ROOM_NAME, "AIサポート") and uid != AI_BOT_UID:
+        # 絵文字あり「🤖 AIサポート」・なし「AIサポート」どちらでも応答。
+        # ただし使用量クエリのときは数字だけ返すので会話AIは動かさない（二重返信・的外れ返信の防止）。
+        if _in_ai_room and not _usage_query:
             _ai = _ai_cfg()
             if _ai.get("api_key"):
                 threading.Thread(
@@ -882,12 +885,15 @@ def _post_usage_stats(room: str = AI_ROOM_NAME) -> None:
 # app.py は mac mini 上で動くので、~/.claude のローカルログを ccusage(npx) で集計できる。
 # Anthropic の管理者キーは不要。node/npx は nvm/homebrew 配下なので PATH を補って探す。
 _CLAUDE_USAGE_KEYWORDS = ("claude", "クロード", "claude code", "クロードコード")
+# claude/クロード と一緒に出やすい語。「使用量」という語が無くても（トークン/コスト等でも）拾う。
+_CLAUDE_USAGE_EXTRA = ("使用量", "使用料", "使用状況", "容量", "トークン", "token",
+                       "コスト", "cost", "料金", "usage", "/usage")
 
 def _is_claude_usage_query(text: str) -> bool:
     t = (text or "").lower()
-    if not _is_usage_query(t):
+    if not any(k in t for k in _CLAUDE_USAGE_KEYWORDS):
         return False
-    return any(k in t for k in _CLAUDE_USAGE_KEYWORDS)
+    return _is_usage_query(t) or any(k in t for k in _CLAUDE_USAGE_EXTRA)
 
 def _node_env():
     """nvm/homebrew の node/npx を見つけられるよう PATH を補った環境を返す。"""

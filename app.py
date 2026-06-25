@@ -722,6 +722,9 @@ def send_message(room: str, uid: str, uname: str, uavatar: str, content: str, im
             },
             daemon=True,
         ).start()
+        # ── 「使用量教えて」等: AIサポートで使用量を聞かれたら数字を即返す（APIキー不要）──
+        if room in (AI_ROOM_NAME, "AIサポート") and uid != AI_BOT_UID and _is_usage_query(content):
+            threading.Thread(target=_post_usage_stats, args=(room,), daemon=True).start()
         # ── AI サポートルームならボットが自動返信（バックグラウンド）──
         # 絵文字あり「🤖 AIサポート」・なし「AIサポート」どちらでも応答
         if room in (AI_ROOM_NAME, "AIサポート") and uid != AI_BOT_UID:
@@ -804,6 +807,67 @@ def _insert_ai_message(text: str, room: str = AI_ROOM_NAME) -> None:
             "user_name": AI_BOT_NAME, "user_avatar": AI_BOT_AVATAR,
             "content": (text or "")[:4000],
         }).execute()
+    except Exception:
+        pass
+
+# ── 「使用量教えて」コマンド（AIサポートで数字を即返す・APIキー不要・別スレッド）──
+# CLI の /usage 的に、このルームで「使用量」等と聞かれたら安く取れる値をまとめて返す。
+_USAGE_KEYWORDS = ("使用量", "使用料", "使用状況", "使ってる量", "容量", "ストレージ", "/usage", "usage")
+
+def _is_usage_query(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k.lower() in t for k in _USAGE_KEYWORDS)
+
+def _count_q(q) -> int:
+    """count='exact' クエリの行数を安く取得（行は返さない）。失敗時は -1。"""
+    try:
+        res = q.limit(1).execute()
+        c = getattr(res, "count", None)
+        return c if c is not None else len(res.data or [])
+    except Exception:
+        return -1
+
+def _usage_stats_text() -> str:
+    now = datetime.now(JST)
+    today_start_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)\
+        .astimezone(timezone.utc).isoformat()
+    total_msgs = _count_q(supabase.table("messages").select("id", count="exact"))
+    today_msgs = _count_q(supabase.table("messages").select("id", count="exact")
+                          .gte("created_at", today_start_utc))
+    media_msgs = _count_q(supabase.table("messages").select("id", count="exact")
+                          .not_.is_("image_url", "null"))
+    ai_replies = _count_q(supabase.table("messages").select("id", count="exact")
+                          .eq("user_id", AI_BOT_UID))
+    n_users    = _count_q(supabase.table("users").select("id", count="exact"))
+    n_rooms    = _count_q(supabase.table("rooms").select("id", count="exact"))
+    # ストレージ使用量は cache をスレッドから呼ばないよう生クエリで取得
+    try:
+        r = supabase.table("storage_stats").select("bytes").eq("id", 1).limit(1).execute().data
+        used = int(r[0]["bytes"]) if r else 0
+    except Exception:
+        used = 0
+
+    def fmt(n: int) -> str:
+        return f"{n:,}" if n >= 0 else "（取得できず）"
+
+    lines = [
+        f"📊 danran の使用量（{now.month}月{now.day}日 {now.strftime('%H:%M')} 時点）",
+        f"・メッセージ総数: {fmt(total_msgs)}件",
+        f"・今日の投稿: {fmt(today_msgs)}件",
+        f"・写真/スタンプ付き: {fmt(media_msgs)}件",
+        f"・AIの返信: {fmt(ai_replies)}回",
+        f"・ユーザー: {fmt(n_users)}人 / ルーム: {fmt(n_rooms)}個",
+    ]
+    if used > 0:
+        used_mb = used / (1024 * 1024)
+        pct = used / STORAGE_LIMIT_BYTES * 100 if STORAGE_LIMIT_BYTES else 0
+        lines.append(f"・ストレージ: {used_mb:.0f}MB / 1024MB（{pct:.0f}%）")
+    lines.append("（AnthropicのトークンやSupabaseの通信量は管理者キーが要るので、ここには出していません）")
+    return "\n".join(lines)
+
+def _post_usage_stats(room: str = AI_ROOM_NAME) -> None:
+    try:
+        _insert_ai_message(_usage_stats_text(), room=room)
     except Exception:
         pass
 

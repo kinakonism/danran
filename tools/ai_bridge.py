@@ -626,9 +626,9 @@ def cleanup_tmp():
 
 def run_claude(prompt, has_images=False):
     try:
-        args = [CLAUDE_BIN, "-p", prompt, "--max-turns", "3" if has_images else "1"]
-        if has_images:
-            args += ["--allowedTools", "Read"]   # 画像を Read で見られるように
+        tools = "Read,WebSearch" if has_images else "WebSearch"
+        args = [CLAUDE_BIN, "-p", prompt, "--max-turns", "3",
+                "--allowedTools", tools]
         r = subprocess.run(args, cwd=WORKDIR, capture_output=True, text=True, timeout=240)
         return (r.stdout or "").strip()
     except Exception as e:

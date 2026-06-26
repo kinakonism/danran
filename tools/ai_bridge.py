@@ -113,11 +113,13 @@ _RETRYABLE = (ssl.SSLError, socket.timeout, TimeoutError, ConnectionError, urlli
 
 def api(method, path, body=None, tries=3):
     """Supabase REST 呼び出し。一時的なネットワーク/SSL エラーはバックオフ付きで再試行。
-    HTTP 4xx（409=重複 等）は確定的なので再試行せず投げる。5xx は一時的とみて再試行。"""
+    HTTP 4xx（409=重複 等）は確定的なので再試行せず投げる。5xx は一時的とみて再試行。
+    書き込み(PATCH/POST/PUT/DELETE)は Prefer:return=minimal でレスポンスボディを省略し egress を削減。"""
     data = json.dumps(body).encode() if body is not None else None
+    headers = HDR if method == "GET" else {**HDR, "Prefer": "return=minimal"}
     last_err = None
     for attempt in range(tries):
-        req = urllib.request.Request(URL + "/rest/v1/" + path, data=data, headers=HDR, method=method)
+        req = urllib.request.Request(URL + "/rest/v1/" + path, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
                 raw = r.read()

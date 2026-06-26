@@ -4665,6 +4665,8 @@ if not _supabase_ok():
         '<div style="color:rgba(240,232,224,.8);font-size:.95rem;font-weight:500">ただいまメンテナンス中です</div>'
         '<div style="color:rgba(240,232,224,.4);font-size:.8rem;text-align:center;line-height:1.8">'
         'サービスが一時的にご利用できません。<br>しばらく経ってから再度お試しください。</div>'
+        '<div style="color:rgba(240,232,224,.35);font-size:.78rem;text-align:center;line-height:1.7;margin-top:4px">'
+        '解除まで最長で 6/28（日）かかる場合があります。<br>復旧しだい自動で再開します。</div>'
         '<div style="color:rgba(240,232,224,.25);font-size:.75rem;margin-top:4px">自動的に再確認しています…</div>'
         '</div>'
     )

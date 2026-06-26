@@ -2088,12 +2088,39 @@ def poll_messages() -> None:
 
 @st.fragment(run_every="60s")
 def _sb_health_watcher() -> None:
-    """Supabase メンテナンス中に 60s ごとに復旧を確認。復旧したら全体 rerun。"""
+    """Supabase メンテナンス中に 60s ごとに復旧を確認。復旧したら まさと に Push して全体 rerun。"""
     if not st.session_state.get("_sb_maintenance"):
         return
     _supabase_ok.clear()   # キャッシュをクリアして実際に確認
     if _supabase_ok():
         st.session_state.pop("_sb_maintenance", None)
+        try:
+            import json as _json
+            from pywebpush import webpush, WebPushException
+            _cfg = _vapid_cfg()
+            _priv = _cfg.get("vapid_private_key", "")
+            _subj = _cfg.get("vapid_subject", "")
+            if _priv and _subj:
+                _owner = supabase.table("users").select("id").eq("name", "まさと").execute().data
+                if _owner:
+                    _subs = supabase.table("push_subscriptions")\
+                        .select("endpoint, p256dh, auth")\
+                        .eq("user_id", _owner[0]["id"])\
+                        .execute().data or []
+                    _payload = _json.dumps({"title": "🏠 danran 復活", "body": "Supabase の制限が解除されました ✅"})
+                    for _s in _subs:
+                        try:
+                            webpush(
+                                subscription_info={"endpoint": _s["endpoint"],
+                                                   "keys": {"p256dh": _s["p256dh"], "auth": _s["auth"]}},
+                                data=_payload,
+                                vapid_private_key=_priv,
+                                vapid_claims={"sub": _subj},
+                            )
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         st.rerun()
 
 

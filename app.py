@@ -2019,10 +2019,12 @@ def _strip_read_receipts(html: str | None) -> str:
 
 @st.fragment(run_every="10s")
 def poll_messages() -> None:
-    """内容が変わったか確認し、変わった時だけ st.rerun()。何も描画しない。
-    ★ 2026-06-08 Realtime化: 即時反映はブラウザの Supabase Realtime(installRealtime)が
-      refresh_chat を即発火して行う。このポーラーは Realtime が落ちた時の取りこぼし保険＝
-      低頻度(10s)で十分。負荷も端末数×2s→×10s に激減。"""
+    """Realtime 取りこぼし保険ポーラー。変化時のみ rerun。何も描画しない。
+    ★ 安チェック: 最新5件のみ取得（~400B）で変化を検知。
+      変化なし → 即 return（rerun なし・egress 最小）。
+      変化あり → toast + キャッシュ破棄 + rerun（render_chat_messages が本描画を担う）。
+    ★ 即時反映は JS installRealtime が担う。このポーラーは Realtime が落ちた時の保険なので
+      低頻度(10s)＋安チェックで十分。"""
     if (st.session_state.get("_show_rooms", False)
             or "current_user" not in st.session_state
             or st.session_state.get("view") != "chat"):
@@ -2036,36 +2038,41 @@ def poll_messages() -> None:
     if my_id:
         mark_as_read(my_id, selected_room)
 
-    # 新着トースト（他人のメッセージのみ）
-    _poll_limit = st.session_state.get("_chat_msg_limit", 100)
-    _msgs = fetch_messages(selected_room, limit=_poll_limit)
-    if _msgs is None:
-        return   # 取得失敗（通信エラー）→ 今回はスキップ（前回表示を維持）
-    count_key = f"cnt_{selected_room}"
-    prev = st.session_state.get(count_key, -1)
-    if prev >= 0 and len(_msgs) > prev:
-        for m in _msgs[prev:]:
-            if m["user_name"] != uname:
+    # 安チェック: 最新5件のみ取得（toast + ID 比較に十分）
+    try:
+        tip = supabase.table("messages")\
+            .select("id, user_name, content, image_url, video_url")\
+            .eq("room_name", selected_room)\
+            .order("created_at", desc=True)\
+            .limit(5)\
+            .execute().data or []
+    except Exception:
+        return
+
+    if not tip:
+        return
+
+    latest_id = tip[0]["id"]
+    tip_key   = f"_poll_tip_{selected_room}"
+    prev_id   = st.session_state.get(tip_key)
+
+    if latest_id == prev_id:
+        return  # 変化なし → rerun しない（egress 削減の核心）
+
+    # 変化あり: 新着 toast（他人のメッセージのみ・prev_id より新しいもの）
+    if prev_id is not None:   # 初回は toast しない（入室時の既存メッセージを通知しない）
+        for m in tip:
+            if m["id"] == prev_id:
+                break
+            if m.get("user_name") != uname:
                 preview = m["content"][:30] if m["content"] else (
                     "🎥 動画" if m.get("video_url")
                     else ("😊 スタンプ" if _is_stamp_url(m.get("image_url")) else "📷 写真"))
                 st.toast(f"💬 {m['user_name']}: {preview}", icon="🔔")
-    st.session_state[count_key] = len(_msgs)
 
-    # 内容（バブルHTML）が前回と変わっていれば再描画。同じなら何もしない。
-    #   ★ チカチカ対策: 「既読(dr-read)だけの変化」では再描画しない（既読が更新される
-    #     たびに st.markdown が貼り替わってチラつくため）。既読は新着/リアクション等の
-    #     実変化で再描画が走るときにまとめて反映される。
-    _html_now = build_messages_html(selected_room, current_user, limit=_poll_limit)
-    if _html_now is None:
-        return   # 取得失敗 → 前回表示を維持
-    _prev = st.session_state.get("_chat_html")
-    _changed = (_strip_read_receipts(_html_now) != _strip_read_receipts(_prev)) \
-        or st.session_state.get("_chat_html_room") != selected_room
-    if _changed:
-        st.session_state["_chat_html"]      = _html_now   # 再描画時は最新の既読込みで保存
-        st.session_state["_chat_html_room"] = selected_room
-        st.rerun()
+    st.session_state[tip_key] = latest_id
+    st.session_state.pop("_chat_html_key", None)   # render_chat_messages に再構築を促す
+    st.rerun()
 
 # ─────────────────────────────────────
 # 画面① ログイン（名前 + パスワード）

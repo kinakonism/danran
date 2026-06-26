@@ -53,7 +53,7 @@ REPO_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # claude を動かす作業ディレクトリ。REPO_DIR にすると danran のコード/CLAUDE.md を読んで
 # 正確に答えられる（その分ファイルにアクセスできる）。安全重視なら中立なフォルダに変える。
 WORKDIR    = REPO_DIR
-POLL_SEC   = 15   # Supabase egress 削減: 4→15秒。差分取得と組み合わせで ~10倍削減
+POLL_SEC   = 4    # 差分取得(since)でほぼ空レスポンスになるため egress は ~20MB/月と極小。
 SETTLE_SEC = 2.5    # 連投が落ち着くまで待ってから1回だけ返信
 MAX_HIST   = 20
 

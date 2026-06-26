@@ -69,7 +69,7 @@ const RETRY_HTML = `<!doctype html><html><head><meta charset="utf-8">
 @keyframes p{0%,100%{opacity:.5;transform:scale(.96)}50%{opacity:1;transform:scale(1)}}</style></head><body>
 <div style="font-size:3.2rem;animation:p 1.2s ease-in-out infinite">\u{1F3E0}</div>
 <div style="color:rgba(240,232,224,.5);font-size:.85rem;font-weight:700;letter-spacing:.12em">danran</div>
-<div style="color:rgba(240,232,224,.35);font-size:.75rem">つなぎ直しています…</div>
+<div style="color:rgba(240,232,224,.35);font-size:.75rem">つなぎ直しています… / メンテナンス中の場合もあります</div>
 <script>(function p(){fetch("/_stcore/health",{cache:"no-store"}).then(function(r){
 if(r.ok){location.reload();}else{setTimeout(p,4000);}}).catch(function(){setTimeout(p,4000);});})();</script>
 </body></html>`;

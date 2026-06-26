@@ -162,6 +162,17 @@ def invalidate_rooms_cache() -> None:
     """rooms キャッシュを破棄（更新・削除・メンバー変更後に必ず呼ぶ）。"""
     fetch_rooms.clear()
 
+@st.cache_data(ttl=60)
+def _supabase_ok() -> bool:
+    """True = 正常、False = 402 egress 制限中。60s キャッシュ（全セッション共有）。
+    制限中は maintenance 画面を出し、60s ごとに再確認して復旧を自動検出する。"""
+    try:
+        supabase.table("users").select("id").limit(1).execute()
+        return True
+    except Exception as e:
+        s = str(e).lower()
+        return not ("402" in s or "egress" in s or "restricted" in s or "exceed" in s)
+
 # 無料枠の容量目安（Supabase 無料: ストレージ 1GB）。80% 超でルーム選択に警告。
 STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024   # 1 GB
 STORAGE_WARN_RATIO  = 0.8
@@ -2073,6 +2084,18 @@ def poll_messages() -> None:
     st.session_state[tip_key] = latest_id
     st.session_state.pop("_chat_html_key", None)   # render_chat_messages に再構築を促す
     st.rerun()
+
+
+@st.fragment(run_every="60s")
+def _sb_health_watcher() -> None:
+    """Supabase メンテナンス中に 60s ごとに復旧を確認。復旧したら全体 rerun。"""
+    if not st.session_state.get("_sb_maintenance"):
+        return
+    _supabase_ok.clear()   # キャッシュをクリアして実際に確認
+    if _supabase_ok():
+        st.session_state.pop("_sb_maintenance", None)
+        st.rerun()
+
 
 # ─────────────────────────────────────
 # 画面① ログイン（名前 + パスワード）
@@ -4598,6 +4621,30 @@ if isinstance(_lp_result, dict):
             _sub_uid  = _lp_result.get("user_id", "") or _cu.get("id", "")
             if _sub_json and _sub_uid:
                 save_push_subscription(_sub_uid, _sub_json)
+
+# ── Supabase メンテナンスチェック ────────────────────────────────────────
+# 402 egress 制限中はフルスクリーン保守画面を表示し、60s ごとに復旧を自動検出する。
+if not _supabase_ok():
+    st.session_state["_sb_maintenance"] = True
+    st.html(
+        '<style>'
+        '@keyframes drpulse{0%,100%{opacity:.45;transform:scale(.95)}50%{opacity:1;transform:scale(1)}}'
+        '</style>'
+        '<div style="position:fixed;inset:0;z-index:2147483646;background:#1a1614;display:flex;'
+        'flex-direction:column;align-items:center;justify-content:center;gap:16px;'
+        'font-family:-apple-system,sans-serif">'
+        '<div style="font-size:3.2rem;animation:drpulse 1.4s ease-in-out infinite">🏠</div>'
+        '<div style="color:#f0a868;font-size:1rem;font-weight:700;letter-spacing:.08em">danran</div>'
+        '<div style="color:rgba(240,232,224,.8);font-size:.95rem;font-weight:500">ただいまメンテナンス中です</div>'
+        '<div style="color:rgba(240,232,224,.4);font-size:.8rem;text-align:center;line-height:1.8">'
+        'サービスが一時的にご利用できません。<br>しばらく経ってから再度お試しください。</div>'
+        '<div style="color:rgba(240,232,224,.25);font-size:.75rem;margin-top:4px">自動的に再確認しています…</div>'
+        '</div>'
+    )
+    _sb_health_watcher()
+    st.stop()
+else:
+    st.session_state.pop("_sb_maintenance", None)
 
 # ── Render 1 フラッシュ防止 ──────────────────────────────────────────────
 # _lp_result is None = コンポーネントがまだ stSetValue を送っていない（初回描画）。

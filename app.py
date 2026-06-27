@@ -988,33 +988,128 @@ def _post_claude_usage(room: str = AI_ROOM_NAME) -> None:
     except Exception:
         pass
 
+def _get_weather(lat: float, lon: float, loc_name: str) -> str:
+    """Open-Meteo から天気データを取得してテキスト化（API キー不要）。"""
+    WC = {0:"晴れ",1:"おおむね晴れ",2:"部分的に曇り",3:"曇り",45:"霧",48:"霧",
+          51:"霧雨",53:"霧雨",55:"霧雨",61:"小雨",63:"雨",65:"大雨",
+          71:"小雪",73:"雪",75:"大雪",80:"にわか雨",81:"にわか雨",82:"強いにわか雨",
+          95:"雷雨",96:"雷雨",99:"激しい雷雨"}
+    url = (f"https://api.open-meteo.com/v1/forecast"
+           f"?latitude={lat}&longitude={lon}"
+           f"&current=temperature_2m,weathercode,relativehumidity_2m,windspeed_10m"
+           f"&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max"
+           f"&timezone=Asia%2FTokyo&forecast_days=3")
+    r = httpx.get(url, timeout=8)
+    d = r.json()
+    cur = d.get("current", {})
+    day = d.get("daily", {})
+    txt = f"【{loc_name}の天気】\n"
+    txt += (f"現在: {WC.get(cur.get('weathercode', 0), '?')} "
+            f"{cur.get('temperature_2m', '?')}℃ 湿度{cur.get('relativehumidity_2m', '?')}%\n\n")
+    for i, dt in enumerate(day.get("time", [])[:3]):
+        label = ["今日", "明日", "明後日"][i]
+        wc    = WC.get((day.get("weathercode") or [])[i] if i < len(day.get("weathercode") or []) else 0, "?")
+        hi    = (day.get("temperature_2m_max") or ["-"]*3)[i]
+        lo    = (day.get("temperature_2m_min") or ["-"]*3)[i]
+        rp    = (day.get("precipitation_probability_max") or ["-"]*3)[i]
+        txt += f"{label}({dt}): {wc} 最高{hi}℃/最低{lo}℃ 降水確率{rp}%\n"
+    return txt
+
+
+def _web_search(query: str) -> str:
+    """web_search ツールから呼ばれる検索実行関数。天気クエリは Open-Meteo、それ以外は DuckDuckGo。"""
+    import urllib.parse as _up
+    # 天気クエリ判定 → Open-Meteo + ジオコーディング
+    if any(kw in query for kw in ["天気", "weather", "気温", "forecast", "雨", "晴れ", "曇り", "雪", "気候"]):
+        try:
+            geo = httpx.get(
+                f"https://geocoding-api.open-meteo.com/v1/search?name={_up.quote(query)}&count=1&language=ja",
+                timeout=8,
+            ).json().get("results", [])
+            if geo:
+                loc = geo[0]
+                return _get_weather(loc["latitude"], loc["longitude"], loc.get("name", query))
+            # 地名不明 → 東京をデフォルト
+            return _get_weather(35.6762, 139.6503, "東京")
+        except Exception as e:
+            return f"天気取得エラー: {e}"
+
+    # 一般検索 → DuckDuckGo Instant Answer API
+    try:
+        ia = httpx.get(
+            f"https://api.duckduckgo.com/?q={_up.quote(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1",
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0 danran/1.0"},
+        ).json()
+        parts = []
+        if ia.get("AbstractText"):
+            parts.append(ia["AbstractText"])
+            if ia.get("AbstractURL"):
+                parts.append(f"出典: {ia['AbstractURL']}")
+        for topic in ia.get("RelatedTopics", [])[:5]:
+            if isinstance(topic, dict) and topic.get("Text"):
+                parts.append(topic["Text"])
+        if parts:
+            return "\n\n".join(parts)
+    except Exception:
+        pass
+    return "検索結果を取得できませんでした。"
+
+
 def _generate_ai_reply(api_key: str, model: str, room: str = AI_ROOM_NAME) -> None:
-    """AI サポートルームの直近履歴を読み、Claude の返信を投稿する（別スレッド）。"""
+    """AI サポートルームの直近履歴を読み、Claude の返信を投稿する（別スレッド）。web_search ツール対応。"""
     try:
         history = fetch_messages(room, limit=20) or []
         conv = _build_ai_messages(history)
         if not conv:
             return
-        resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": model or "claude-sonnet-4-6",
-                "max_tokens": 700,
-                "system": AI_SYSTEM_PROMPT,
-                "messages": conv,
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        reply = "".join(
-            p.get("text", "") for p in data.get("content", []) if p.get("type") == "text"
-        ).strip()
+
+        hdrs = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        tools   = [{"type": "web_search_20250305", "name": "web_search"}]
+        messages = list(conv)
+        reply   = ""
+
+        for _ in range(5):  # 最大 5 ターンのツールループ
+            resp = httpx.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=hdrs,
+                json={
+                    "model": model or "claude-sonnet-4-6",
+                    "max_tokens": 1024,
+                    "system": AI_SYSTEM_PROMPT,
+                    "messages": messages,
+                    "tools": tools,
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            reply = "".join(
+                p.get("text", "") for p in data.get("content", []) if p.get("type") == "text"
+            ).strip()
+
+            if data.get("stop_reason") != "tool_use":
+                break
+
+            # tool_use → 検索実行 → tool_result をメッセージに追加してループ継続
+            messages.append({"role": "assistant", "content": data["content"]})
+            tool_results = [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": blk["id"],
+                    "content": _web_search(blk.get("input", {}).get("query", "")),
+                }
+                for blk in data["content"]
+                if blk.get("type") == "tool_use" and blk.get("name") == "web_search"
+            ]
+            if tool_results:
+                messages.append({"role": "user", "content": tool_results})
+
         _insert_ai_message(reply or "うまく応答できませんでした。もう一度試してください。", room=room)
     except Exception:
         _insert_ai_message("⚠️ 今ちょっと応答できませんでした。少し待ってからもう一度試してください。", room=room)

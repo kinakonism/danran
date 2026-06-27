@@ -949,19 +949,64 @@ def _claude_code_usage_text() -> str:
                 return v
         return None
 
-    def _fmt_entry(e: dict) -> str:
+    def _fmt_cost(e: dict) -> str:
+        cost = _num(e, "totalCost", "total_cost", "costUSD", "cost")
+        return f"${cost:.2f}" if cost is not None else "?"
+
+    def _fmt_tokens(e: dict) -> str:
         tot = _num(e, "totalTokens", "total_tokens")
-        cost = _num(e, "totalCost", "total_cost", "cost")
+        return f"{int(tot):,}" if tot is not None else "?"
+
+    def _fmt_entry(e: dict) -> str:
         parts = []
+        tot = _num(e, "totalTokens", "total_tokens")
+        cost = _num(e, "totalCost", "total_cost", "costUSD", "cost")
         if tot is not None:
             parts.append(f"{int(tot):,} トークン")
         if cost is not None:
-            parts.append(f"約 ${cost:.2f}")
+            parts.append(f"${cost:.2f}")
         return " / ".join(parts) if parts else "（データなし）"
 
-    lines = [f"🤖 claude code の使用量（{now.month}月{now.day}日 {now.strftime('%H:%M')} 時点）"]
+    def _gauge(pct: int, width: int = 16) -> str:
+        filled = round(width * pct / 100)
+        return "▓" * filled + "░" * (width - filled) + f" {pct}%"
 
-    # ── 最新セッション ──
+    lines = [f"🤖 claude code 使用状況（{now.month}月{now.day}日 {now.strftime('%H:%M')} 時点）"]
+
+    # ── 現ブロック（5時間ウィンドウ）──
+    blocks_data = _run_ccusage("blocks", env)
+    active = None
+    if blocks_data and isinstance(blocks_data.get("blocks"), list):
+        active = next((b for b in blocks_data["blocks"] if b.get("isActive") and not b.get("isGap")), None)
+
+    if active:
+        try:
+            start_dt = datetime.fromisoformat(active["startTime"].replace("Z", "+00:00")).astimezone(JST)
+            end_dt   = datetime.fromisoformat(active["endTime"].replace("Z", "+00:00")).astimezone(JST)
+            block_total_min = (end_dt - start_dt).total_seconds() / 60
+            elapsed_min     = (now - start_dt).total_seconds() / 60
+            elapsed_pct     = max(0, min(100, int(elapsed_min / block_total_min * 100)))
+            remaining_min   = max(0, (end_dt - now).total_seconds() / 60)
+            rem_h, rem_m    = int(remaining_min // 60), int(remaining_min % 60)
+            reset_str       = end_dt.strftime("%-H:%M")
+        except Exception:
+            elapsed_pct, rem_h, rem_m, reset_str = 0, 0, 0, "?"
+
+        cost    = _num(active, "costUSD") or 0
+        tokens  = active.get("totalTokens", 0)
+        out_tok = active.get("tokenCounts", {}).get("outputTokens", 0)
+        rate    = (active.get("burnRate") or {}).get("costPerHour")
+        proj    = (active.get("projection") or {}).get("totalCost")
+
+        lines.append(f"\n【現ブロック　リセットまで {rem_h}時間{rem_m}分（{reset_str} JST）】")
+        lines.append(_gauge(elapsed_pct) + "（経過時間）")
+        lines.append(f"・費用: ${cost:.2f}" + (f"  →  予測 ${proj:.2f}" if proj else ""))
+        lines.append(f"・ペース: ${rate:.2f}/時間" if rate else "")
+        lines.append(f"・トークン: {int(tokens):,}（出力 {int(out_tok):,}）")
+    else:
+        lines.append("\n【現ブロック: アクティブなブロックなし（アイドル中）】")
+
+    # ── 最新セッション（個別呼び出し単位）──
     session_data = _run_ccusage("session", env)
     if session_data and isinstance(session_data.get("session"), list):
         sessions = sorted(
@@ -973,18 +1018,17 @@ def _claude_code_usage_text() -> str:
             latest = sessions[0]
             last_ts = latest.get("metadata", {}).get("lastActivity", "")
             try:
-                from datetime import timezone as _tz
                 _dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00")).astimezone(JST)
                 ts_str = f"{_dt.month}月{_dt.day}日 {_dt.strftime('%H:%M')}"
             except Exception:
                 ts_str = last_ts[:16]
             models = ", ".join(latest.get("modelsUsed") or []) or "?"
-            lines.append(f"・最新セッション（{ts_str}）: {_fmt_entry(latest)}")
-            lines.append(f"  └ モデル: {models}")
-    else:
-        lines.append("・最新セッション: （取得できず）")
+            lines.append(f"\n【最新セッション（{ts_str}）】")
+            lines.append(f"・{_fmt_entry(latest)}")
+            lines.append(f"・モデル: {models}")
 
     # ── 今日・今月・累計 ──
+    lines.append("")
     today_iso = now.strftime("%Y-%m-%d")
     daily = _run_ccusage("daily", env)
     if daily and isinstance(daily.get("daily"), list):
@@ -1004,8 +1048,8 @@ def _claude_code_usage_text() -> str:
     else:
         lines.append("・今月: （取得できず）")
 
-    lines.append("（mini のローカルログ ~/.claude を集計。Maxプラン利用なので料金は概算の目安です）")
-    return "\n".join(lines)
+    lines.append("（mini のローカルログ ~/.claude を集計。Maxプランなので料金は概算の目安です）")
+    return "\n".join(l for l in lines if l is not None)
 
 def _post_claude_usage(room: str = AI_ROOM_NAME) -> None:
     try:

@@ -141,9 +141,14 @@ self.addEventListener('push', function (event) {
   event.waitUntil(Promise.all([notifPromise, badgePromise]));
 });
 
-// ── 通知タップ → アプリを前面に ──────────────────────
+// ── 通知タップ → バッジをすぐクリア → アプリを前面に ───────────
 self.addEventListener('notificationclick', function (event) {
   event.notification.close();
+  // タップ時点でバッジを即クリア（visibilitychange より早く消える）
+  try {
+    var nav = self.navigator || navigator;
+    if ('clearAppBadge' in nav) nav.clearAppBadge().catch(function () {});
+  } catch (e) {}
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
       for (var i = 0; i < list.length; i++) {

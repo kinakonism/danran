@@ -2621,8 +2621,13 @@
       }
     };
 
-    // アプリ復帰時にバッジをクリア
-    var onVc = function () { if (!pDoc.hidden && ME) { danranClearBadge(); } };
+    // アプリ復帰時にバッジをクリア → 3秒後に正確な未読数で再計算（last_read 更新待ち）
+    var onVc = function () {
+      if (!pDoc.hidden && ME) {
+        danranClearBadge();
+        setTimeout(updateAppBadge, 3000);
+      }
+    };
 
     pDoc.addEventListener('touchstart', onTs, { passive: true });
     pDoc.addEventListener('touchmove',  onTm, { passive: false });   // preventDefault するため

@@ -592,6 +592,7 @@
       var pDoc = window.parent.document;
       var o = pDoc.getElementById(POPUP_ID);      if (o) o.remove();
       var b = pDoc.getElementById(POPUP_BACK_ID); if (b) b.remove();
+      pDoc._danranInDelConfirm = false;
     } catch (e) {}
   }
 
@@ -1012,8 +1013,17 @@
           if (!delStage) {
             delStage = 1;
             b.textContent = '✓ 削除';
-            b.style.cssText += ';color:#ff4d4d;font-size:0.82rem;font-weight:600;'
-              + 'background:rgba(255,77,77,0.15);padding:5px 10px;';
+            // フルワイドの赤ボタンに変えて押し間違いを防ぐ
+            b.style.cssText = 'background:#c0392b;border:none;color:#fff;font-size:0.95rem;'
+              + 'font-weight:700;cursor:pointer;padding:11px 0;border-radius:12px;'
+              + 'line-height:1;white-space:nowrap;-webkit-tap-highlight-color:transparent;'
+              + 'width:100%;box-sizing:border-box;transition:transform 0.12s;';
+            // 他ボタンを隠してフルワイドにする
+            Array.prototype.slice.call(rowAction.childNodes).forEach(function (c) {
+              if (c !== b) c.style.display = 'none';
+            });
+            // バックドロップによる誤クローズを防ぐフラグ
+            pDoc._danranInDelConfirm = true;
           } else {
             deleteMsg(msgId).then(function (res) {
               hidePopup();
@@ -1083,9 +1093,13 @@
       back.id = POPUP_BACK_ID;
       back.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:transparent;';
       back.addEventListener('touchstart', function (e) {
+        if (pDoc._danranInDelConfirm) return;   // 削除確認中は誤クローズ禁止
         e.preventDefault(); e.stopPropagation(); hidePopup();
       }, { passive: false });
-      back.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); hidePopup(); });
+      back.addEventListener('click', function (e) {
+        if (pDoc._danranInDelConfirm) return;
+        e.preventDefault(); e.stopPropagation(); hidePopup();
+      });
       pDoc.body.appendChild(back);
       pDoc.body.appendChild(pop);   // pop(z:max) は back(z:max-1) の上＝ボタンはタップ可
     } catch (err) { console.error('[danran-lp] showPopup:', err); }
@@ -1233,7 +1247,8 @@
       // 開いているポップアップの外をタップしたら閉じる（生きた iframe が毎回判定）。
       //   開いた直後（250ms以内）の合成タップでは閉じない。
       var pop = pDoc.getElementById(POPUP_ID);
-      if (pop && !pop.contains(e.target) && Date.now() - (pDoc._danranPopupAt || 0) > 250) {
+      if (pop && !pop.contains(e.target) && Date.now() - (pDoc._danranPopupAt || 0) > 250
+          && !pDoc._danranInDelConfirm) {
         hidePopup();
       }
       curPill = e.target && e.target.closest ? e.target.closest('[data-react-pill]') : null;

@@ -1346,10 +1346,7 @@ def main():
                 fire_event_reminders()
             # 差分取得: since 以降の新着だけ取得（通常はほぼ空 → egress を大幅削減）
             new_msgs = fetch_all_recent(since=_since_ts)
-            if new_msgs:
-                new_ts_list = [m.get("created_at") for m in new_msgs if m.get("created_at")]
-                if new_ts_list:
-                    _since_ts = max(new_ts_list)
+            _any_settling = False   # SETTLE_SEC でスキップしたルームがあれば True
             for rn, msgs in _group_by_room(new_msgs).items():
                 if not msgs:
                     continue
@@ -1362,7 +1359,9 @@ def main():
                     last_by_room[rn] = nts
                     continue
                 # 連投が落ち着くまで待つ（まだ待つなら last は更新しない＝次ループで再判定）
+                # ★ _since_ts は進めない。進めると次ループで再取得されず永久スキップになるバグを防ぐ
                 if (time.time() - nts) <= SETTLE_SEC:
+                    _any_settling = True
                     continue
                 content = newest.get("content") or ""
                 sender  = newest.get("user_name", "")
@@ -1432,6 +1431,11 @@ def main():
                       f"{' [task]' if is_task else ''}{' [destr]' if is_destr else ''} "
                       f"{(clean or '(エラー)')[:60]}")
                 last_by_room[rn] = nts
+            # 全ルームが SETTLE_SEC 待ちでなければ _since_ts を進める
+            if new_msgs and not _any_settling:
+                new_ts_list = [m.get("created_at") for m in new_msgs if m.get("created_at")]
+                if new_ts_list:
+                    _since_ts = max(new_ts_list)
         except KeyboardInterrupt:
             raise
         except Exception as e:

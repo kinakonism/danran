@@ -1350,7 +1350,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v176",   # @メンション補完: 選択範囲を delete してから挿入＝@が二重(@〇〇@テスト)になるバグ根治
+    "danran_lp_v177",   # 削除確認ボタンをフルワイドに変更＋確認中の誤クローズ禁止
     path=_LP_COMPONENT_DIR,
 )
 

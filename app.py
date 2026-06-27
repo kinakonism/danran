@@ -1350,7 +1350,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v178",   # ポップアップにmin-width:220px＋align-items:stretch→✓削除ボタンが潰れない
+    "danran_lp_v179",   # data-in-ai-room でAIサポートルームの考え中バブル判定を修正
     path=_LP_COMPONENT_DIR,
 )
 
@@ -4436,6 +4436,7 @@ st.html(
     # ── AI 応答待ちインジケータ用（JS が「考え中…」吹き出しを出す判定に使う）──
     f'data-ai-room="{_html.escape(AI_ROOM_NAME)}" '
     f'data-ai-bot="{_html.escape(AI_BOT_NAME)}" '
+    f'data-in-ai-room="{str(_active_room in (AI_ROOM_NAME, "AIサポート")).lower()}" '
     # ── 引用返信ターゲット（JS が入力欄の上に固定バーを描画する）──
     f'data-reply-id="{_html.escape((st.session_state.get("_reply_to") or {}).get("id","") or "")}" '
     f'data-reply-name="{_html.escape((st.session_state.get("_reply_to") or {}).get("name","") or "")}" '

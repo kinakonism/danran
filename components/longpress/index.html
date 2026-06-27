@@ -4532,8 +4532,7 @@
       var lastName = last.getAttribute('data-lp-name') || '';
       var lastBody = last.getAttribute('data-lp-body') || '';
       var bot = _aiBot();
-      var cur = _curRoom(), ar = _aiRoom();
-      var inAi = !!(cur && ar && cur === ar);
+      var inAi = _cfgAttr('data-in-ai-room') === 'true';
       var atAI = /[@＠]\s*AI(?![0-9A-Za-z])/i.test(lastBody);
       var pending = (lastName !== bot) && (inAi || atAI);
       if (!pending || _aiAbandoned[lastId]) { if (bubble) bubble.remove(); return; }

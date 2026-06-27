@@ -951,8 +951,8 @@
       pop.style.cssText =
         'position:fixed;z-index:2147483647;top:' + topPx + 'px;left:50%;transform:translateX(-50%);' +
         'background:#241f1c;border:1px solid rgba(255,255,255,0.13);border-radius:18px;' +
-        'padding:7px 9px;display:flex;flex-direction:column;align-items:center;gap:6px;' +   // 絵文字=1行目/アクション=2行目
-        'max-width:96vw;box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
+        'padding:7px 9px;display:flex;flex-direction:column;align-items:stretch;gap:6px;' +   // 絵文字=1行目/アクション=2行目
+        'min-width:220px;max-width:96vw;box-shadow:0 8px 28px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
       // 2行分のコンテナ（絵文字行・アクション行）。各行は中央寄せの flex 行で折り返し可。
       var rowEmoji  = pDoc.createElement('div');
       rowEmoji.style.cssText  = 'display:flex;flex-wrap:nowrap;align-items:center;justify-content:center;gap:6px;';

@@ -1350,7 +1350,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v177",   # 削除確認ボタンをフルワイドに変更＋確認中の誤クローズ禁止
+    "danran_lp_v178",   # ポップアップにmin-width:220px＋align-items:stretch→✓削除ボタンが潰れない
     path=_LP_COMPONENT_DIR,
 )
 

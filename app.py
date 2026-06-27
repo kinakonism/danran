@@ -901,7 +901,8 @@ def _post_usage_stats(room: str = AI_ROOM_NAME) -> None:
 _CLAUDE_USAGE_KEYWORDS = ("claude", "クロード", "claude code", "クロードコード")
 # claude/クロード と一緒に出やすい語。「使用量」という語が無くても（トークン/コスト等でも）拾う。
 _CLAUDE_USAGE_EXTRA = ("使用量", "使用料", "使用状況", "容量", "トークン", "token",
-                       "コスト", "cost", "料金", "usage", "/usage")
+                       "コスト", "cost", "料金", "usage", "/usage",
+                       "セッション", "session")
 
 def _is_claude_usage_query(text: str) -> bool:
     t = (text or "").lower()
@@ -960,6 +961,30 @@ def _claude_code_usage_text() -> str:
 
     lines = [f"🤖 claude code の使用量（{now.month}月{now.day}日 {now.strftime('%H:%M')} 時点）"]
 
+    # ── 最新セッション ──
+    session_data = _run_ccusage("session", env)
+    if session_data and isinstance(session_data.get("session"), list):
+        sessions = sorted(
+            session_data["session"],
+            key=lambda s: s.get("metadata", {}).get("lastActivity", ""),
+            reverse=True,
+        )
+        if sessions:
+            latest = sessions[0]
+            last_ts = latest.get("metadata", {}).get("lastActivity", "")
+            try:
+                from datetime import timezone as _tz
+                _dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00")).astimezone(JST)
+                ts_str = f"{_dt.month}月{_dt.day}日 {_dt.strftime('%H:%M')}"
+            except Exception:
+                ts_str = last_ts[:16]
+            models = ", ".join(latest.get("modelsUsed") or []) or "?"
+            lines.append(f"・最新セッション（{ts_str}）: {_fmt_entry(latest)}")
+            lines.append(f"  └ モデル: {models}")
+    else:
+        lines.append("・最新セッション: （取得できず）")
+
+    # ── 今日・今月・累計 ──
     today_iso = now.strftime("%Y-%m-%d")
     daily = _run_ccusage("daily", env)
     if daily and isinstance(daily.get("daily"), list):

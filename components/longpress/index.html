@@ -3827,7 +3827,7 @@
       var cover = pDoc.createElement('div');
       cover.id = '_danran_enter_cover';
       // 安全網。chatReady まで保持するため少し長め（通常は描画完了で即剥がれる）
-      cover.setAttribute('data-cover-expire', String(Date.now() + 3500));
+      cover.setAttribute('data-cover-expire', String(Date.now() + 8000));
       cover.setAttribute('data-cover-dir', 'enter');
       // z-index はヘッダーと同値。body 末尾に追加するので DOM 順でヘッダーの上に来る
       // → ヘッダーごと覆い、入室中のヘッダー中身の切り替わり(LINE で言う画面遷移)を隠す
@@ -3850,8 +3850,8 @@
       }, 160);
       // ★ 強制解除フェイルセーフ: カバー除去は通常 scan()→scrollToLatestOnEnter() 駆動だが、
       //   チャット描画後に DOM 変化が止まると scan が再実行されず「スプラッシュのまま進まない」
-      //   ことがある。scan に依存しないこのタイマーで最大 3.8 秒後に必ず剥がす（この iframe は
-      //   タップで生きているので発火する）。chatReady 経路が先に剥がせば no-op。
+      //   ことがある。このタイマーで最大 8 秒後に必ず剥がす（Tunnel 遅延対策で 3.8→8s）。
+      //   chatReady 経路が先に剥がせば no-op。
       var _coverEl = cover;
       setTimeout(function () {
         try {
@@ -3860,7 +3860,7 @@
             setTimeout(function () { if (_coverEl.parentNode) _coverEl.remove(); }, 200);
           }
         } catch (e) {}
-      }, 3800);
+      }, 8000);
       // 入室遷移中は DOM 変化が途切れても chatReady を再判定できるよう scan を複数回予約
       [250, 600, 1000, 1600, 2400].forEach(function (ms) {
         setTimeout(function () { try { scan(); } catch (e) {} }, ms);
@@ -3958,6 +3958,12 @@
       if (!chatReady) {
         // 遷移中だけカバーを出す（タップ経由なら既にある）。次の tick/scan で再判定。
         //   ※ chatReady の時はカバーを新規生成しない＝ライブ iframe 入替時のチラ見え防止。
+        // ★ 入室試行中(pendingRoom 設定済み)はカバーの有効期限を延長して sweeper の
+        //   早期削除を防ぐ（Tunnel 遅延で Python rerun が 3s+ かかる場合の対策）。
+        var _ec = pDoc.getElementById('_danran_enter_cover');
+        if (_ec && pDoc._danranPendingRoom) {
+          _ec.setAttribute('data-cover-expire', String(Date.now() + 6000));
+        }
         showEnterCover();
         return;
       }

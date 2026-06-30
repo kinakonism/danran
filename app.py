@@ -1442,7 +1442,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v180",   # 画像ペースト(Cmd+V)対応・AI Vision対応
+    "danran_lp_v181",   # ルーム選択→スプラッシュ→ルーム選択に戻るバグ修正(カバータイムアウト延長)
     path=_LP_COMPONENT_DIR,
 )
 

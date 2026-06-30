@@ -4948,6 +4948,25 @@
       var ta = e.target;
       if (!ta || !ta.closest || !ta.closest('[data-testid="stChatInput"]')) return;
       var cd = e.clipboardData || (pDoc.defaultView && pDoc.defaultView.clipboardData);
+      // ★ 画像ペースト（Cmd+V / Ctrl+V）: clipboard に画像があれば直接アップロード
+      if (cd && cd.items) {
+        var imgItem = null;
+        for (var ii = 0; ii < cd.items.length; ii++) {
+          if (cd.items[ii].kind === 'file' && cd.items[ii].type.indexOf('image/') === 0) {
+            imgItem = cd.items[ii]; break;
+          }
+        }
+        if (imgItem) {
+          e.preventDefault(); e.stopImmediatePropagation();
+          var imgFile = imgItem.getAsFile();
+          if (imgFile) {
+            var pasteRoom   = _cfgAttr('data-room');
+            var pasteAvatar = _cfgAttr('data-avatar');
+            if (pasteRoom && ME_UID) handleImageUpload([imgFile], pasteRoom, pasteAvatar);
+          }
+          return;
+        }
+      }
       var txt = cd ? (cd.getData('text/plain') || cd.getData('text/uri-list')
                       || cd.getData('text') || cd.getData('URL') || '') : '';
       if (txt) {

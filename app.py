@@ -802,21 +802,44 @@ def _ai_cfg() -> dict:
 
 def _build_ai_messages(history: list[dict]) -> list[dict]:
     """履歴を Claude Messages 形式へ。bot=assistant / それ以外=user（名前を前置）。
+    画像付きメッセージは Vision 用コンテンツブロック（type:image+url）を含むリスト形式にする。
     連続する同roleは結合し、先頭が user になるよう整える。"""
     msgs: list[dict] = []
     for m in history:
-        role = "assistant" if m.get("user_id") == AI_BOT_UID else "user"
-        text = (m.get("content") or "").strip()
-        if not text:
-            text = "（画像を送信）" if m.get("image_url") else ""
-        if not text:
-            continue
-        if role == "user":
-            text = f"{m.get('user_name','家族')}: {text}"
-        if msgs and msgs[-1]["role"] == role:
-            msgs[-1]["content"] += "\n" + text
+        role  = "assistant" if m.get("user_id") == AI_BOT_UID else "user"
+        text  = (m.get("content") or "").strip()
+        img   = m.get("image_url") or ""
+        stamp = bool(img) and "/stamps/" in img
+
+        if role == "assistant":
+            if not text:
+                continue
+            if msgs and msgs[-1]["role"] == "assistant":
+                msgs[-1]["content"] += "\n" + text
+            else:
+                msgs.append({"role": "assistant", "content": text})
         else:
-            msgs.append({"role": role, "content": text})
+            label = f"{m.get('user_name','家族')}: "
+            parts: list[dict] = []
+            if text:
+                parts.append({"type": "text", "text": label + text})
+            elif img and not stamp:
+                parts.append({"type": "text", "text": label + "（写真を送りました）"})
+            elif stamp:
+                parts.append({"type": "text", "text": label + "（スタンプを送りました）"})
+            else:
+                continue
+            if img and not stamp:
+                parts.append({"type": "image", "source": {"type": "url", "url": img}})
+
+            if msgs and msgs[-1]["role"] == "user":
+                prev = msgs[-1]["content"]
+                if isinstance(prev, str):
+                    prev = [{"type": "text", "text": prev}]
+                msgs[-1]["content"] = prev + parts
+            else:
+                msgs.append({"role": "user", "content": parts})
+
     while msgs and msgs[0]["role"] != "user":
         msgs.pop(0)
     return msgs
@@ -1419,7 +1442,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v179",   # data-in-ai-room でAIサポートルームの考え中バブル判定を修正
+    "danran_lp_v180",   # 画像ペースト(Cmd+V)対応・AI Vision対応
     path=_LP_COMPONENT_DIR,
 )
 

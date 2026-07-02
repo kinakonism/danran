@@ -1442,7 +1442,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v181",   # ルーム選択→スプラッシュ→ルーム選択に戻るバグ修正(カバータイムアウト延長)
+    "danran_lp_v182",   # セッションをcookieにも二重保存（iOS Storage Eviction 対策）
     path=_LP_COMPONENT_DIR,
 )
 

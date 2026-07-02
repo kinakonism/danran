@@ -85,7 +85,32 @@
 
   var LP_MS           = 500;
   var STORAGE_KEY     = 'danran_session';
+  var COOKIE_KEY      = 'danran_sid';         // セッションID cookie（localStorage iOS eviction 対策）
   var ROOM_KEY        = 'danran_last_room';   // 直前にいた部屋（sessionStorage＝再接続で復帰/完全終了で消える）
+
+  // ── cookie ヘルパー（iOS Safari が localStorage を 7日未使用で消す Storage Eviction 対策）──
+  //   cookie は ITP の eviction 対象外で PWA を削除しない限り残る。localStorage の fallback として使う。
+  function _cookieSave(sid) {
+    try {
+      var exp = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toUTCString();
+      var doc = window.parent ? window.parent.document : document;
+      doc.cookie = COOKIE_KEY + '=' + encodeURIComponent(sid) +
+        '; expires=' + exp + '; path=/; SameSite=Lax; Secure';
+    } catch (e) {}
+  }
+  function _cookieRead() {
+    try {
+      var doc = window.parent ? window.parent.document : document;
+      var m = doc.cookie.match('(?:^|;)\\s*' + COOKIE_KEY + '=([^;]*)');
+      return m ? decodeURIComponent(m[1]) : '';
+    } catch (e) { return ''; }
+  }
+  function _cookieClear() {
+    try {
+      var doc = window.parent ? window.parent.document : document;
+      doc.cookie = COOKIE_KEY + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax; Secure';
+    } catch (e) {}
+  }
   var CHAT_IMG_BUCKET = 'chat-images';
   var CFG_ID          = '_danran_cfg';
   var CAM_BTN_ID      = '_danran_cam_btn';
@@ -316,6 +341,7 @@
 
       if (clearSession) {
         localStorage.removeItem(STORAGE_KEY);
+        _cookieClear();
         // ── ログアウト後の blank screen 防止 ─────────────────────────
         //    clearSession=true 後は _sessionRestoreSent=true のまま stSetValue が
         //    送られず Python の _lp_result が None のままになることがある。
@@ -331,10 +357,11 @@
       }
       if (saveSession)  {
         localStorage.setItem(STORAGE_KEY, saveSession);
+        _cookieSave(saveSession);   // cookie にも二重保存（localStorage eviction 対策）
         // ログイン後は _sessionRestoreSent をリセットし、次回ログアウト時も
         // clearSession → restore_session を送れる状態にしておく
         _sessionRestoreSent = false;
-        dlog('[danran] session saved to localStorage:', saveSession.slice(0, 8) + '…');
+        dlog('[danran] session saved to localStorage+cookie:', saveSession.slice(0, 8) + '…');
         return;
       }
 
@@ -357,6 +384,15 @@
       //    Render 2 以降で正しい画面（ログイン or チャット）を表示できる。
       if (!_sessionRestoreSent && _gotRender) {
         var lsSid = localStorage.getItem(STORAGE_KEY);
+        // localStorage が消えていたら cookie から復元（iOS Storage Eviction 対策）
+        if (!lsSid) {
+          var ckSid = _cookieRead();
+          if (ckSid) {
+            lsSid = ckSid;
+            try { localStorage.setItem(STORAGE_KEY, ckSid); } catch (e) {}  // localStorage も再書き込み
+            dlog('[danran] session restored from cookie:', ckSid.slice(0, 8) + '…');
+          }
+        }
         dlog('[danran] restore check: localStorage=' + (lsSid ? lsSid.slice(0, 8) + '…' : 'null') + ', ME="' + ME + '", _gotRender=' + _gotRender);
         _sessionRestoreSent = true;
         // 直前にいた部屋（120秒以内）を一緒に渡す → 復元時にその部屋へ戻す。
@@ -420,6 +456,7 @@
       _splashLastKick = now;
       var lsSid = '';
       try { lsSid = localStorage.getItem(STORAGE_KEY) || ''; } catch (e) {}
+      if (!lsSid) { lsSid = _cookieRead(); }  // cookie fallback
       var er = '';
       try {
         var raw = sessionStorage.getItem(ROOM_KEY);

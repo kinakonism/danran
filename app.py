@@ -2739,11 +2739,17 @@ def show_settings(current_user: dict) -> None:
             '</div>'
         )
 
-        # ── 通知設定（専用画面へ）──
+        # ── 通知設定・リマインダー（専用画面へ）──
         st.divider()
-        if st.button("🔔 通知設定", use_container_width=True, key="settings_to_notif"):
-            st.session_state["view"] = "notifications"
-            st.rerun()
+        _pb1, _pb2 = st.columns(2)
+        with _pb1:
+            if st.button("🔔 通知設定", use_container_width=True, key="settings_to_notif"):
+                st.session_state["view"] = "notifications"
+                st.rerun()
+        with _pb2:
+            if st.button("⏰ リマインダー", use_container_width=True, key="settings_to_reminders"):
+                st.session_state["view"] = "reminders"
+                st.rerun()
 
         # ── 家族を招待 ──
         st.divider()
@@ -4206,7 +4212,80 @@ def show_install_page() -> None:
 
 
 # ─────────────────────────────────────
-# 画面⑧ 通知設定
+# 画面⑧ リマインダー一覧
+# ─────────────────────────────────────
+def show_reminders(current_user: dict) -> None:
+    """AIリマインダー一覧 — pending なリマインダーを確認・キャンセルできる。"""
+    import datetime as _dt
+
+    def _fmt_remind_dt(ts: str) -> str:
+        try:
+            dt = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            jst = dt.astimezone(_dt.timezone(_dt.timedelta(hours=9)))
+            return f"{jst.month}月{jst.day}日 {jst.hour}:{jst.minute:02d}"
+        except Exception:
+            return ts
+
+    _, col, _ = st.columns([1, 3, 1])
+    with col:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("## ⏰ リマインダー")
+        st.divider()
+
+        uid = current_user.get("id", "")
+        rows = (
+            supabase.table("ai_reminders")
+            .select("id, remind_at, body, repeat_every")
+            .eq("user_id", uid)
+            .eq("status", "pending")
+            .order("remind_at")
+            .execute()
+            .data or []
+        )
+
+        if not rows:
+            st.html(
+                '<div style="text-align:center;color:rgba(240,232,224,0.45);'
+                'padding:48px 0;font-size:0.9rem;line-height:2.2">'
+                '⏰ 設定中のリマインダーはありません<br>'
+                '<span style="font-size:0.8rem">🤖 AIサポートで「〇時にリマインドして」と頼んでみてください</span>'
+                '</div>'
+            )
+        else:
+            _REPEAT = {"daily": "毎日", "weekly": "毎週", "monthly": "毎月"}
+            for r in rows:
+                rid      = r["id"]
+                dt_label = _fmt_remind_dt(r["remind_at"])
+                body     = (r.get("body") or "").strip()
+                rep      = (r.get("repeat_every") or "").strip()
+                rep_badge = (
+                    f'<span style="background:rgba(240,168,104,0.2);color:#f0a868;'
+                    f'border-radius:4px;padding:1px 7px;font-size:0.75rem;margin-left:8px">'
+                    f'🔁 {_REPEAT[rep]}</span>'
+                ) if rep in _REPEAT else ""
+
+                c1, c2 = st.columns([5, 1])
+                with c1:
+                    st.html(
+                        f'<div style="background:#241f1c;border-left:3px solid #f0a868;'
+                        f'border-radius:8px;padding:12px 14px;margin-bottom:4px">'
+                        f'<div style="color:#f0a868;font-size:0.82rem;font-weight:600">'
+                        f'{dt_label}{rep_badge}</div>'
+                        f'<div style="color:#f0e8e0;margin-top:5px;font-size:0.9rem;'
+                        f'white-space:pre-wrap">{_html.escape(body)}</div>'
+                        f'</div>'
+                    )
+                with c2:
+                    if st.button("🗑", key=f"rem_del_{rid}", help="キャンセル"):
+                        supabase.table("ai_reminders").update({"status": "cancelled"}).eq("id", rid).execute()
+                        st.toast("キャンセルしました", icon="⏰")
+                        st.rerun()
+
+        st.divider()
+        st.caption("リマインダーは🤖 AIサポートで「〇時にリマインドして」と頼むと設定できます。")
+
+
+# 画面⑨ 通知設定
 # ─────────────────────────────────────
 def show_notifications(current_user: dict) -> None:
     """通知設定画面 — JS が Notification.permission を読んで UI を更新する。"""
@@ -4316,7 +4395,7 @@ _clear_flag  = st.session_state.pop("_clear_session", False)
 # JS に「ブラウザ側も unsubscribe して再登録せよ」を伝えるフラグ（1回のみ）
 _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
-_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "album", "search", "settings", "calendar", "event_new", "event_detail", "event_day")
+_is_profile  = st.session_state.get("view") in ("profile", "room_edit", "notifications", "reminders", "album", "search", "settings", "calendar", "event_new", "event_detail", "event_day")
 _active_room_id = ""
 if "current_user" in st.session_state and not _is_profile:
     # active_room が未セット（セッション復元直後）のときは参加ルームの先頭をフォールバック
@@ -4625,6 +4704,10 @@ if isinstance(_lp_result, dict):
             if cur == "event_day":
                 st.session_state["view"] = "calendar"
                 st.rerun()
+            if cur == "reminders":
+                # リマインダー → プロフィールへ戻る
+                st.session_state["view"] = "profile"
+                st.rerun()
             if cur == "profile":
                 _reset_profile_widgets()
             elif cur == "room_edit":
@@ -4916,6 +4999,8 @@ else:
             show_event_day(st.session_state["current_user"])
         case "room_create" if "current_user" in st.session_state:
             show_room_create()
+        case "reminders" if "current_user" in st.session_state:
+            show_reminders(st.session_state["current_user"])
         case "notifications" if "current_user" in st.session_state:
             show_notifications(st.session_state["current_user"])
         case "enter_password":

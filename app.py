@@ -1500,7 +1500,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v182",   # セッションをcookieにも二重保存（iOS Storage Eviction 対策）
+    "danran_lp_v183",   # ?magic= 転送の保険（forwardMagicIfAny・Worker 経由対策）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -4987,6 +4987,19 @@ if isinstance(_lp_result, dict):
                     st.session_state["_invite_ok"] = True
                 if _need:
                     st.rerun()
+        elif _nav == "set_magic":
+            # マジックリンク ?magic=TOKEN を JS が実URLから読み取って通知（Worker 経由で
+            # st.query_params に乗らないケースの保険）。未ログイン時のみ自動ログイン。
+            if "current_user" not in st.session_state:
+                _magic_tok = _lp_result.get("magic_token", "")
+                if _magic_tok:
+                    try:
+                        _magic_user = consume_magic_token(_magic_tok)
+                        if _magic_user:
+                            do_login(_magic_user)
+                            st.rerun()
+                    except Exception:
+                        pass  # 無効/期限切れ → そのまま通常のログイン画面
         elif _nav == "restore_session":
             # JS コンポーネントが localStorage からセッションIDを読み取り postMessage で通知
             # sandbox の allow-top-navigation がないため location.href が使えないための代替手段

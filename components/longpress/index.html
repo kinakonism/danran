@@ -204,6 +204,35 @@
   }
 
   /* ════════════════════════════════════════
+   *  マジックリンク ?magic=TOKEN の転送（invite と同じ Worker 経由対策の保険）
+   *  ★ Python の st.query_params に magic が乗らないケースでも、JS が実URLから
+   *    読み取って set_magic で渡す → Python が consume_magic_token → 自動ログイン。
+   *    読み取り後は replaceState で URL からトークンを消す（履歴に残さない）。
+   * ════════════════════════════════════════ */
+  function forwardMagicIfAny() {
+    try {
+      if (ME) return;                       // ログイン済みなら不要
+      var pd = window.parent.document;
+      if (pd._danranMagicSent) return;      // 既に送信済み
+      var outerWin = null, search = '';
+      try { if (window.top.location.search !== undefined) outerWin = window.top; } catch (e) {}
+      if (!outerWin) { try { if (window.parent.parent.location.search !== undefined) outerWin = window.parent.parent; } catch (e) {} }
+      if (!outerWin) { try { outerWin = window.parent; } catch (e) {} }
+      try { search = outerWin.location.search || ''; } catch (e) {}
+      var m = /[?&]magic=([^&]+)/.exec(search);
+      if (!m) return;
+      pd._danranMagicSent = true;
+      sendNav({ action: 'set_magic', magic_token: decodeURIComponent(m[1]), ts: Date.now() });
+      // トークンを URL から即消す（共有・履歴への残留防止）
+      try {
+        var u = new URL(outerWin.location.href);
+        u.searchParams.delete('magic');
+        outerWin.history.replaceState(null, '', u.toString());
+      } catch (e) {}
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
    *  DOM config 要素から設定を読み込む
    *  Python が <div id="_danran_cfg" data-sb-url="..." ...> を
    *  st.html() で書き込む → window.parent.document から取得
@@ -2334,6 +2363,7 @@
     hideManageApp();
     ensureIosMeta();  // 最上位 head に apple-touch-icon / app タイトルを注入（ホーム画面追加用）
     forwardInviteIfAny();  // ?invite=CODE を実URLから読み取り Python へ（Worker 経由対策）
+    forwardMagicIfAny();   // ?magic=TOKEN も同様（マジックリンク自動ログインの保険）
     fixStBottom();   // stBottom の display:none を強制解除
     alignCamBtn();   // 📷 ボタンを stChatInput の垂直中央に追従させる
     attachHdrButtons();     // Python レンダリングヘッダーのクリックハンドラを付与

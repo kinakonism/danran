@@ -480,6 +480,64 @@ def delete_session(sid: str) -> None:
     except Exception:
         pass
 
+def create_magic_token(user_id: str) -> str:
+    """24時間有効・使い捨てのマジックトークンを生成して返す（URL に乗せて自動ログイン用）。"""
+    import datetime as _dt
+    exp = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=24)).isoformat()
+    row = supabase.table("magic_tokens").insert({"user_id": user_id, "expires_at": exp}).execute().data
+    return str(row[0]["token"]) if row else ""
+
+def consume_magic_token(token_str: str) -> dict | None:
+    """トークンを消費してユーザーを返す。無効/期限切れ/使用済みは None。"""
+    import datetime as _dt
+    rows = supabase.table("magic_tokens") \
+        .select("id, user_id, expires_at, used") \
+        .eq("token", token_str).limit(1).execute().data or []
+    if not rows:
+        return None
+    r = rows[0]
+    if r["used"]:
+        return None
+    exp = _dt.datetime.fromisoformat(r["expires_at"].replace("Z", "+00:00"))
+    if _dt.datetime.now(_dt.timezone.utc) > exp:
+        return None
+    supabase.table("magic_tokens").update({"used": True}).eq("id", r["id"]).execute()
+    urows = supabase.table("users").select("id, name, avatar, phone") \
+        .eq("id", r["user_id"]).limit(1).execute().data or []
+    return urows[0] if urows else None
+
+def _push_magic_link(user_id: str, user_name: str, priv: str, subj: str) -> int:
+    """指定ユーザーにマジックリンク入りプッシュ通知を送る。送信成功数を返す。"""
+    from pywebpush import webpush, WebPushException
+    import json as _j
+    token = create_magic_token(user_id)
+    if not token:
+        return 0
+    url = f"{_app_url()}?magic={token}"
+    payload = _j.dumps({
+        "title": "danran 🏠 タップでログイン",
+        "body":  f"タップして自動ログインできます（24時間有効）",
+        "url":   url,
+        "unread_count": 0,
+    }, ensure_ascii=False)
+    rows = supabase.table("push_subscriptions") \
+        .select("endpoint, p256dh, auth").eq("user_id", user_id).execute().data or []
+    ok = 0
+    for row in rows:
+        try:
+            webpush(
+                subscription_info={"endpoint": row["endpoint"],
+                    "keys": {"p256dh": row["p256dh"], "auth": row["auth"]}},
+                data=payload, vapid_private_key=priv, vapid_claims={"sub": subj},
+            )
+            ok += 1
+        except WebPushException as ex:
+            if ex.response and ex.response.status_code == 410:
+                supabase.table("push_subscriptions").delete().eq("endpoint", row["endpoint"]).execute()
+        except Exception:
+            pass
+    return ok
+
 def do_login(user: dict) -> None:
     sid = create_session(user["id"])
     # ★ セッションIDは URL に載せない（載せると URL 共有で他人がログイン状態になり
@@ -2751,6 +2809,45 @@ def show_settings(current_user: dict) -> None:
                 st.session_state["view"] = "reminders"
                 st.rerun()
 
+        # ── 家族を再ログイン（マジックリンク）──
+        st.divider()
+        st.markdown("### 📱 家族を再ログイン")
+        st.caption("タップするだけで自動ログインできる通知を送ります（24時間有効・使い捨て）")
+        _vcfg = _vapid_cfg()
+        _ml_priv = _vcfg.get("vapid_private_key", "")
+        _ml_subj = _vcfg.get("vapid_subject", "")
+        _ml_me   = current_user.get("id", "")
+        _ml_users = [u for u in fetch_all_users()
+                     if u["id"] != _ml_me and not u["id"].endswith("a1")]  # 自分・ボット除外
+        if not _ml_users:
+            st.caption("他の家族がいません")
+        elif not (_ml_priv and _ml_subj):
+            st.caption("通知設定が未完了です")
+        else:
+            if st.button("📲 全員に送る", use_container_width=True, key="magic_all"):
+                _ml_sent = 0
+                for _mu in _ml_users:
+                    try:
+                        if _push_magic_link(_mu["id"], _mu["name"], _ml_priv, _ml_subj) > 0:
+                            _ml_sent += 1
+                    except Exception:
+                        pass
+                st.toast(f"✅ {_ml_sent}人に送りました", icon="📱")
+            for _mu in _ml_users:
+                _muc1, _muc2 = st.columns([3, 1])
+                with _muc1:
+                    _mav = _mu.get("avatar", "")
+                    _mic = (f"<img src='{_mav}' width=22 style='border-radius:50%;"
+                            f"vertical-align:middle;margin-right:6px'>") if _mav.startswith("http") else _mav + " "
+                    st.markdown(f"{_mic}**{_mu['name']}**", unsafe_allow_html=True)
+                with _muc2:
+                    if st.button("送る", key=f"magic_{_mu['id']}", use_container_width=True):
+                        try:
+                            _n = _push_magic_link(_mu["id"], _mu["name"], _ml_priv, _ml_subj)
+                            st.toast(f"✅ {_mu['name']} に送りました" if _n else "⚠️ 通知の送信に失敗しました", icon="📱")
+                        except Exception:
+                            st.error("送信に失敗しました")
+
         # ── 家族を招待 ──
         st.divider()
         st.markdown("### 📨 家族を招待")
@@ -4373,7 +4470,24 @@ if SESSION_PARAM in st.query_params:
     except Exception:
         pass
 
-# ② 招待リンク: ?invite=<招待コード> で新規登録画面へ誘導（未ログイン時のみ）。
+# ② マジックリンク: ?magic=TOKEN で自動ログイン（家族の再認証用・24時間有効・使い捨て）。
+#   トークンは push 通知タップ時にのみ届く。未ログイン時のみ処理し、URL からは即消す。
+if "magic" in st.query_params and "current_user" not in st.session_state:
+    _magic_tok = st.query_params.get("magic", "")
+    try:
+        del st.query_params["magic"]
+    except Exception:
+        pass
+    if _magic_tok:
+        try:
+            _magic_user = consume_magic_token(_magic_tok)
+            if _magic_user:
+                do_login(_magic_user)
+                st.rerun()
+        except Exception:
+            pass  # 無効/期限切れ → 通常のログイン画面へ
+
+# ③ 招待リンク: ?invite=<招待コード> で新規登録画面へ誘導（未ログイン時のみ）。
 #   コードが一致すれば登録画面で招待コード入力をスキップする（家族が手間なくサインアップ）。
 #   ★ 招待リンクはサインアップ画面に着地するだけ。ログインも、チャット表示もしない。
 if "current_user" not in st.session_state and "invite" in st.query_params:

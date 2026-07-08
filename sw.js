@@ -149,8 +149,18 @@ self.addEventListener('notificationclick', function (event) {
     var nav = self.navigator || navigator;
     if ('clearAppBadge' in nav) nav.clearAppBadge().catch(function () {});
   } catch (e) {}
+  var targetUrl = (event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+      // マジックリンク等、パラメータ付き URL は既存ウィンドウを移動させる
+      if (targetUrl !== '/') {
+        for (var i = 0; i < list.length; i++) {
+          var c = list[i];
+          if (c.navigate) return c.navigate(targetUrl).then(function (cl) { return cl && cl.focus ? cl.focus() : null; });
+        }
+        if (clients.openWindow) return clients.openWindow(targetUrl);
+      }
+      // 通常通知は既存ウィンドウをフォーカスするだけ
       for (var i = 0; i < list.length; i++) {
         var c = list[i];
         if ('focus' in c) return c.focus();

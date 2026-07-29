@@ -2,16 +2,20 @@
 # danran: mini 健康監視（LaunchAgent com.danran.health・1時間ごと）
 # 2026-06-07 の障害（82日稼働でカーネルのTCP残骸掃除が停止→ポート枯渇→真っ暗）の再発防止。
 # 兆候を検知したら まさと に Web Push で「再起動どき」を知らせる。アラートは12時間に1回まで。
-PORT="${DANRAN_PORT:-8601}"
+PORT="${DANRAN_PORT:-8701}"
 
-TW=$(netstat -an | grep -c TIME_WAIT)
+# ★ 残骸カウントは「現行アプリポート」に限定する（2026-07-29）。
+#   全体カウントだと、ポート移転で退避した後も旧ポートの死骸（再起動まで消えない）を
+#   数え続けて警報が鳴り止まない。実害を生むのは現行ポートの4タプル汚染だけ。
+#   閾値 2500 は 2026-06 に実害（SYN握りつぶし）が出た ~2800 の手前。
+TW=$(netstat -an | grep "\.${PORT} " | grep -c TIME_WAIT)
 FAIL=0
 for i in 1 2 3 4 5; do
   curl -s -o /dev/null -m 3 "http://127.0.0.1:${PORT}/_stcore/health" || FAIL=$((FAIL+1))
 done
 
 MSG=""
-[ "$TW" -gt 5000 ] && MSG="TCP残骸が ${TW} 個に蓄積（5,000超）。"
+[ "$TW" -gt 2500 ] && MSG="ポート${PORT}のTCP残骸が ${TW} 個に蓄積（2,500超）。次の空きポートへ移転か再起動を。"
 [ "$FAIL" -ge 2 ] && MSG="${MSG}ローカル接続が ${FAIL}/5 失敗。"
 [ -z "$MSG" ] && exit 0
 

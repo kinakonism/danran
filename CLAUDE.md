@@ -36,6 +36,12 @@ Mac mini で自前ホスト**する構成へ移行した。
 ```
 - **Worker**（`cloudflare/worker.js` v6）= 固定の公開入口。`/sw.js` `/manifest.json` `/icons` は
   Worker が直接配信、それ以外と WebSocket をトンネルへプロキシ。`SELF_HOSTED=true`。
+  **`/static/*`（1年）と `/component/*`（10分）は Cache API でエッジキャッシュ**（2026-08-03・
+  `cachedProxy`。従来は毎回トンネル往復でコールドスタートが遅かった。JS 1.27s→0.06s。
+  ヒットは `x-danran-edge-cache: hit` ヘッダで確認）。
+  **★ sw.js は2箇所ある罠**: リポジトリ直下の `sw.js` は run.py 配信（ローカル用）で、本番の
+  家族の端末に入るのは **worker.js 内の `SW_JS` 埋め込み版**。sw.js を変えたら SW_JS も更新して
+  `npx wrangler deploy` しないと反映されない（2026-08-03 にマジックリンクが動かない原因として発覚）。
 - **上流ホストは Supabase から動的取得**（`app_config.tunnel_host`、60s キャッシュ）。クイック
   トンネルの URL が再起動で変わっても Worker が自動追従する。デプロイは `cd cloudflare && npx wrangler deploy`。
 - **Mac mini の LaunchAgent**（GUIドメイン・KeepAlive/RunAtLoad、`~/Library/LaunchAgents/`）:

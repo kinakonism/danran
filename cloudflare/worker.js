@@ -356,6 +356,17 @@ export default {
       }
     }
 
+    // ── 静的アセットのエッジキャッシュ（2026-08-03）─────────────────────
+    //   従来は cf-cache-status: DYNAMIC＝毎回トンネル→mini まで往復しており、
+    //   コールドスタート（特に iOS がブラウザキャッシュを蒸発させた後）が遅かった。
+    //   /static/*    : ハッシュ付きファイル名＋ immutable → 長期エッジキャッシュが安全
+    //   /component/* : パスに版数（danran_lp_vNN）が入り JS 変更時は必ず版数が上がる
+    //                  運用なので短期(10分)キャッシュ。版数上げ忘れでも最大10分で回復。
+    if (request.method === 'GET' &&
+        (url.pathname.startsWith('/static/') || url.pathname.startsWith('/component/'))) {
+      return cachedProxy(request, url, env, ctx);
+    }
+
     // ── WebSocket プロキシ ───────────────────────────────────────────
     if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
       console.log('[WS] incoming websocket request:', url.pathname);
@@ -737,6 +748,40 @@ async function proxyHttp(request, url, env) {
     statusText: res.statusText,
     headers:    newHeaders,
   });
+}
+
+// ── 静的アセットのエッジキャッシュ付きプロキシ（2026-08-03）───────────────
+//   ヒット判定は x-danran-edge-cache: hit ヘッダで確認できる。
+//   200 のみ・Set-Cookie 付きは保存しない（安全側）。失敗時は素通しにフォールバック。
+async function cachedProxy(request, url, env, ctx) {
+  const cache = caches.default;
+  try {
+    const hit = await cache.match(request);
+    if (hit) return hit;
+  } catch (e) {}
+
+  const res = await proxyHttp(request, url, env);
+  if (!res || res.status !== 200 || res.headers.has('set-cookie')) return res;
+
+  const isStatic = url.pathname.startsWith('/static/');
+  const headers = new Headers(res.headers);
+  // /component/ は上流が no-cache のため差し替え（版数入りパスなので短期キャッシュは安全）
+  headers.set('Cache-Control', isStatic
+    ? 'public, immutable, max-age=31536000'
+    : 'public, max-age=600');
+  headers.set('x-danran-edge-cache', 'hit');   // 保存コピーに刻む＝以後の match 応答で見える
+
+  try {
+    const [body1, body2] = res.body ? res.body.tee() : [null, null];
+    const clientHeaders = new Headers(headers);
+    clientHeaders.delete('x-danran-edge-cache');   // 初回（miss）応答には付けない
+    ctx.waitUntil(cache.put(request, new Response(body2, {
+      status: 200, statusText: res.statusText, headers,
+    })));
+    return new Response(body1, { status: 200, statusText: res.statusText, headers: clientHeaders });
+  } catch (e) {
+    return res;   // tee/put 失敗 → キャッシュせず素通し
+  }
 }
 
 // ── WebSocket プロキシ（fetch() WebSocket API 使用）────────────────────

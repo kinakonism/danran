@@ -75,8 +75,13 @@ if(r.ok){location.reload();}else{setTimeout(p,4000);}}).catch(function(){setTime
 </body></html>`;
 
 // ── Service Worker スクリプト ─────────────────────────────────────────
+// ★ 注意: sw.js はリポジトリ直下（run.py 配信・ローカル/直アクセス用）と、この SW_JS
+//   （Worker 直接配信＝本番で家族の端末に入る方）の2箇所にある。リポジトリの sw.js を
+//   変更しても本番には反映されない — 必ずここも更新して `npx wrangler deploy` すること。
+//   （2026-08-03 発覚: 7/8 のマジックリンク対応がここに未反映で、通知タップが
+//     ?magic= URL へ移動せず自動ログインが一度も機能していなかった）
 const SW_JS = `
-var SW_VERSION = '3.1.0';
+var SW_VERSION = '3.2.0';
 self.addEventListener('install', function(e) { self.skipWaiting(); });
 self.addEventListener('activate', function(e) { e.waitUntil(clients.claim()); });
 self.addEventListener('message', function(event) {
@@ -117,8 +122,26 @@ self.addEventListener('push', function(event) {
 });
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
+  try {
+    var nav = self.navigator || navigator;
+    if ('clearAppBadge' in nav) nav.clearAppBadge().catch(function(){});
+  } catch(e) {}
+  var targetUrl = (event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(list) {
+      // マジックリンク等、パラメータ付き URL は既存ウィンドウをその URL へ移動させる
+      // （focus だけだと ?magic= が Python に届かず自動ログインできない）
+      if (targetUrl !== '/') {
+        for (var i = 0; i < list.length; i++) {
+          var c = list[i];
+          if (c.navigate) {
+            return c.navigate(targetUrl)
+              .then(function(cl) { return cl && cl.focus ? cl.focus() : null; })
+              .catch(function() { return clients.openWindow ? clients.openWindow(targetUrl) : null; });
+          }
+        }
+        if (clients.openWindow) return clients.openWindow(targetUrl);
+      }
       for (var i = 0; i < list.length; i++) {
         var c = list[i]; if ('focus' in c) return c.focus();
       }

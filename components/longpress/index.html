@@ -85,6 +85,7 @@
 
   var LP_MS           = 500;
   var STORAGE_KEY     = 'danran_session';
+  var LOGOUT_KEY      = 'danran_logged_out';   // 明示ログアウト端末の印（プッシュ購読自動ログインを抑止・再ログインで解除）
   var COOKIE_KEY      = 'danran_sid';         // セッションID cookie（localStorage iOS eviction 対策）
   var ROOM_KEY        = 'danran_last_room';   // 直前にいた部屋（sessionStorage＝再接続で復帰/完全終了で消える）
 
@@ -233,6 +234,38 @@
   }
 
   /* ════════════════════════════════════════
+   *  プッシュ購読による自動ログイン（2026-08-03）
+   *  ★ セッション行が失効した端末でも Web Push の購読（endpoint）は生き残る。
+   *    endpoint はこの端末しか知らない実質シークレット URL で、DB の
+   *    push_subscriptions が user_id と紐付けている（endpoint 専属化済み）ので、
+   *    ログイン画面が出たら endpoint を Python に送り「この端末で最後に
+   *    ログインした人」として自動ログインさせる。家族は二度とログイン画面を見ない。
+   *  ★ 明示ログアウトした端末は LOGOUT_KEY で抑止（手動ログインで解除）。
+   *  ★ VIEW==='select_user' のときだけ動く＝通常のセッション復元
+   *    （restore_session）が失敗・空振りした後にしか発火しない。
+   * ════════════════════════════════════════ */
+  function tryPushAutoLogin() {
+    try {
+      if (ME) return;                            // ログイン済み
+      if (VIEW !== 'select_user') return;        // ログイン画面のときのみ（invite 登録画面等は対象外）
+      var pd = window.parent.document;
+      if (pd._danranPushLoginSent) return;       // 1ページロードにつき1回
+      try { if (localStorage.getItem(LOGOUT_KEY)) return; } catch (e) {}
+      var nsw = window.parent.navigator.serviceWorker;
+      if (!nsw || !nsw.getRegistration) return;
+      pd._danranPushLoginSent = true;            // 先に立てる（getRegistration 中の多重発火防止）
+      nsw.getRegistration('/').then(function (reg) {
+        if (!reg || !reg.pushManager) return;
+        return reg.pushManager.getSubscription().then(function (sub) {
+          if (!sub || !sub.endpoint) return;
+          dlog('[danran] push auto-login: sending endpoint');
+          sendNav({ action: 'restore_by_push', endpoint: sub.endpoint, ts: Date.now() });
+        });
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
+  /* ════════════════════════════════════════
    *  DOM config 要素から設定を読み込む
    *  Python が <div id="_danran_cfg" data-sb-url="..." ...> を
    *  st.html() で書き込む → window.parent.document から取得
@@ -249,6 +282,10 @@
       var newRoom     = cfg.getAttribute('data-room')       || '';
       var saveSess    = cfg.getAttribute('data-sess')       || '';
       var clearSess   = cfg.getAttribute('data-clear')      === 'true';
+      // 明示ログアウト → この端末でのプッシュ購読自動ログインを抑止（次の手動ログインで解除）
+      if (cfg.getAttribute('data-logout') === 'true') {
+        try { localStorage.setItem(LOGOUT_KEY, '1'); } catch (e) {}
+      }
       var newShowRooms= cfg.getAttribute('data-show-rooms') === 'true';
       var newView     = cfg.getAttribute('data-view')       || '';
       var newVapidPub = cfg.getAttribute('data-vapid-pub')  || '';
@@ -387,6 +424,7 @@
       if (saveSession)  {
         localStorage.setItem(STORAGE_KEY, saveSession);
         _cookieSave(saveSession);   // cookie にも二重保存（localStorage eviction 対策）
+        try { localStorage.removeItem(LOGOUT_KEY); } catch (e) {}  // ログイン成功＝自動ログイン抑止を解除
         // ログイン後は _sessionRestoreSent をリセットし、次回ログアウト時も
         // clearSession → restore_session を送れる状態にしておく
         _sessionRestoreSent = false;
@@ -2364,6 +2402,7 @@
     ensureIosMeta();  // 最上位 head に apple-touch-icon / app タイトルを注入（ホーム画面追加用）
     forwardInviteIfAny();  // ?invite=CODE を実URLから読み取り Python へ（Worker 経由対策）
     forwardMagicIfAny();   // ?magic=TOKEN も同様（マジックリンク自動ログインの保険）
+    tryPushAutoLogin();    // ログイン画面ならプッシュ購読 endpoint で自動ログインを試す
     fixStBottom();   // stBottom の display:none を強制解除
     alignCamBtn();   // 📷 ボタンを stChatInput の垂直中央に追従させる
     attachHdrButtons();     // Python レンダリングヘッダーのクリックハンドラを付与

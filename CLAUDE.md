@@ -132,6 +132,7 @@ chat（チャット）⇄ ルーム選択（_show_rooms=True で同一 view 内�
 - ブラウザ復元: JS が localStorage → stSetValue(restore_session) → Python が `get_session_user()` で復元。**同一端末のみ**。
 - **★ セキュリティ: セッションIDを URL（`?s=`）に絶対に載せない。** 旧実装は `do_login` が `?s=SESSION_ID` を付け、読込時にそれで自動ログインしていたため、**URL を共有すると受け取った人が共有者としてログイン状態になりチャットが丸見え**になる重大な穴だった。URL からのセッション復元は完全廃止（残存 `?s=` は無視して消す）。
 - **無効/漏洩セッションの自己修復**: `restore_session` で `get_session_user()` が None のとき `_clear_session=True` にして JS に localStorage を消させる（古い/漏洩SIDを送り続けない）。
+- **プッシュ購読による自動ログイン（2026-08-03〜）**: セッション復元が空振りしてログイン画面（`view=select_user`）になったとき、JS `tryPushAutoLogin` が端末の Web Push 購読 endpoint を `restore_by_push` で送り、Python が `push_subscriptions` で user_id に解決して `do_login`。endpoint はその端末しか知らない実質シークレット＝「この端末で最後にログインした人」として復帰させる。**明示ログアウト時は `do_logout` が `_logout_explicit` → cfg `data-logout` → JS が localStorage `danran_logged_out` を立てて抑止**（でないとログアウト直後に自動再ログインの無限ループ）。手動ログイン成功（data-sess 保存）で解除。通知許可していない端末には効かない（購読がないため通常のログイン画面）。
 - ログアウト: `sessions` レコード削除 + localStorage クリア。**プロフィール画面下部のボタンから「本当にログアウトしますか？→ いいえ/はい」の2段階確認**（`_logout_confirm`）。誤操作防止のためルーム選択画面には置かない。
 - **セッション TTL（スライド式・2026-08-03〜）**: `sessions.last_seen_at` を復元成功時に `get_session_user` が更新し、pg_cron `danran-session-cleanup`（毎朝4時）が「**最終利用から**30日」の `sessions` を削除。使い続ける限りログアウトされず、放置端末だけ30日で消える。（旧: `created_at` 固定30日 → 毎日使っていてもログイン日から数えて30日で強制ログアウト。2026-08-02 にまさとがこれで切られたのが改修の契機）。漏洩時の緊急対応は `DELETE FROM sessions`（全失効＝全員1回再ログイン）。
 - **Render 1 フラッシュ防止**: `_lp_result is None` かつ未ログイン時は空白画面（🏠スプラッシュ）を表示。JS が必ず restore_session を送るので Render 2 以降で正しい画面に遷移。`view=="register"`（招待リンク）時はスプラッシュをスキップして即フォーム。
@@ -185,6 +186,7 @@ stSetValue({ action: 'go_room_edit',   room_id: '...', ts: Date.now() });   // �
 stSetValue({ action: 'go_room_create', ts: Date.now() });
 stSetValue({ action: 'refresh_chat',   ts: Date.now() });   // 削除後など: _chat_html 破棄→DBから再描画
 stSetValue({ action: 'restore_session', session_id: '...', ts: Date.now() });
+stSetValue({ action: 'restore_by_push', endpoint: '...', ts: Date.now() });   // ログイン画面でプッシュ購読endpointから自動ログイン（tryPushAutoLogin・2026-08-03）
 stSetValue({ action: 'save_push_subscription', subscription: '...', user_id: '...', ts: Date.now() });
 stSetValue({ action: 'set_reply', reply_id: '...', reply_name: '...', reply_text: '...', ts: Date.now() });  // 長押し↩︎ / 左スワイプ→引用返信ターゲットをセット（入力欄上に引用バー）
 stSetValue({ action: 'clear_reply', ts: Date.now() });   // 引用バー(data-reply-cancel)の ✕→返信解除
@@ -226,6 +228,7 @@ var room = cfg.getAttribute('data-room');
 | `data-room` | アクティブルーム名 |
 | `data-sess` | 保存すべきセッションID |
 | `data-clear` | `"true"` でlocalStorageを消す |
+| `data-logout` | `"true"` で明示ログアウト＝JS が `danran_logged_out` を立てプッシュ購読自動ログインを抑止（手動ログインで解除） |
 | `data-show-rooms` | `"true"` でルーム選択中（`st.session_state["_show_rooms"]` 由来） |
 | `data-view` | 現在の view 名 |
 | `data-vapid-pub` | VAPID 公開鍵 |
@@ -280,7 +283,7 @@ JS コンポーネントをブラウザにキャッシュさせないため、�
 
 ```python
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v74",   # ← v74, v75... と上げる（現在 v74）
+    "danran_lp_v184",  # ← v184, v185... と上げる（現在 v184）
     path=_LP_COMPONENT_DIR,
 )
 ```
@@ -901,7 +904,7 @@ uv run python run.py
 # → MCP ツール: mcp__supabase__get_logs
 
 # コンポーネントキャッシュが怪しいとき
-# → "danran_lp_v74" の数字をインクリメント（現在 v74）
+# → "danran_lp_v184" の数字をインクリメント（現在 v184）
 
 # iOS PWA など画面にログを出せない環境のデバッグ
 # → JS 側: 色付きの fixed div を一定時間表示する _dbg(color,msg) 方式、

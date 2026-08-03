@@ -568,6 +568,11 @@ def do_logout() -> None:
     st.session_state.pop("_show_rooms", None)
     st.session_state["view"]            = "select_user"
     st.session_state["_clear_session"]  = True   # localStorage もクリア
+    # ★ 明示ログアウトの印（プッシュ購読自動ログインの抑止・2026-08-03）:
+    #   JS がこのフラグで localStorage に danran_logged_out を立て、restore_by_push を
+    #   送らなくなる（でないとログアウトした瞬間に自動再ログインして無限ループ）。
+    #   無効セッションの自己修復（_clear_session のみ）とは区別する。
+    st.session_state["_logout_explicit"] = True
     st.query_params.clear()
 
 # ─────────────────────────────────────
@@ -1511,7 +1516,7 @@ _LP_COMPONENT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "components", "longpress"
 )
 _lp_detector = st.components.v1.declare_component(
-    "danran_lp_v183",   # ?magic= 転送の保険（forwardMagicIfAny・Worker 経由対策）
+    "danran_lp_v184",   # プッシュ購読による自動ログイン（tryPushAutoLogin/restore_by_push）
     path=_LP_COMPONENT_DIR,
 )
 
@@ -4517,6 +4522,8 @@ if "current_user" not in st.session_state and "invite" in st.query_params:
 # Python が HTML data 属性として埋め込み JS が window.parent.document から参照。
 _cu          = st.session_state.get("current_user", {})
 _clear_flag  = st.session_state.pop("_clear_session", False)
+# 明示ログアウト（プッシュ購読自動ログインを JS 側で抑止させる・1回のみ）
+_logout_flag = st.session_state.pop("_logout_explicit", False)
 # JS に「ブラウザ側も unsubscribe して再登録せよ」を伝えるフラグ（1回のみ）
 _push_resub  = st.session_state.pop("_push_force_resubscribe", False)
 # プロフィール・ルーム編集画面中は JS カメラボタンを非表示にするため active_room を空にする
@@ -4722,6 +4729,7 @@ st.html(
     f'data-room="{_html.escape(_active_room)}" '
     f'data-sess="{_html.escape(st.session_state.get("session_id",""))}" '
     f'data-clear="{str(_clear_flag).lower()}" '
+    f'data-logout="{str(_logout_flag).lower()}" '
     f'data-show-rooms="{str(_show_rooms).lower()}" '
     f'data-view="{_html.escape(_cur_view)}" '
     f'data-vapid-pub="{_html.escape(_vapid_pub)}" '
@@ -5051,6 +5059,29 @@ if isinstance(_lp_result, dict):
                     st.session_state["_clear_session"] = True
                     st.toast("再ログインしてください。", icon="⚠️")
                     st.rerun()
+        elif _nav == "restore_by_push":
+            # ★ プッシュ購読による自動ログイン（2026-08-03）:
+            #   セッション行が失効（スライドTTL超過や全失効）した端末でも Web Push の購読は
+            #   生き残る。endpoint はその端末しか知らない実質シークレットの URL で、
+            #   push_subscriptions が user_id と紐付いている（save_push_subscription が
+            #   endpoint 専属化済み）ため「この端末で最後にログインした人」として自動ログイン
+            #   できる。JS はログイン画面（view=select_user）表示時のみ・1回だけ送る。
+            #   明示ログアウトした端末は JS が danran_logged_out フラグで送信を抑止。
+            _ep = (_lp_result.get("endpoint", "") or "").strip()
+            if _ep.startswith("https://") and "current_user" not in st.session_state:
+                try:
+                    _prow = supabase.table("push_subscriptions").select("user_id") \
+                        .eq("endpoint", _ep).limit(1).execute().data or []
+                    _pu = None
+                    if _prow:
+                        _urows = supabase.table("users").select("id, name, avatar, phone") \
+                            .eq("id", _prow[0]["user_id"]).limit(1).execute().data or []
+                        _pu = _urows[0] if _urows else None
+                    if _pu:
+                        do_login(_pu)
+                        st.rerun()
+                except Exception:
+                    pass  # 通信エラー・未登録 endpoint → 通常のログイン画面のまま
         elif _nav == "save_push_subscription":
             # JS からの Web Push 購読情報を DB に保存（rerun 不要）
             _sub_json = _lp_result.get("subscription", "")

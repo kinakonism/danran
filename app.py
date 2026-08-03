@@ -470,6 +470,17 @@ def get_session_user(session_id: str) -> dict | None:
     rows = supabase.table("sessions").select("user_id").eq("id", session_id).limit(1).execute().data or []
     if not rows:
         return None
+    # ★ スライド式TTL（2026-08-03）: 復元に使われたセッションは last_seen_at を更新する。
+    #   pg_cron の掃除は「最終利用から30日」基準なので、使い続ける限りログアウトされない
+    #   （旧: created_at 固定30日 → 毎日使っていてもログイン日から30日で強制ログアウトだった）。
+    #   更新失敗はログイン可否に影響させない（掃除が最悪 created_at 基準に戻るだけ）。
+    try:
+        import datetime as _dt
+        supabase.table("sessions").update(
+            {"last_seen_at": _dt.datetime.now(_dt.timezone.utc).isoformat()}
+        ).eq("id", session_id).execute()
+    except Exception:
+        pass
     urows = supabase.table("users").select("id, name, avatar, phone")\
         .eq("id", rows[0]["user_id"]).limit(1).execute().data or []
     return urows[0] if urows else None

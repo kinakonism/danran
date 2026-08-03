@@ -133,7 +133,7 @@ chat（チャット）⇄ ルーム選択（_show_rooms=True で同一 view 内�
 - **★ セキュリティ: セッションIDを URL（`?s=`）に絶対に載せない。** 旧実装は `do_login` が `?s=SESSION_ID` を付け、読込時にそれで自動ログインしていたため、**URL を共有すると受け取った人が共有者としてログイン状態になりチャットが丸見え**になる重大な穴だった。URL からのセッション復元は完全廃止（残存 `?s=` は無視して消す）。
 - **無効/漏洩セッションの自己修復**: `restore_session` で `get_session_user()` が None のとき `_clear_session=True` にして JS に localStorage を消させる（古い/漏洩SIDを送り続けない）。
 - ログアウト: `sessions` レコード削除 + localStorage クリア。**プロフィール画面下部のボタンから「本当にログアウトしますか？→ いいえ/はい」の2段階確認**（`_logout_confirm`）。誤操作防止のためルーム選択画面には置かない。
-- **セッション TTL**: pg_cron `danran-session-cleanup`（毎朝4時）で30日以上前の `sessions` を削除。漏洩時の緊急対応は `DELETE FROM sessions`（全失効＝全員1回再ログイン）。
+- **セッション TTL（スライド式・2026-08-03〜）**: `sessions.last_seen_at` を復元成功時に `get_session_user` が更新し、pg_cron `danran-session-cleanup`（毎朝4時）が「**最終利用から**30日」の `sessions` を削除。使い続ける限りログアウトされず、放置端末だけ30日で消える。（旧: `created_at` 固定30日 → 毎日使っていてもログイン日から数えて30日で強制ログアウト。2026-08-02 にまさとがこれで切られたのが改修の契機）。漏洩時の緊急対応は `DELETE FROM sessions`（全失効＝全員1回再ログイン）。
 - **Render 1 フラッシュ防止**: `_lp_result is None` かつ未ログイン時は空白画面（🏠スプラッシュ）を表示。JS が必ず restore_session を送るので Render 2 以降で正しい画面に遷移。`view=="register"`（招待リンク）時はスプラッシュをスキップして即フォーム。
 - **ログアウト後の blank screen 防止**: JS `handleSession(clearSession=true)` 時に `_sessionRestoreSent=false` なら `restore_session(session_id='')` を送って `_waiting_for_js` デッドロックを解除。
 
@@ -373,6 +373,7 @@ RLS: SELECT は全許可 / UPDATE は `true` ポリシーで全許可（家族�
 | id      | uuid PK | セッションID        |
 | user_id | uuid FK | users.id → CASCADE |
 | created_at | timestamptz | |
+| last_seen_at | timestamptz | 最終利用日時（復元成功時に `get_session_user` が更新・スライド式TTLの基準） |
 
 ### `messages`
 
@@ -519,9 +520,10 @@ Slack の絵文字登録の danran 版。入力欄左の **😊 ボタン**（�
 SELECT cron.schedule('danran-keep-alive', '0 9 */3 * *',
   'SELECT count(*) FROM public.messages');
 
--- セッション TTL: 毎朝4時に30日以上前の sessions を削除
+-- セッション TTL（スライド式・2026-08-03〜）: 毎朝4時に「最終利用から30日」の sessions を削除
+-- 旧: created_at 固定30日 → 毎日使っていてもログイン日から30日で強制ログアウトだった
 SELECT cron.schedule('danran-session-cleanup', '0 4 * * *',
-  $$DELETE FROM public.sessions WHERE created_at < now() - interval '30 days'$$);
+  $$DELETE FROM public.sessions WHERE coalesce(last_seen_at, created_at) < now() - interval '30 days'$$);
 ```
 
 ---

@@ -123,11 +123,18 @@ async def _serve_mobileconfig(request):
     """
     from starlette.responses import Response
 
-    # リクエストヘッダーからアプリの URL を動的に生成
+    # ★ Web Clip の URL は固定の公開入口（Worker）にする（2026-08-04）。
+    #   旧実装は Host ヘッダから生成していたが、Worker プロキシ経由だと Host＝トンネルホスト
+    #   （*.trycloudflare.com）になり、再起動のたびに変わる使い捨て URL がプロファイルに
+    #   埋まってしまう（インストール後にトンネルが替わるとアイコンが死ぬ）。
+    #   ローカル開発（localhost 直アクセス）のときだけ Host をそのまま使う。
     host = request.headers.get("host", "localhost:8501")
-    # Streamlit Cloud / リバースプロキシ越しは https
-    proto = request.headers.get("x-forwarded-proto", "http")
-    app_url = f"{proto}://{host}/"
+    if host.split(":")[0] in ("localhost", "127.0.0.1"):
+        app_url = f"http://{host}/"
+    else:
+        app_url = os.environ.get("APP_URL", "") or "https://danran-chat.kinakonism.workers.dev/"
+        if not app_url.endswith("/"):
+            app_url += "/"
 
     # アイコンを Base64 エンコード（プロファイルに埋め込む）
     icon_path = os.path.join(_ICONS_DIR, "icon-192.png")

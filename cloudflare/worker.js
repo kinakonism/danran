@@ -67,9 +67,11 @@ const RETRY_HTML = `<!doctype html><html><head><meta charset="utf-8">
 <meta name="apple-mobile-web-app-capable" content="yes"><title>danran</title>
 <style>body{margin:0;background:#1a1614;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:12px;font-family:-apple-system,sans-serif}
 @keyframes p{0%,100%{opacity:.5;transform:scale(.96)}50%{opacity:1;transform:scale(1)}}</style></head><body>
-<div style="font-size:3.2rem;animation:p 1.2s ease-in-out infinite">\u{1F3E0}</div>
+<div style="font-size:3.2rem;animation:p 1.2s ease-in-out infinite">\u{1F69A}</div>
 <div style="color:rgba(240,232,224,.5);font-size:.85rem;font-weight:700;letter-spacing:.12em">danran</div>
-<div style="color:rgba(240,232,224,.35);font-size:.75rem">つなぎ直しています… / メンテナンス中の場合もあります</div>
+<div style="color:rgba(240,232,224,.55);font-size:.8rem;font-weight:600;line-height:1.9;text-align:center;padding:0 24px">お引越しのため、しばらくお休みします \u{1F3E0}\u{27A1}\u{FE0F}\u{1F3E0}<br>
+<span style="color:rgba(240,232,224,.35);font-size:.72rem;font-weight:400">新居のネット工事が未定のため、復旧も未定です…<br>
+開通したら何もしなくても自動でつながります。それまで連絡は LINE でどうぞ\u{1F64F}</span></div>
 <script>(function p(){fetch("/_stcore/health",{cache:"no-store"}).then(function(r){
 if(r.ok){location.reload();}else{setTimeout(p,4000);}}).catch(function(){setTimeout(p,4000);});})();</script>
 </body></html>`;

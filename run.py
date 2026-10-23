@@ -212,6 +212,10 @@ from streamlit.web import cli as _st_cli
 sys.argv = [
     "streamlit", "run", "app.py",
     "--server.port",      os.environ.get("PORT", "8501"),
+    # LAN 内の他端末から :8701 を直接叩けないよう loopback のみで listen（2026-10-23）。
+    # 外部からの経路は Cloudflare Worker → Tunnel → 127.0.0.1 なので影響なし
+    # （tunnel_run.sh / health_watch / stall-watch すべて 127.0.0.1 指定を確認済み）。
+    "--server.address",   os.environ.get("BIND_ADDR", "127.0.0.1"),
     "--server.headless",  "true",
 ]
 sys.exit(_st_cli.main())
